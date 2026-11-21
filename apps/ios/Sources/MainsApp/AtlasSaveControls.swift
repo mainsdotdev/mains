@@ -102,48 +102,35 @@ struct MoveAtlasItemView: View {
     @State private var saving = false
     @State private var error: String?
     @State private var visible = true
+
+    private var canMove: Bool { !saving && session.canSaveToAtlas && selection.owner == session.ownership }
+
     var body: some View {
-        NavigationStack {
-            List {
-                Section { Text(selection.entry.title).font(.headline) }
-                Section("Project") {
-                    destination("No project", id: nil)
-                    ForEach(session.collections) { destination($0.name, id: $0.id) }
-                }
-                if saving { HStack(spacing: 12) { ProgressView(); Text("Moving item…").foregroundStyle(.secondary) } }
-                if let error { Text(error).foregroundStyle(.secondary) }
-                if session.pendingAtlasSave?.status == .uncertain {
-                    Text("The change hasn’t been confirmed. Close this sheet and use Check change to confirm it.").foregroundStyle(.secondary)
-                }
+        MoveToProjectSheet(projects: session.collections, selectedProjectID: selection.entry.savedProjectID,
+                           isSelectionKnown: selection.projectKnown, canMove: canMove, error: error,
+                           rowIdentifier: { "atlasMove-" + ($0 ?? "none") }, move: move) {
+            if saving {
+                HStack(spacing: 12) { ProgressView(); Text("Moving item…").foregroundStyle(.secondary) }
+                    .padding()
+            } else if session.pendingAtlasSave?.status == .uncertain {
+                Text("The change hasn’t been confirmed. Close this sheet and use Check change to confirm it.")
+                    .font(.subheadline).foregroundStyle(.secondary).padding()
             }
-            .navigationHeaderFade(background: Color(.systemGroupedBackground))
-            .navigationTitle("Move to project").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }
         .onDisappear { visible = false }
         .onChange(of: session.ownership) { _, _ in dismiss() }
     }
-    private func destination(_ title: String, id: String?) -> some View {
-        let selected = selection.projectKnown && selection.entry.savedProjectID == id
-        return Button {
-            saving = true; error = nil
-            Task {
-                defer { if selection.owner == session.ownership { saving = false } }
-                do {
-                    _ = try await session.moveAtlasItem(selection.entry, to: id, owner: selection.owner)
-                    if selection.owner == session.ownership, visible { dismiss() }
-                } catch { if selection.owner == session.ownership, visible { self.error = error.localizedDescription } }
-            }
-        } label: {
-            HStack {
-                Text(title).foregroundStyle(.primary)
-                Spacer()
-                if selected { Image(systemName: "checkmark").foregroundStyle(.tint) }
-            }.frame(minHeight: 44).contentShape(.rect)
+
+    private func move(_ projectID: String?) {
+        guard canMove else { return }
+        saving = true; error = nil
+        Task {
+            defer { if selection.owner == session.ownership { saving = false } }
+            do {
+                _ = try await session.moveAtlasItem(selection.entry, to: projectID, owner: selection.owner)
+                if selection.owner == session.ownership, visible { dismiss() }
+            } catch { if selection.owner == session.ownership, visible { self.error = error.localizedDescription } }
         }
-        .disabled(selected || saving || !session.canSaveToAtlas || selection.owner != session.ownership)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier("atlasMove-" + (id ?? "none"))
     }
 }
 
@@ -164,7 +151,7 @@ struct NewAtlasBookmarkView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Link") {
+                Section {
                     TextField("https://example.com", text: $url).keyboardType(.URL).textContentType(.URL)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().focused($linkFocused)
                         .accessibilityIdentifier("atlasBookmarkURL")
@@ -172,6 +159,8 @@ struct NewAtlasBookmarkView: View {
                     if !url.isEmpty, AtlasBookmarkURL.validate(url) == nil {
                         Text("Enter a complete http:// or https:// link.").font(.caption).foregroundStyle(.secondary)
                     }
+                } header: {
+                    Text("Link").fontWidth(.expanded)
                 }.disabled(saving || session.pendingAtlasSave != nil)
                 Section {
                     Picker("Project", selection: $collectionID) {
@@ -188,7 +177,7 @@ struct NewAtlasBookmarkView: View {
                 }
             }
             .navigationHeaderFade(background: Color(.systemGroupedBackground))
-            .navigationTitle("New bookmark").navigationBarTitleDisplayMode(.inline)
+            .expandedNavigationTitle("New bookmark")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

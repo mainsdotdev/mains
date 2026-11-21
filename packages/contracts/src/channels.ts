@@ -374,9 +374,13 @@ export const CHANNELS = {
     rateLimitsUpdated: "providers:rateLimitsUpdated",
     setGoal: "providers:setGoal",
     getGoal: "providers:getGoal",
+    getMobileGoalSummary: "providers:getMobileGoalSummary",
+    changeMobileGoal: "providers:changeMobileGoal",
     clearGoal: "providers:clearGoal",
     /** Push: emitted when a thread goal changes (set/updated/cleared). null goal = cleared. */
     goalUpdated: "providers:goalUpdated",
+    /** Paired-device invalidation; carries only the run ID. */
+    mobileGoalChanged: "providers:mobileGoalChanged",
     getSkills: "providers:getSkills",
     installPlugin: "providers:installPlugin",
     readPlugin: "providers:readPlugin",

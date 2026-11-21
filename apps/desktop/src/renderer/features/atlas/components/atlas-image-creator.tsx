@@ -383,20 +383,18 @@ function ImageComposer({
       runId={ws.activeRunId} runStatus={ws.activeRun?.status} turns={ws.currentTurns}
       events={ws.currentEvents} historical={ws.history?.historical}>
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-3">
-          {runId && (
-            <Button
-              variant="ghost"
-              onClick={() =>
-                navigate(atlasImageCreatorHref(collectionId ?? ""))
-              }
-            >
-              New image
-            </Button>
-          )}
-        </div>
         {runId ? (
           <>
+            <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-3">
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  navigate(atlasImageCreatorHref(collectionId ?? ""))
+                }
+              >
+                New image
+              </Button>
+            </div>
             <div className="min-h-0 flex-1 overflow-hidden">
               <WorkspaceEvents
                 runs={ws.runs}
@@ -421,8 +419,8 @@ function ImageComposer({
             </div>
           </>
         ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto noscrollbar px-5 pb-12">
-            <div className="mx-auto w-full max-w-210 pt-[min(24dvh,240px)]">
+          <div className="flex min-h-0 flex-1 flex-col justify-center-safe overflow-y-auto noscrollbar px-5 py-12">
+            <div className="mx-auto w-full max-w-210 shrink-0">
               <Heading3 className="mb-8 text-center text-3xl font-normal">
                 What do you want to create?
               </Heading3>

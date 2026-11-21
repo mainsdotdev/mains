@@ -20,7 +20,7 @@ import { execFileSync } from "node:child_process";
 import WebSocket from "ws";
 import { buildSubprotocols } from "@mains/contracts/ws-protocol";
 import { CHANNELS } from "@mains/contracts/channels";
-import { MOBILE_MATE_INFO_CAPABILITY, type MobileMateChange, type MobileMateDirectory, type MobileMateRoutines } from "@mains/contracts/assistants";
+import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY, type MobileMateChange, type MobileMateDirectory, type MobileMateRoutines } from "@mains/contracts/assistants";
 import { getDb } from "./db/client";
 import { providers as providerTable } from "./db/schema";
 import { eq } from "drizzle-orm";
@@ -116,11 +116,20 @@ describe("backend host acquisition and shutdown", () => {
       const repo = path.join(directory, "mate-code");
       execFileSync("git", ["init", "--quiet", repo]);
       const workspace = createWorkspace(db, { id: "mate-test-repo", accountId, rootPath: repo });
-      expect(await invoke(CHANNELS.backend.describe, [])).toMatchObject({ success: true, data: { capabilities: expect.arrayContaining(["assistants"]) } });
+      expect(await invoke(CHANNELS.backend.describe, [])).toMatchObject({
+        success: true, data: { capabilities: expect.arrayContaining(["assistants", MOBILE_MATE_TEAM_CREATION_CAPABILITY]) },
+      });
       expect(await invoke(CHANNELS.assistants.overview, [accountId])).toMatchObject({ success: false });
       expect(await invoke(CHANNELS.assistants.mobileDirectory, ["foreign"])).toMatchObject({ success: false });
 
-      const input = { accountId, name: "Release", spaceId: space.id, model: "test-model", effort: "high", profileSetup: true };
+      const teamInput = { accountId, name: "Mobile team" };
+      expect(await invoke(CHANNELS.assistants.createTeam, [teamInput])).toMatchObject({ success: false, error: expect.stringContaining("commandId") });
+      expect(await invoke(CHANNELS.assistants.createTeam, [{ ...teamInput, accountId: "foreign" }], "foreign-team"))
+        .toMatchObject({ success: false, error: expect.stringContaining("Account is unavailable") });
+      const createdTeam = await invoke(CHANNELS.assistants.createTeam, [teamInput], "create-team") as { data: { id: string; name: string } };
+      expect(createdTeam).toEqual({ success: true, data: { id: expect.any(String), name: teamInput.name } });
+
+      const input = { accountId, name: "Release", teamId: createdTeam.data.id, spaceId: space.id, model: "test-model", effort: "high", profileSetup: true };
       expect(await invoke(CHANNELS.assistants.create, [input])).toMatchObject({ success: false, error: expect.stringContaining("commandId") });
       const created = await invoke(CHANNELS.assistants.create, [input], "create-mate") as { success: boolean; data: { id: string } };
       expect(created).toMatchObject({ success: true, data: { id: expect.any(String) } });
@@ -129,11 +138,12 @@ describe("backend host acquisition and shutdown", () => {
       await disconnected;
       socket = openDevice();
       await once(socket, "open");
+      expect(await invoke(CHANNELS.assistants.createTeam, [teamInput], "create-team")).toEqual(createdTeam);
       expect(await invoke(CHANNELS.assistants.create, [input], "create-mate")).toEqual(created);
       const mateId = created.data.id;
       const mateDirectory = await invoke(CHANNELS.assistants.mobileDirectory, [accountId]) as { data: MobileMateDirectory };
       expect(mateDirectory).toMatchObject({
-        success: true, data: { mates: [{ id: mateId, needsSetup: true, welcome: null }] },
+        success: true, data: { teams: [createdTeam.data], mates: [{ id: mateId, teamId: createdTeam.data.id, needsSetup: true, welcome: null }] },
       });
       expect(mateDirectory.data.mates[0]).not.toHaveProperty("details");
       expect(await invoke(CHANNELS.assistants.setupProfile, [accountId, mateId, { action: "answer", step: 0, answer: "Release help" }], "answer-setup"))

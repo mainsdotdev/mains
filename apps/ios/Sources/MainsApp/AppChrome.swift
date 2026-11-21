@@ -12,8 +12,9 @@ enum AppNavigationStyle {
 }
 
 extension View {
-    func navigationHeaderFade(background: Color = Color(.systemBackground), coversSafeAreaAtRest: Bool = true) -> some View {
-        modifier(NavigationHeaderFade(background: background, coversSafeAreaAtRest: coversSafeAreaAtRest))
+    func navigationHeaderFade(background: Color = Color(.systemBackground), coversSafeAreaAtRest: Bool = true,
+                              height: CGFloat = HeaderFade.defaultHeight) -> some View {
+        modifier(NavigationHeaderFade(background: background, coversSafeAreaAtRest: coversSafeAreaAtRest, height: height))
     }
 
     func scrollingNavigationTitle(_ title: LocalizedStringKey) -> some View {
@@ -24,11 +25,74 @@ extension View {
         navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text(title).font(.headline.weight(.medium).width(.expanded)).lineLimit(1)
-                        .accessibilityAddTraits(.isHeader)
-                }.sharedBackgroundVisibility(.hidden)
+                if !title.isEmpty {
+                    ToolbarItem(placement: .principal) {
+                        Text(title).font(.headline.weight(.medium).width(.expanded)).lineLimit(1)
+                            .accessibilityAddTraits(.isHeader)
+                    }.sharedBackgroundVisibility(.hidden)
+                }
             }
+    }
+}
+
+struct DisconnectedState: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    var title: LocalizedStringKey = "Computer disconnected"
+    let message: LocalizedStringKey
+
+    var body: some View {
+        EmptyStateView(artwork: .offline, title: title, description: Text(message))
+    }
+
+    var centered: some View {
+        ScrollView { self }
+            .scrollBounceBehavior(.basedOnSize)
+            .defaultScrollAnchor(.center, for: .alignment)
+    }
+}
+
+/// A quiet, indeterminate loader for screens and panes with content still to read.
+struct ContentLoadingView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let title: LocalizedStringKey
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var visible = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(AppBrand.accent)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(Color(.secondaryLabel))
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 24)
+        .frame(maxWidth: .infinity)
+        .opacity(visible ? 1 : 0)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: visible)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("contentLoading")
+        .accessibilityHidden(!visible)
+        .task {
+            do { try await Task.sleep(for: .milliseconds(220)) }
+            catch { return }
+            visible = true
+        }
+        .onDisappear { visible = false }
+    }
+
+    var listRow: some View {
+        self.listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
     }
 }
 
@@ -182,6 +246,7 @@ private struct NavigationHeaderFade: ViewModifier {
     #endif
     let background: Color
     let coversSafeAreaAtRest: Bool
+    let height: CGFloat
     @State private var fadeOpacity = 0.0
 
     func body(content: Content) -> some View {
@@ -199,20 +264,34 @@ private struct NavigationHeaderFade: ViewModifier {
                     background.frame(height: 1)
                         .background(background, ignoresSafeAreaEdges: .top)
                         .opacity(coversSafeAreaAtRest ? 1 : fadeOpacity)
-                    LinearGradient(stops: [
-                        .init(color: background, location: 0),
-                        .init(color: background.opacity(0.9), location: 0.22),
-                        .init(color: background.opacity(0.47), location: 0.55),
-                        .init(color: background.opacity(0.1), location: 0.82),
-                        .init(color: .clear, location: 1),
-                    ], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 44)
-                    .opacity(fadeOpacity)
+                    HeaderFade(background: background, height: height).opacity(fadeOpacity)
                 }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             }
             .toolbarBackground(.hidden, for: .navigationBar)
+    }
+}
+
+struct HeaderFade: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    nonisolated static let defaultHeight: CGFloat = 44
+    let background: Color
+    var height = HeaderFade.defaultHeight
+
+    var body: some View {
+        LinearGradient(stops: [
+            .init(color: background, location: 0),
+            .init(color: background.opacity(0.9), location: 0.22),
+            .init(color: background.opacity(0.47), location: 0.55),
+            .init(color: background.opacity(0.1), location: 0.82),
+            .init(color: .clear, location: 1),
+        ], startPoint: .top, endPoint: .bottom)
+        .frame(height: height)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 

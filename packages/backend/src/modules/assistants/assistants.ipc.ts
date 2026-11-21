@@ -28,9 +28,13 @@ export function registerAssistantsIpc() {
     }));
     ipcMain.handle(CHANNELS.assistants.assignment, handle((accountId: string, id: string) => assistantsService.assignment(accountId, id)));
     ipcMain.handle(CHANNELS.assistants.overview, handle((accountId: string) => assistantsService.overview(accountId)));
-    ipcMain.handle(CHANNELS.assistants.createTeam, handle((payload: unknown) => changed(() => assistantsService.createTeam(payload))));
+    ipcMain.handle(CHANNELS.assistants.createTeam, handleWithContext((ctx, payload: unknown) => changed(async () => {
+        if (ctx?.deviceId) await assistantsMobile.assertAccount(text(object(payload).accountId, "Account"));
+        const team = assistantsService.createTeam(payload);
+        return ctx?.deviceId ? { id: team.id, name: team.name } : team;
+    })));
     ipcMain.handle(CHANNELS.assistants.changeTeam, handle((payload: unknown) => changed(() => assistantsService.changeTeam(payload))));
-    ipcMain.handle(CHANNELS.assistants.updateProfile, handle((payload: unknown) => changed(() => assistantsService.updateProfile(payload))));
+    ipcMain.handle(CHANNELS.assistants.updateProfile, handle((payload: unknown) => changed(() => assistantsService.updateProfile(payload, assistantWork.guard()))));
     ipcMain.handle(CHANNELS.assistants.create, handleWithContext((ctx, payload: unknown) => changed(async () => {
         if (ctx?.deviceId) await assistantsMobile.assertAccount(text(object(payload).accountId, "Account"));
         const assistant = await assistantsService.create(payload, assistantWork.guard());

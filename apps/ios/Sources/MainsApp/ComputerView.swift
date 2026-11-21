@@ -2,15 +2,17 @@ import SwiftUI
 
 enum AppAppearance: String, CaseIterable {
     case system, light, dark
-    var title: String { rawValue.capitalized }
+    fileprivate var title: LocalizedStringKey {
+        switch self { case .system: "System"; case .light: "Day"; case .dark: "Night" }
+    }
     var colorScheme: ColorScheme? {
         switch self { case .system: nil; case .light: .light; case .dark: .dark }
     }
     fileprivate var symbol: String {
         switch self {
         case .system: "circle.lefthalf.filled"
-        case .light: "sun.max"
-        case .dark: "moon"
+        case .light: "sun.max.fill"
+        case .dark: "moon.stars.fill"
         }
     }
 }
@@ -98,20 +100,7 @@ struct ComputerView: View {
                 }
             }
             #endif
-            SettingsSection("Appearance") {
-                ForEach(AppAppearance.allCases, id: \.self) { option in
-                    Button {
-                        appearance = option
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    } label: {
-                        SettingsRow(title: option.title, symbol: option.symbol,
-                                    subtitle: option == .system ? "Follow the phone’s Display & Brightness setting" : nil,
-                                    selected: appearance == option)
-                    }
-                    .accessibilityIdentifier("appearance-" + option.rawValue)
-                    .accessibilityAddTraits(appearance == option ? .isSelected : [])
-                }
-            }
+            AppearanceSettings(selection: $appearance)
             AppIconSettings()
             SettingsSection("This phone") {
                 SettingsRow(title: "Name", value: UIDevice.current.name)
@@ -170,7 +159,7 @@ struct ComputerView: View {
     private var computerSummary: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(session.pairing?.descriptor.name ?? "Computer").font(.headline)
+                Text(session.pairing?.descriptor.name ?? "Computer").font(.headline.width(.expanded))
                 if let connectionHint { Text(connectionHint).font(.footnote).foregroundStyle(.secondary) }
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -294,7 +283,7 @@ private struct AIDataSharingSettingsView: View {
                 }
             }
         }
-        .navigationTitle("AI Data Sharing").navigationBarTitleDisplayMode(.inline)
+        .expandedNavigationTitle("AI Data Sharing")
         .toolbar(.visible, for: .navigationBar)
         .confirmationDialog(session.isDemo ? "Reset the \(revokeProvider.map(Provider.name) ?? "AI") demo disclosure?" : "Revoke \(revokeProvider.map(Provider.name) ?? "AI") permission?", isPresented: Binding(
             get: { revokeProvider != nil }, set: { if !$0 { revokeProvider = nil } }), titleVisibility: .visible, presenting: revokeProvider) { provider in
@@ -311,6 +300,60 @@ private struct AIDataSharingSettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text(session.isDemo ? "Show the demo disclosures again. Real provider permissions stay separate." : "Mains will ask again before this computer sends data to any AI provider.") }
+    }
+}
+
+private struct AppearanceSettings: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    @Binding var selection: AppAppearance
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+        SettingsSection("Appearance") {
+            layout {
+                ForEach(AppAppearance.allCases, id: \.self) { option in
+                    let selected = selection == option
+                    let shape = RoundedRectangle(cornerRadius: 18)
+                    Button {
+                        guard !selected else { return }
+                        selection = option
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    } label: {
+                        VStack(spacing: 9) {
+                            Image(systemName: option.symbol)
+                                .font(.title2.weight(.medium))
+                                .foregroundStyle(selected ? AppBrand.accent : Color(.secondaryLabel))
+                                .accessibilityHidden(true)
+                            Text(option.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                        }
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity, minHeight: 86)
+                        .background(selected ? AppBrand.accent.opacity(0.14) : Color(.tertiarySystemBackground), in: shape)
+                        .overlay {
+                            shape.strokeBorder(selected ? AppBrand.accent : Color(.separator), lineWidth: selected ? 1.5 : 1)
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            if selected {
+                                Image(systemName: "checkmark.circle.fill").font(.caption.weight(.semibold))
+                                    .foregroundStyle(AppBrand.accent).padding(8)
+                                    .allowsHitTesting(false).accessibilityHidden(true)
+                            }
+                        }
+                        .contentShape(shape)
+                    }
+                    .buttonStyle(ChatPressStyle())
+                    .accessibilityHint(option == .system ? Text("Follows the iPhone’s appearance setting") : Text(""))
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityIdentifier("appearance-" + option.rawValue)
+                }
+            }
+            .padding(12)
+        }
     }
 }
 
@@ -398,7 +441,6 @@ private struct SettingsRow: View {
     var symbol: String? = nil
     var subtitle: String? = nil
     var value: String? = nil
-    var selected = false
     var destructive = false
     var loading = false
     var body: some View {
@@ -414,8 +456,6 @@ private struct SettingsRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else if loading {
                 ProgressView().controlSize(.small).frame(width: 20).accessibilityHidden(true)
-            } else if selected {
-                SettingsRowIcon(symbol: "checkmark").foregroundStyle(.blue)
             } else if let symbol {
                 SettingsRowIcon(symbol: symbol).foregroundStyle(destructive ? .red : .primary)
             }

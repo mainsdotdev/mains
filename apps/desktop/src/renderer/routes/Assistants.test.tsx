@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Assistant, AssistantConversation, AssistantTeam, AssistantWelcome, UpdateAssistantProfile } from "@mains/contracts/assistants";
 import type { Pulse } from "@/lib/redux/api/pulseApi";
+import type { ModelInfo } from "@/lib/redux/api/providersApi";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
@@ -18,7 +19,7 @@ import { runOwnerKey } from "../../shared/ui-state-keys";
 import { AssistantsSidebar } from "@/features/assistants/components/assistants-sidebar";
 import AssistantsPage from "./Assistants";
 
-const mocks = vi.hoisted(() => ({ routines: [] as Pulse[], chats: [] as AssistantConversation[], assistants: [] as Assistant[], teams: [] as AssistantTeam[], savingProfile: false, loadingChats: false, chatsError: undefined as unknown, refetchChats: vi.fn(), websiteChats: [{ id: "website-first", title: "Website announcement", goal: "Page", status: "succeeded", mode: "work", workspaceId: null, workspaceName: null, projectName: null, createdAt: new Date(0), updatedAt: new Date(0) }] }));
+const mocks = vi.hoisted(() => ({ routines: [] as Pulse[], chats: [] as AssistantConversation[], assistants: [] as Assistant[], teams: [] as AssistantTeam[], models: [] as ModelInfo[], savingProfile: false, loadingChats: false, chatsError: undefined as unknown, refetchChats: vi.fn(), websiteChats: [{ id: "website-first", title: "Website announcement", goal: "Page", status: "succeeded", mode: "work", workspaceId: null, workspaceName: null, projectName: null, createdAt: new Date(0), updatedAt: new Date(0) }] }));
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 const createTeam = vi.hoisted(() => vi.fn());
 const createMate = vi.hoisted(() => vi.fn());
@@ -30,7 +31,7 @@ vi.mock("@/lib/redux/api", () => ({
   useGetAccountQuery: () => ({ data: { id: "account" } }),
   useGetProvidersQuery: () => ({ data: [{ id: "codex", isEnabled: true }] }),
   useGetSpacesQuery: () => ({ data: [{ id: "codex", accountId: "account", providerId: "codex", isArchived: false }] }),
-  useGetProviderModelsQuery: () => ({ currentData: [{ id: "model", displayName: "Test model" }], isFetching: false }),
+  useGetProviderModelsQuery: () => ({ currentData: mocks.models, isFetching: false }),
 }));
 vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantOverviewQuery: () => ({ currentData: { assistants: mocks.assistants, teams: mocks.teams, assignments: [], memories: [], welcomes }, refetch: vi.fn() }),
@@ -92,15 +93,23 @@ beforeEach(() => {
   welcomes.length = 0;
   createTeam.mockReset().mockImplementation((input: Pick<AssistantTeam, "accountId" | "name">) =>
     ({ unwrap: () => Promise.resolve({ ...input, id: "new-team", createdAt: new Date(0) }) }));
-  updateProfile.mockReset().mockImplementation(({ id, profile, teamChange }: UpdateAssistantProfile) => ({
+  updateProfile.mockReset().mockImplementation(({ id, profile, teamChange, modelChange }: UpdateAssistantProfile) => ({
     unwrap: async () => {
       const assistant = mocks.assistants.find(assistant => assistant.id === id)!;
       Object.assign(assistant, profile);
       if (teamChange) assistant.teamId = teamChange.teamId;
+      if (modelChange) {
+        assistant.model = modelChange.model;
+        assistant.effort = modelChange.effort;
+      }
       return assistant;
     },
   }));
   mocks.savingProfile = false;
+  mocks.models = [
+    { id: "model", displayName: "Test model", supportedEffortLevels: ["low", "medium", "high"] },
+    { id: "new-model", displayName: "New model", supportedEffortLevels: ["low", "xhigh"] },
+  ];
   mocks.routines = [];
   mocks.loadingChats = false;
   mocks.chatsError = undefined;
@@ -315,6 +324,7 @@ describe("assistant profile and conversation", () => {
   });
 
   it("edits the name, avatar, description and instructions from the Details action row", async () => {
+    mocks.models = [];
     setup("/assistants?assistant=release&run=first&tab=profile");
     const panel = await screen.findByRole("complementary", { name: "About Release" });
     const edit = within(panel).getByRole("button", { name: "Edit" });
@@ -327,7 +337,7 @@ describe("assistant profile and conversation", () => {
     const save = within(form).getByRole("button", { name: "Save" });
     expect(save).not.toBe(edit);
     expect(updateProfile).not.toHaveBeenCalled();
-    expect(within(form).queryByRole("textbox", { name: "Model" })).toBeNull();
+    expect(within(form).getByRole<HTMLButtonElement>("button", { name: "Model" }).disabled).toBe(true);
     fireEvent.change(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "Release bot" } });
     fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), { target: { value: "Checks beta releases" } });
     fireEvent.change(within(form).getByRole("textbox", { name: "Instructions" }), { target: { value: "Verify signing first." } });
@@ -342,6 +352,37 @@ describe("assistant profile and conversation", () => {
     });
     expect(within(panel).getByText("Verify signing first.")).toBeTruthy();
     expect(within(panel).getByText("model", { exact: true })).toBeTruthy();
+    expect(screen.getByTestId("conversation").textContent).toBe("first");
+  });
+
+  it("saves a model and compatible effort from the same Mate profile editor", async () => {
+    setup("/assistants?assistant=release&run=first&tab=profile");
+    const panel = await screen.findByRole("complementary", { name: "About Release" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
+    const form = within(panel).getByRole("form", { name: "Edit mate profile" });
+    const model = within(form).getByRole("button", { name: "Model" });
+    const effort = within(form).getByRole("button", { name: "Effort" });
+    expect(model.textContent).toContain("Test model");
+    expect(effort.textContent).toContain("High");
+
+    fireEvent.click(model);
+    fireEvent.click(await screen.findByRole("option", { name: "New model" }));
+    expect(effort.textContent).toContain("Extra High");
+    fireEvent.click(effort);
+    const low = await screen.findByRole("option", { name: "Low" });
+    expect(screen.getAllByRole("option").map(option => option.textContent?.trim())).toEqual(["Low", "Extra High"]);
+    fireEvent.click(low);
+    fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), { target: { value: "Checks signing" } });
+    expect(updateProfile).not.toHaveBeenCalled();
+
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(within(panel).queryByRole("form", { name: "Edit mate profile" })).toBeNull());
+    expect(updateProfile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      id: "release",
+      profile: expect.objectContaining({ description: "Checks signing" }),
+      modelChange: { model: "new-model", effort: "low", expectedModel: "model", expectedEffort: "high" },
+    }));
+    expect(within(panel).getByText("new-model", { exact: true })).toBeTruthy();
     expect(screen.getByTestId("conversation").textContent).toBe("first");
   });
 
@@ -365,7 +406,7 @@ describe("assistant profile and conversation", () => {
     expect(within(panel).getByText("Verify the release before distribution.")).toBeTruthy();
   });
 
-  it("disables the team picker and team creation while saving the profile", async () => {
+  it("disables the team, model and effort controls while saving the profile", async () => {
     mocks.savingProfile = true;
     setup();
     fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
@@ -373,6 +414,8 @@ describe("assistant profile and conversation", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
     expect(within(panel).getByRole<HTMLButtonElement>("button", { name: "Team" }).disabled).toBe(true);
     expect(within(panel).getByRole<HTMLButtonElement>("button", { name: "New team" }).disabled).toBe(true);
+    expect(within(panel).getByRole<HTMLButtonElement>("button", { name: "Model" }).disabled).toBe(true);
+    expect(within(panel).getByRole<HTMLButtonElement>("button", { name: "Effort" }).disabled).toBe(true);
   });
 
   it("can save No team without leaving the conversation", async () => {

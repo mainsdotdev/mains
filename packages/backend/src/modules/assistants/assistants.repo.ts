@@ -32,9 +32,11 @@ export const assistantsRepo = {
         getDb().insert(assistantWelcomes).values({ assistantId: id, runId: `assistant-welcome-${id}`,
             ...(question ? { state: "ready", question } : {}) }).run();
     },
-    saveProfile(id: string, accountId: string, profile: Pick<AssistantProfile, "description" | "instructions"> & Partial<Pick<AssistantProfile, "name" | "avatar">>) {
+    saveProfile(id: string, accountId: string, profile: Partial<AssistantProfile>,
+                execution?: Pick<Assistant, "model" | "effort" | "conversationSettings">) {
         const { avatar, ...fields } = profile;
-        getDb().update(assistants).set({ ...fields, ...(avatar && { avatar: JSON.stringify(avatar) }), updatedAt: new Date() })
+        const modelFields = execution && { model: execution.model, effort: execution.effort, settings: JSON.stringify(execution.conversationSettings) };
+        getDb().update(assistants).set({ ...fields, ...(avatar && { avatar: JSON.stringify(avatar) }), ...modelFields, updatedAt: new Date() })
             .where(and(eq(assistants.id, id), eq(assistants.accountId, accountId))).run();
     },
     welcomeOwner(id: string) { return getDb().select({ accountId: assistants.accountId, isArchived: assistants.isArchived }).from(assistants).where(eq(assistants.id, id)).get() ?? null; },

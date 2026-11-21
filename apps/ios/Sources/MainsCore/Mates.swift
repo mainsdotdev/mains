@@ -125,7 +125,7 @@ public struct MateAssignment: Decodable, Sendable {
     public let assignee: Assignee?
 }
 
-public struct MateAssignmentLink: Equatable, Sendable {
+public struct MateAssignmentLink: Equatable, Identifiable, Sendable {
     public let id: String
     public let runID: String
 }
@@ -142,6 +142,18 @@ public struct MateEditableProfile: Codable, Equatable, Sendable {
         description = mate.description
         instructions = details.instructions
         avatar = mate.avatar
+    }
+}
+
+public struct MateModelChange: Codable, Sendable {
+    let model: String
+    let effort: String
+    let expectedModel: String
+    let expectedEffort: String
+
+    public init(model: String, effort: String, expectedModel: String, expectedEffort: String) {
+        self.model = model; self.effort = effort
+        self.expectedModel = expectedModel; self.expectedEffort = expectedEffort
     }
 }
 
@@ -166,6 +178,19 @@ public struct MateTask: Decodable, Identifiable, Sendable {
     public let error: String?
     public let evidence: [String]
     public var isOpen: Bool { !["completed", "failed", "canceled"].contains(status) }
+    var hasManagementActions: Bool { isOpen || (status == "completed" && error != nil) }
+
+    init(summary: MateAssignment) {
+        id = summary.id
+        title = summary.title
+        status = summary.status
+        workerRunId = summary.workerRunId
+        assignee = summary.assignee
+        result = summary.result
+        error = summary.error
+        brief = ""
+        evidence = []
+    }
 }
 
 public struct MateTasks: Decodable, Sendable {
@@ -222,8 +247,17 @@ public struct MateRoutines: Decodable, Sendable {
     public let nextOffset: Int?
 }
 
+public struct MateConsentRequired: LocalizedError, Equatable, Sendable {
+    public let owner: Int
+    public let backendID: String
+    public let providerID: String
+
+    public var errorDescription: String? { "Allow data sharing with \(Provider.recipient(providerID)) before sending." }
+}
+
 public enum MateChange: Sendable {
-    case updateProfile(MateEditableProfile, original: MateEditableProfile, teamID: String?, originalTeamID: String?)
+    case updateProfile(MateEditableProfile, original: MateEditableProfile, teamID: String?, originalTeamID: String?,
+                       modelChange: MateModelChange? = nil)
     case archive(Bool)
     case saveMemory(MateMemoryNote, expectedTeamID: String?)
     case deleteMemory(id: String, revision: Int)
@@ -237,12 +271,13 @@ public enum MateChange: Sendable {
     func payload() throws -> JSONValue {
         var fields: [String: JSONValue]
         switch self {
-        case let .updateProfile(profile, original, teamID, originalTeamID):
+        case let .updateProfile(profile, original, teamID, originalTeamID, modelChange):
             fields = ["action": .string("updateProfile"), "profile": try .encode(profile), "expectedProfile": try .encode(original)]
             if teamID != originalTeamID {
                 fields["teamChange"] = .object(["teamId": teamID.map(JSONValue.string) ?? .null,
                                                  "expectedTeamId": originalTeamID.map(JSONValue.string) ?? .null])
             }
+            if let modelChange { fields["modelChange"] = try .encode(modelChange) }
         case .archive(let archived):
             fields = ["action": .string("archive"), "archived": .bool(archived)]
         case let .saveMemory(note, expectedTeamID):

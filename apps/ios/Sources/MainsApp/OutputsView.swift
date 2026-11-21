@@ -18,7 +18,7 @@ struct OutputsView: View {
     var body: some View {
         ComposerSheet(title: "Outputs") {
             List {
-                if loading { HStack { ProgressView(); Text("Loading outputs…").foregroundStyle(.secondary) } }
+                if loading && page == nil { ContentLoadingView(title: "Loading outputs…").listRow }
                 if let error {
                     Text(error).foregroundStyle(.secondary)
                     Button("Try again") { Task { await load() } }
@@ -120,19 +120,16 @@ struct OutputPreviewView: View {
                     else if ["text", "markdown"].contains(previewType) { LocalTextFilePreview(url: url, markdown: previewType == "markdown") }
                     else if previewType != "unsupported", QLPreviewController.canPreview(url as NSURL) { OutputQuickLook(url: url).accessibilityIdentifier("outputPreview") }
                     else {
-                        ContentUnavailableView {
-                            Label("File ready", systemImage: "doc.zipper")
-                        } description: {
-                            Text("A preview isn’t available for this file. Share it or save it to Files.")
-                        } actions: {
+                        EmptyStateView(artwork: .documents, title: "File ready",
+                                       description: Text("A preview isn’t available for this file. Share it or save it to Files.")) {
                             ShareLink(item: url) { Label("Share or Save to Files", systemImage: "square.and.arrow.up") }
                                 .accessibilityIdentifier("exportDownloadedFile")
-                        }
+                        }.centered
                     }
                 } else if let error {
-                    ContentUnavailableView {
-                        Label("Couldn’t open file", systemImage: "doc.badge.ellipsis")
-                    } description: { Text(error) } actions: { Button("Try again") { retry += 1 } }
+                    EmptyStateView(artwork: .documents, title: "Couldn’t open file", description: Text(error)) {
+                        Button("Try again") { retry += 1 }
+                    }.centered
                 } else { VStack(spacing: 16) { ProgressView(value: progress).frame(maxWidth: 180); Text("Opening \(name)…").font(.footnote).foregroundStyle(.secondary) } }
         }
     }
@@ -244,7 +241,7 @@ struct FilePreviewNavigation<Content: View>: View {
             reader
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(image ? Color.black : Color(.systemBackground))
-                .navigationTitle(image ? "" : name).navigationBarTitleDisplayMode(.inline)
+                .expandedNavigationTitle(image ? "" : name)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { Button("Close preview", systemImage: "xmark") { dismiss() } }
                     ToolbarItem(placement: .topBarTrailing) {

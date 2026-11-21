@@ -1,6 +1,7 @@
 // Deterministic protocol fixture. Uses the REAL TypeScript codec and channels;
 // never starts an AI provider, opens a real database, or edits a workspace.
 import http from 'node:http';
+import { createHash, randomUUID } from 'node:crypto';
 import { createRequire, stripTypeScriptTypes } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { encodeWsMessage, decodeWsMessage, WS_PROTOCOL_VERSION } from '../../../packages/contracts/src/ws-protocol.ts';
@@ -41,17 +42,27 @@ const pendingDecisions = new Map();
 const queueProjections = createRunQueueProjectionStore();
 const storedTurns = new Map(), storedDiffs = new Map();
 const createdMates = new Map();
+const createdMateTeams = new Map();
+let editedFixtureMate = null;
 const mateAssignments = new Map();
 const mateMemory = new Map();
 const fixtureInfoTask = { id: 'fixture-info-task', title: 'Release handoff', status: 'completed', brief: 'Check the changelog.',
   result: 'Changelog checked.', error: null, workerRunId: 'fixture-mate-chat-0', evidence: ['Release checklist'],
   assignee: { id: fixtureMate.id, name: fixtureMate.name, avatar: fixtureMate.avatar, isArchived: false } };
+const fixtureClaudeMate = { ...fixtureMate, id: 'fixture-claude-mate', name: 'Claude Reviewer', providerId: 'claude_code' };
+const fixtureBlockedTask = { id: 'fixture-blocked-task', title: 'Needs report details', status: 'blocked', brief: 'Review the draft.',
+  result: null, error: null, workerRunId: null, evidence: [],
+  assignee: { id: fixtureClaudeMate.id, name: fixtureClaudeMate.name, avatar: fixtureClaudeMate.avatar, isArchived: false } };
 const fixtureRoutine = { id: 'fixture-info-routine', title: 'Morning release check', prompt: 'Summarize changes.', frequency: 'daily',
   dayOfWeek: null, hour: 9, minute: 30, timezone: 'Europe/Istanbul', workspaceId: null, isActive: false, nextRunAt: null,
   lastRunId: 'fixture-mate-chat-0', lastAssignmentStatus: 'completed', lastError: null, revision: 'fixture-revision' };
 let acceptsConnections = true;
 let holdSnapshot = 0;
+let atlasLibraryDelayMs = 0;
+let atlasLibraryEmpty = false;
 let mateDetailsDelayMs = 0;
+let mateDirectoryDelayMs = 0;
+let mateRoutinesDelayMs = 0;
 let mateArchived = false;
 let contextDelayMs = 0, contextInvalidRows = false;
 let forkBehavior = null;
@@ -59,11 +70,19 @@ let fileDeliveryFixture = false;
 let pagedHistory = false;
 let disjointHistory = false;
 let artifacts, runs, nextID, spaces, tools;
+const goals = new Map();
+let goalControlsFixture = false;
+function setFixtureGoal(runId, goal) {
+  goals.set(runId, { ...goal, revision: createHash('sha256').update(randomUUID()).digest('hex') });
+  event(CHANNELS.providers.mobileGoalChanged, runId);
+}
 function reset(longHistory = false, home = false, design = false, workspaceList = false, media = false, paging = false, disjoint = false) {
   resetAtlasFixture();
   for (const timer of timers) clearTimeout(timer);
   timers.clear(); replies.clear(); acceptsConnections = true;
-  holdSnapshot = 0; mateDetailsDelayMs = 0; contextDelayMs = 0; contextInvalidRows = false;
+  holdSnapshot = 0; atlasLibraryDelayMs = 0; atlasLibraryEmpty = false;
+  mateDetailsDelayMs = 0; mateDirectoryDelayMs = 0; mateRoutinesDelayMs = 0;
+  contextDelayMs = 0; contextInvalidRows = false;
   mateArchived = false;
   forkBehavior = null;
   fileDeliveryFixture = false;
@@ -71,8 +90,12 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
   disjointHistory = disjoint;
   receipts.clear(); pendingDecisions.clear(); storedTurns.clear(); storedDiffs.clear(); observations.length = 0; nextID = 10;
   createdMates.clear(); mateAssignments.clear();
+  createdMateTeams.clear(); editedFixtureMate = null;
   mateMemory.clear();
-  descriptor.capabilities = ['runs', 'space', 'workspace', 'assistants'];
+  goals.clear();
+  goalControlsFixture = false;
+  descriptor.backendId = 'ios-fixture';
+  descriptor.capabilities = ['runs', 'space', 'workspace', 'assistants', 'mobileGoalSummary', 'mobileGoalControls'];
   queueProjections.clear();
   tools = new Map();
   spaces = [{ id: 'fixture-space', name: 'Codex', providerId: 'codex', icon: 'icon:codex', mode: 'chat', model: null, isArchived: false },
@@ -215,6 +238,12 @@ function startReply(runId, message, commandId, input = {}) {
       assistantMentions: mentions.length ? mentions : undefined, clientPromptId: input.clientPromptId,
       attachments: input.attachments?.map(({ name, type, mimeType }) => ({ name, type, mimeType })) }, createdAt: date });
   const run = runs.find(run => run.id === runId);
+  const goalMode = run.providerId === 'codex' && input.conversationSettings?.config?.goalMode === true;
+  if (goalMode) later(850, () => {
+    if (replies.get(runId) !== reply || reply.stopped) return;
+    const usage = goalControlsFixture ? {} : { tokensUsed: 26438, timeUsedSeconds: 14 };
+    setFixtureGoal(runId, { objective: message, status: 'active', ...usage });
+  });
   run.status = 'running'; run.updatedAt = date;
   event(CHANNELS.runs.statusChanged, runId, { status: 'running' });
   event(CHANNELS.runs.eventPersisted, runId);
@@ -227,7 +256,7 @@ function startReply(runId, message, commandId, input = {}) {
         metadata: { source: 'agent_message_streaming', streaming: true } } });
     });
   }
-  later(message === 'Take your time' ? 30000 : 2400, () => {
+  later(message === 'Take your time' ? 30000 : goalMode ? (goalControlsFixture ? 60000 : 6500) : 2400, () => {
     if (replies.get(runId) !== reply || reply.stopped) return;
     const mate = mentions.length ? fixtureMates.find(value => value.id === mentions[0].id) : null;
     if (mate) {
@@ -241,6 +270,9 @@ function startReply(runId, message, commandId, input = {}) {
     }
     artifacts.get(runId).push({ id: nextID++, runId, kind: 'report', content: 'Native reply delivered.', metadata: { streamId }, createdAt: new Date() });
     run.status = 'succeeded'; run.updatedAt = new Date();
+    if (goalMode && goals.has(runId)) {
+      setFixtureGoal(runId, { ...goals.get(runId), status: 'complete', tokensUsed: 28000, timeUsedSeconds: 20 });
+    }
     event(CHANNELS.runs.statusChanged, runId, { status: 'succeeded' });
     event(CHANNELS.runs.eventPersisted, runId);
     // A late native callback must never revive an acknowledged stream.
@@ -252,6 +284,29 @@ const server = http.createServer(async (request, response) => {
   const parts = []; for await (const part of request) parts.push(part);
   response.setHeader('Content-Type', 'application/json');
   if (request.url === '/observations') { response.end(JSON.stringify(observations)); return; }
+  if (request.method === 'POST' && request.url === '/test/mate-activity') {
+    const { phase } = JSON.parse(Buffer.concat(parts).toString());
+    const workingID = 'fixture-mate-working', waitingID = 'fixture-mate-waiting';
+    const requestId = 'fixture-mate-decision', now = Date.now();
+    if (phase === 'start') {
+      for (const [id, assistantId] of [[workingID, fixtureMate.id], [waitingID, 'fixture-planner']]) {
+        const at = new Date(now);
+        runs.push({ ...runs[0], id, assistantId, title: 'Mate activity', mode: 'work', status: 'running', createdAt: at, updatedAt: at });
+        event(CHANNELS.runs.statusChanged, id, { status: 'running' });
+      }
+      const pending = { requestId, runId: waitingID, kind: 'ask_user', timestamp: now, expiresAt: now + 300000 };
+      pendingDecisions.set(requestId, pending);
+      event(CHANNELS.runs.toolApprovalRequest, waitingID, pending);
+    } else if (phase === 'finish') {
+      pendingDecisions.delete(requestId);
+      event(CHANNELS.runs.toolApprovalResolved, waitingID, { requestId });
+      for (const id of [workingID, waitingID]) {
+        runs.find(run => run.id === id).status = 'succeeded';
+        event(CHANNELS.runs.statusChanged, id, { status: 'succeeded' });
+      }
+    }
+    response.end('{}'); return;
+  }
   if (request.method === 'POST' && request.url === '/test/inbox') {
     const { older = false } = JSON.parse(Buffer.concat(parts).toString() || '{}');
     const original = runs[0], now = Date.now();
@@ -367,26 +422,66 @@ const server = http.createServer(async (request, response) => {
     holdSnapshot = Math.min(15000, Math.max(0, Number(body.durationMs ?? 700)));
     response.end('{}'); return;
   }
+  if (request.method === 'POST' && request.url === '/test/delay-atlas-library') {
+    const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    atlasLibraryDelayMs = Math.min(15000, Math.max(0, Number(body.durationMs ?? 0)));
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/empty-atlas-library') {
+    atlasLibraryEmpty = true;
+    response.end('{}'); return;
+  }
   if (request.method === 'POST' && request.url === '/test/hold-mate-details') {
     const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
     mateDetailsDelayMs = Math.min(15000, Math.max(0, Number(body.durationMs ?? 5000)));
     response.end('{}'); return;
   }
+  if (request.method === 'POST' && request.url === '/test/hold-mate-loads') {
+    const { directoryMs = 0, routinesMs = 0 } = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    mateDirectoryDelayMs = Math.min(15000, Math.max(0, Number(directoryMs)));
+    mateRoutinesDelayMs = Math.min(15000, Math.max(0, Number(routinesMs)));
+    response.end('{}'); return;
+  }
   if (request.method === 'POST' && request.url === '/test/offline') {
+    const { durationMs = 3000 } = JSON.parse(Buffer.concat(parts).toString() || '{}');
     acceptsConnections = false;
     for (const socket of connections) socket.terminate();
-    later(3000, () => { acceptsConnections = true; });
+    later(Math.min(20000, Math.max(0, durationMs)), () => { acceptsConnections = true; });
     response.end('{}'); return;
   }
   if (request.method === 'POST' && request.url === '/pair') {
     const body = JSON.parse(Buffer.concat(parts).toString());
-    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-mate-info'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
+    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-reply-interrupted', 'ios-test-goal-controls'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
       response.writeHead(403); response.end(JSON.stringify({ error: 'Invalid pairing code' })); return;
     }
     const paging = body.code.startsWith('ios-test-paging');
     reset(body.code === 'ios-test-chat' || paging, body.code === 'ios-test-home', body.code === 'ios-test-design', body.code === 'ios-test-workspace', body.code === 'ios-test-media', paging, body.code === 'ios-test-paging-disjoint');
-    if (body.code === 'ios-test-mate-info') descriptor.capabilities.push('mateInfo');
-    if (body.code === 'ios-test-archived-mate') {
+    goalControlsFixture = body.code === 'ios-test-goal-controls';
+    if (body.code === 'ios-test-reply-interrupted') {
+      runs[0].status = 'failed';
+      runs[0].lastError = 'The provider stopped responding before it could finish the reply. You can send a follow-up to continue.';
+    }
+    if (['ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-restore-mate', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll'].includes(body.code)) descriptor.capabilities.push('mateInfo', 'mateModelEditing');
+    if (body.code === 'ios-test-mate-scroll') descriptor.backendId = 'ios-fixture-mate-scroll';
+    if (body.code === 'ios-test-mate-team') descriptor.capabilities.push('mateTeamCreation');
+    if (body.code === 'ios-test-mate-consent') descriptor.backendId = `ios-fixture-mate-consent-${randomUUID()}`;
+    if (body.code === 'ios-test-mate-info') {
+      const source = runs[0], id = 'fixture-retired-mate-chat';
+      runs.push({ ...source, id, mode: 'work', title: 'Archived release check', assistantId: 'fixture-retired-mate' });
+      artifacts.set(id, [{ id: nextID++, runId: id, kind: 'report', content: 'Archived release checklist.', createdAt: source.createdAt }]);
+    }
+    if (body.code === 'ios-test-mate-request') {
+      descriptor.backendId = `ios-fixture-mate-request-${randomUUID()}`;
+      const source = runs[0], id = 'fixture-linked-mate-request', workerRunId = 'fixture-linked-mate-chat', at = new Date();
+      const assignment = { ...fixtureInfoTask, id, title: 'Mate request', status: 'blocked', brief: 'Check the release notes first.',
+        result: 'Waiting for a release decision.', workerRunId };
+      mateAssignments.set(id, { runId: source.id, assignment });
+      runs.push({ ...source, id: workerRunId, mode: 'work', title: 'Release decision', assistantId: fixtureMate.id });
+      artifacts.set(workerRunId, [{ id: nextID++, runId: workerRunId, kind: 'report', content: 'I found two release options.', createdAt: at }]);
+      artifacts.get(source.id).push({ id: nextID++, runId: source.id, kind: 'report', content: 'Mate request',
+        metadata: { source: 'assistant_assignment', assignmentId: id }, createdAt: at });
+    }
+    if (body.code === 'ios-test-archived-mate' || body.code === 'ios-test-restore-mate') {
       mateArchived = true;
       const source = runs[0], workerRunId = 'fixture-old-mate-chat', id = 'fixture-old-mate-request', at = new Date();
       const { id: mateId, name, avatar } = fixtureMate;
@@ -446,23 +541,53 @@ wss.on('connection', socket => {
           result = { fileName: 'notes.md', relativePath: 'docs/notes.md', content: '# Notes\n\nA run-local file with $x^2$ and [a PDF](report.pdf).' }; break;
         }
         case CHANNELS.backend.describe: result = descriptor; break;
+        case CHANNELS.providers.getMobileGoalSummary: result = goals.get(args[0]) ?? null; break;
+        case CHANNELS.providers.changeMobileGoal: {
+          const [runId, change] = args, current = goals.get(runId);
+          if (!commandId || !current || change?.expectedRevision !== current.revision) throw new Error('This goal changed elsewhere.');
+          if (change.action === 'edit' && current.status !== 'complete' && change.objective?.trim()) {
+            setFixtureGoal(runId, { ...current, objective: change.objective });
+          } else if (change.action === 'pause' && current.status === 'active') {
+            setFixtureGoal(runId, { ...current, status: 'paused' });
+          } else if (change.action === 'resume' && current.status === 'paused') {
+            setFixtureGoal(runId, { ...current, status: 'active' });
+          } else if (change.action === 'clear') {
+            goals.delete(runId);
+            event(CHANNELS.providers.mobileGoalChanged, runId);
+          } else throw new Error('Invalid goal change.');
+          result = { applied: true };
+          receipts.set(commandId, { success: true, data: result });
+          if (goalControlsFixture && change.action === 'pause') { socket.terminate(); return; }
+          break;
+        }
         case CHANNELS.assistants.mobileDirectory: {
-          const mates = [...fixtureMates, ...createdMates.values()].map(mate => mateArchived && mate.id === fixtureMate.id
+          const creatingTeams = descriptor.capabilities.includes('mateTeamCreation');
+          const initialMates = fixtureMates.map(mate => {
+            if (mate.id === editedFixtureMate?.id) return editedFixtureMate;
+            return creatingTeams ? { ...mate, teamId: null } : mate;
+          });
+          const mates = [...initialMates, ...createdMates.values()].map(mate => mateArchived && mate.id === fixtureMate.id
             ? { ...mate, isArchived: true } : mate);
           if (descriptor.capabilities.includes('mateInfo')) {
             mates.push({ ...fixtureMate, id: 'fixture-retired-mate', name: 'Retired Release Mate', isArchived: true });
+          }
+          if (descriptor.backendId.startsWith('ios-fixture-mate-consent-')) mates.push(fixtureClaudeMate);
+          if (descriptor.backendId === 'ios-fixture-mate-scroll') {
+            const index = mates.findIndex(mate => mate.id === fixtureMate.id);
+            const instructions = Array.from({ length: 14 }, (_, step) =>
+              `Release check ${step + 1}. Summarize important changes and link the source notes. Report any missing validation before sharing the build.`
+            ).join('\n\n');
+            mates[index] = { ...mates[index], details: { ...fixtureMate.details, instructions } };
           }
           const [_, selected, archived = false] = args;
           result = {
             mates: selected ? mates.filter(mate => mate.id === selected).map(({ details, ...mate }) => details && (!mate.isArchived || archived) ? { ...mate, details } : mate)
               : mates.filter(mate => !!mate.isArchived === archived).map(({ details: _details, ...mate }) => mate),
-            teams: fixtureMateTeams,
+            teams: creatingTeams ? [...createdMateTeams.values()] : fixtureMateTeams,
           };
-          if (args[1] && mateDetailsDelayMs) {
-            const directory = result;
-            later(mateDetailsDelayMs, () => {
-              if (socket.readyState === WebSocket.OPEN) send(socket, { kind: 'response', id, result: { success: true, data: directory } });
-            });
+          const delay = selected ? mateDetailsDelayMs : mateDirectoryDelayMs;
+          if (delay) {
+            later(delay, () => send(socket, { kind: 'response', id, result: { success: true, data: result } }));
             return;
           }
           break;
@@ -470,7 +595,10 @@ wss.on('connection', socket => {
         case CHANNELS.assistants.mobileAssignment: {
           const task = mateAssignments.get(args[2]);
           if (!task || task.runId !== args[1]) throw new Error('Mate request not found');
-          result = task.assignment; break;
+          const { assignment } = task;
+          result = assignment.assignee?.id === fixtureMate.id
+            ? { ...assignment, assignee: { ...assignment.assignee, isArchived: mateArchived } } : assignment;
+          break;
         }
         case CHANNELS.assistants.mobileMemory: {
           const [account, mateID, noteID] = args;
@@ -478,21 +606,80 @@ wss.on('connection', socket => {
           result = noteID ? mateMemory.get(noteID) : [...mateMemory.values()];
           break;
         }
-        case CHANNELS.assistants.mobileAssignments:
-          result = args[2] === fixtureInfoTask.id ? fixtureInfoTask : { items: [fixtureInfoTask], activeCount: 0, hasMore: false };
+        case CHANNELS.assistants.mobileAssignments: {
+          const items = descriptor.backendId.startsWith('ios-fixture-mate-consent-') ? [fixtureBlockedTask, fixtureInfoTask] : [fixtureInfoTask];
+          if (typeof args[2] === 'string') {
+            const linked = mateAssignments.get(args[2])?.assignment;
+            result = linked?.assignee?.id === args[1] ? { brief: '', evidence: [], ...linked } : items.find(item => item.id === args[2]);
+          } else {
+            result = { items, activeCount: items.filter(item => item.status === 'blocked').length, hasMore: false };
+          }
+          if (!result) throw new Error('Assignment not found');
           break;
+        }
         case CHANNELS.assistants.mobileRoutines:
           result = args[2] === fixtureRoutine.id ? fixtureRoutine : { items: [fixtureRoutine], nextOffset: null };
+          if (mateRoutinesDelayMs && typeof args[2] !== 'string') {
+            later(mateRoutinesDelayMs, () => send(socket, { kind: 'response', id, result: { success: true, data: result } }));
+            return;
+          }
           break;
         case CHANNELS.assistants.mobileManage: {
           const [account, mateID, change] = args;
-          if (account !== 'fixture-account' || mateID !== fixtureMate.id || !commandId || change.action !== 'saveMemory') {
+          if (account !== 'fixture-account' || mateID !== fixtureMate.id || !commandId) {
             throw new Error('Invalid fixture Mate change');
           }
-          mateMemory.set(change.note.id, { ...change.note, revision: change.note.revision + 1 });
+          if (change.action === 'archive' && change.archived === false && mateArchived && descriptor.capabilities.includes('mateInfo')) {
+            mateArchived = false;
+            receipts.set(commandId, { success: true, data: { accepted: true } });
+            send(socket, { kind: 'response', id, result: { success: false, error: 'Command outcome is unknown. Check the previous result.' } });
+            return;
+          }
+          if (change.action === 'archive' && change.archived === true && !mateArchived && descriptor.capabilities.includes('mateInfo')) {
+            mateArchived = true;
+          } else if (change.action === 'saveMemory') {
+            mateMemory.set(change.note.id, { ...change.note, revision: change.note.revision + 1 });
+          } else if (change.action === 'updateProfile' && descriptor.capabilities.includes('mateInfo')) {
+            const { name, description, avatar, instructions } = change.profile;
+            const previous = editedFixtureMate ?? (descriptor.capabilities.includes('mateTeamCreation') ? { ...fixtureMate, teamId: null } : fixtureMate);
+            const teamId = change.teamChange ? change.teamChange.teamId : previous.teamId;
+            if (change.teamChange && (change.teamChange.expectedTeamId !== previous.teamId || teamId && !createdMateTeams.has(teamId))) {
+              throw new Error('Team is unavailable');
+            }
+            const modelChange = change.modelChange;
+            if (modelChange && (modelChange.expectedModel !== previous.model || modelChange.expectedEffort !== previous.details.effort)) {
+              throw new Error('Saved model settings changed');
+            }
+            editedFixtureMate = { ...previous, name, description, avatar, teamId, model: modelChange?.model ?? previous.model,
+              details: { ...previous.details, instructions, effort: modelChange?.effort ?? previous.details.effort } };
+          } else if (change.action === 'followup' && descriptor.backendId.startsWith('ios-fixture-mate-request-')) {
+            const linked = mateAssignments.get(change.id)?.assignment;
+            if (!linked || linked.assignee.id !== mateID || linked.status !== 'blocked') throw new Error('Assignment is unavailable for this Mate');
+            linked.status = 'running';
+          } else if (!descriptor.backendId.startsWith('ios-fixture-mate-consent-') || !['assign', 'followup', 'runRoutine'].includes(change.action)) {
+            throw new Error('Invalid fixture Mate change');
+          }
           result = { accepted: true };
           receipts.set(commandId, { success: true, data: result });
           broadcast(CHANNELS.assistants.changed, {});
+          break;
+        }
+        case CHANNELS.assistants.createTeam: {
+          const { accountId, name } = args[0];
+          if (!descriptor.capabilities.includes('mateTeamCreation') || !commandId || accountId !== 'fixture-account' || !name || name.length > 100) {
+            throw new Error('Invalid team creation');
+          }
+          result = [...createdMateTeams.values()].find(team => team.name === name);
+          if (!result) {
+            result = { id: `fixture-team-${nextID++}`, name };
+            createdMateTeams.set(result.id, result);
+          }
+          receipts.set(commandId, { success: true, data: result });
+          broadcast(CHANNELS.assistants.changed, {});
+          if (name === 'Launch Team') {
+            send(socket, { kind: 'response', id, result: { success: false, error: 'Command outcome is unknown. Check the previous result.' } });
+            return;
+          }
           break;
         }
         case CHANNELS.assistants.create: {
@@ -598,6 +785,14 @@ wss.on('connection', socket => {
           }) : runs.filter(run => run.assistantId === args[1]).map(({ id, title, updatedAt }) => ({ id, title, updatedAt })); break;
         }
         case CHANNELS.atlas.mobileLibrary:
+          result = atlasLibraryEmpty ? { items: [], page: 1, hasNext: false } :
+            atlasFixture(channel, args[0], { pdfBytes, outputBytes, imageBase64, version: outputVersion });
+          if (atlasLibraryDelayMs) {
+            const data = result;
+            later(atlasLibraryDelayMs, () => send(socket, { kind: 'response', id, result: { success: true, data } }));
+            return;
+          }
+          break;
         case CHANNELS.atlas.readMobilePage:
         case CHANNELS.atlas.describeMobileFile:
         case CHANNELS.atlas.readMobileFile:

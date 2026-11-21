@@ -1,9 +1,10 @@
-import type { GoalInfo, GoalMutationOrigin, GoalSetParams } from "../../../../../shared/adapter.types";
+import type { GoalInfo, GoalMutationOrigin, GoalSetParams, GoalWriteGuard } from "../../../../../shared/adapter.types";
 import { mapProviderGoal, mayAutomaticallyClearProviderGoal, mayEstablishProviderGoal, providerGoalPatch, relativizeGoalMentions } from "../../../../../shared/provider-goal-lifecycle";
 import type { CodexAppServer } from "./codex-app-server.client";
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
 
 type GoalServer = Pick<CodexAppServer, "sendRequest">;
+type GoalObservation = { revision: number; goal?: GoalInfo | null };
 
 /** One native thread owns ordered goal reads/writes. Run admission preserves
  * click order through asynchronous persisted-thread lookup; server retirement
@@ -20,7 +21,7 @@ export function createCodexGoalLifecycle(effects: {
 }) {
   let generation = 0, closed = false;
   const tails = new Map<string, Promise<unknown>>();
-  const observations = new Map<string, { revision: number; goal?: GoalInfo | null }>();
+  const observations = new Map<string, GoalObservation>();
   const ordered = <T>(key: string, fallback: T, action: (generation: number) => Promise<T>): Promise<T> => {
     const version = generation;
     const next = (tails.get(key) ?? Promise.resolve()).catch(() => {}).then(() =>
@@ -30,7 +31,7 @@ export function createCodexGoalLifecycle(effects: {
     void next.then(done, done);
     return next;
   };
-  const inThread = <T>(threadId: string, fallback: T, action: (version: number, slot: { revision: number; goal?: GoalInfo | null }) => Promise<T>) =>
+  const inThread = <T>(threadId: string, fallback: T, action: (version: number, slot: GoalObservation) => Promise<T>) =>
     ordered("thread:" + threadId, fallback, async (version) => {
       const slot = { revision: 0, goal: undefined as GoalInfo | null | undefined };
       observations.set(threadId, slot);
@@ -45,7 +46,14 @@ export function createCodexGoalLifecycle(effects: {
     if (!server || !active(server, version)) return null;
     return { server, threadId, current: async () => active(server, version) && await effects.resolveThread(runId) === threadId && active(server, version) };
   };
-  const reconcile = async (owner: NonNullable<Awaited<ReturnType<typeof resolve>>>, slot: { revision: number; goal?: GoalInfo | null }) => {
+  const checkGuard = async (owner: NonNullable<Awaited<ReturnType<typeof resolve>>>, slot: GoalObservation, guard: GoalWriteGuard) => {
+    const revision = slot.revision;
+    const response = await owner.server.sendRequest("thread/goal/get", { threadId: owner.threadId });
+    if (!await guard.ownsRun() || !await owner.current()) return false;
+    const current = slot.revision === revision ? mapProviderGoal(response.goal, owner.threadId) : slot.goal;
+    return !!current && guard.matches(current);
+  };
+  const reconcile = async (owner: NonNullable<Awaited<ReturnType<typeof resolve>>>, slot: GoalObservation) => {
     let goal = slot.goal ?? null, revision = slot.revision;
     // A notification during a mutation can precede or follow that mutation.
     // A causal read after it resolves that ambiguity, even with coarse clocks.
@@ -85,13 +93,14 @@ export function createCodexGoalLifecycle(effects: {
           .catch((error: unknown) => effects.warn("thread/goal/set failed:", error));
       });
     },
-    set(runId: string, params: GoalSetParams): Promise<GoalInfo | null> {
+    set(runId: string, params: GoalSetParams, guard?: GoalWriteGuard): Promise<GoalInfo | null> {
       return ordered("run:" + runId, null, async (version) => {
         try {
           const patch = providerGoalPatch(params);
           const owner = await resolve(runId, version, true); if (!owner) return null;
           return await inThread(owner.threadId, null, async (_version, slot) => {
             if (!await owner.current()) return null;
+            if (guard && !await checkGuard(owner, slot, guard)) return null;
             const before = slot.revision;
             const result = await owner.server.sendRequest("thread/goal/set", { ...patch, threadId: owner.threadId } as CodexAppServerParams<"thread/goal/set">);
             if (!await owner.current()) return null;
@@ -118,13 +127,14 @@ export function createCodexGoalLifecycle(effects: {
         } catch (error) { if (!effects.unavailable(error)) effects.error("getGoal failed:", error); return null; }
       });
     },
-    clear(runId: string, origin: GoalMutationOrigin = "user"): Promise<boolean> {
+    clear(runId: string, origin: GoalMutationOrigin = "user", guard?: GoalWriteGuard): Promise<boolean> {
       return ordered("run:" + runId, false, async (version) => {
         try {
           if (origin !== "user" && origin !== "automatic") return false;
           const owner = await resolve(runId, version, true); if (!owner) return false;
           return await inThread(owner.threadId, false, async (_version, slot) => {
             if (!await owner.current()) return false;
+            if (guard && !await checkGuard(owner, slot, guard)) return false;
             if (origin === "automatic") {
               const existing = await owner.server.sendRequest("thread/goal/get", { threadId: owner.threadId });
               if (!mayAutomaticallyClearProviderGoal(mapProviderGoal(existing.goal, owner.threadId)) || !await owner.current()) return false;

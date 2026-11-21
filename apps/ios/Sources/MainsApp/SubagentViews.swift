@@ -26,7 +26,7 @@ struct SubagentDock: View {
                 SubagentGlyph()
                 Text("\(agents.count) \(agents.count == 1 ? "agent" : "agents")")
             }.font(.subheadline.weight(.medium)).foregroundStyle(.primary).padding(.horizontal, 16).frame(height: 44)
-                .modifier(GlassSurface(radius: 22))
+                .background(Color(.secondarySystemBackground), in: .capsule)
         }
         .buttonStyle(ChatPressStyle()).accessibilityIdentifier("subagentDock")
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
@@ -42,7 +42,7 @@ struct SubagentDock: View {
                     }.padding(14)
                 }
                 .scrollBounceBehavior(.basedOnSize).frame(height: cardHeight)
-                .modifier(GlassSurface(radius: 22))
+                .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 22))
                 .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(.primary.opacity(0.08)) }
                 .padding(.horizontal, 24).padding(.bottom, 56)
                 .transition(reduceMotion ? .opacity : .scale(scale: 0.94, anchor: .bottom).combined(with: .opacity))
@@ -60,7 +60,7 @@ struct SubagentDock: View {
     @ViewBuilder private func group(_ title: String, states: [SubagentState]) -> some View {
         let items = agents.filter { states.contains($0.state) }
         if !items.isEmpty {
-            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader)
+            Text(title).font(.caption.weight(.semibold).width(.expanded)).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader)
             ForEach(items) { agent in
                 Button { select(agent) } label: {
                     HStack(spacing: 12) {
@@ -117,9 +117,10 @@ struct SubagentDetailSheet: View {
         return [session.pairing?.descriptor.name, workspace].compactMap { $0 }.joined(separator: " · ")
     }
     var body: some View {
+        let flow = agent.flatMap { session.transcript.subagentFlow(for: $0) }
         NavigationStack {
             ScrollView {
-                if let agent, let flow = session.transcript.subagentFlow(for: agent) {
+                if let agent, let flow {
                     VStack(alignment: .leading, spacing: 20) {
                         if !agent.detail.isEmpty { Text(agent.detail).font(.footnote).foregroundStyle(.secondary) }
                         if let prompt = flow.prompt, !prompt.isEmpty {
@@ -132,7 +133,7 @@ struct SubagentDetailSheet: View {
                             }
                         }
                         if let report = flow.report, !report.isEmpty {
-                            Text("Result").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            Text("Result").font(.caption.weight(.semibold).width(.expanded)).foregroundStyle(.secondary)
                             ChatMessageBody(text: report)
                         }
                         if let error = flow.error, !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red).textSelection(.enabled) }
@@ -145,13 +146,15 @@ struct SubagentDetailSheet: View {
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
                         .animation(nil, value: flow.rows)
                 } else {
-                    ContentUnavailableView("Activity unavailable", systemImage: "person.crop.rectangle.stack",
-                        description: Text("Return to the conversation to load this agent’s messages."))
+                    EmptyStateView(artwork: .activity, title: "Activity unavailable",
+                                   description: Text("Return to the conversation to load this agent’s messages."))
                 }
             }
             // Details open at the start of the flow and never pull the reader
             // away from a tool or report while further child activity arrives.
-            .defaultScrollAnchor(.top).background(Color(.systemBackground))
+            .defaultScrollAnchor(.top)
+            .defaultScrollAnchor(flow == nil ? .center : .top, for: .alignment)
+            .background(Color(.systemBackground))
             .navigationHeaderFade()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -160,7 +163,7 @@ struct SubagentDetailSheet: View {
                 }
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 2) {
-                        Text(agent?.title ?? "Subagent").font(.headline).lineLimit(1)
+                        Text(agent?.title ?? "Subagent").font(.headline.width(.expanded)).lineLimit(1)
                         Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     }.multilineTextAlignment(.center).accessibilityElement(children: .combine)
                 }

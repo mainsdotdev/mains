@@ -14,48 +14,29 @@ struct WorkInboxView: View {
             let snapshot = session.displayedWorkInbox
             let live = session.isConnected && session.workInboxIsCurrent
             let groups = snapshot.groups(now: clock.date, live: live)
-            let finishedByDay = Dictionary(grouping: groups.finished) { calendar.startOfDay(for: $0.run.updatedAt) }
-            List {
-                Section { PageTitle("Activity").listRow }
-                if !session.isConnected || session.workInboxError != nil || session.workInboxLoading && !live {
-                  Section {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if !session.isConnected {
-                            Text("Saved activity. Connect to check requests and update your work.")
-                                .font(.footnote).foregroundStyle(.secondary)
-                            Button("Connection settings", action: openSettings).font(.footnote.weight(.medium))
-                        } else if let error = session.workInboxError {
-                            Text(error).font(.footnote).foregroundStyle(.secondary)
-                            Button("Try again") { Task { await session.refreshWorkInbox() } }.font(.footnote.weight(.medium))
-                        } else if session.workInboxLoading && !live {
-                            HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Checking your work…").font(.footnote).foregroundStyle(.secondary) }
+            Group {
+                if groups.isEmpty && (!session.isConnected || !session.workInboxLoading && session.workInboxError == nil) {
+                    EmptyStateLayout {
+                        PageTitle("Activity")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 20).padding(.top, 8)
+                        if snapshot.isLimited { limitNotice }
+                    } content: {
+                        if session.isConnected {
+                            EmptyStateView(artwork: .activity, title: live ? "You're all caught up" : "No saved activity",
+                                description: Text(live ? "Requests and running work appear here. Finished work stays for 24 hours." : "Connect to your computer to see what needs you."))
+                                .accessibilityIdentifier("workInboxEmpty")
+                        } else {
+                            EmptyStateView(artwork: .offline, title: "Computer disconnected",
+                                description: Text("Connect to your computer to check requests and see recent activity.")) {
+                                Button("Connection settings", action: openSettings)
+                            }
                         }
                     }
-                  }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-                }
-
-                inboxSection("Needs you", items: groups.needsYou, kind: .waiting, now: clock.date, live: live)
-                inboxSection("Running", items: groups.running, kind: .running, now: clock.date, live: live)
-                inboxSection("Needs attention", items: groups.failed, kind: .failed, now: clock.date, live: live)
-                ForEach(finishedByDay.keys.sorted(by: >), id: \.self) { day in
-                    inboxSection(activityDay(day, now: clock.date), items: finishedByDay[day] ?? [], kind: .finished, now: clock.date, live: live)
-                }
-
-                if groups.isEmpty && !session.workInboxLoading {
-                    ContentUnavailableView(live ? "You're all caught up" : "No saved activity", systemImage: live ? "checkmark.circle" : "tray",
-                        description: Text(live ? "Requests and running work appear here. Finished work stays for 24 hours." : "Connect to your computer to see what needs you."))
-                        .listRowBackground(Color.clear).listRowSeparator(.hidden)
-                        .accessibilityIdentifier("workInboxEmpty")
-                }
-                if snapshot.isLimited {
-                    Text("Showing up to 100 conversations, with requests and running work first. Older chats are available in Search.")
-                        .font(.footnote).foregroundStyle(.secondary).listRowBackground(Color.clear).listRowSeparator(.hidden)
+                } else {
+                    inboxList(groups, now: clock.date, live: live, isLimited: snapshot.isLimited)
                 }
             }
-            .listStyle(.insetGrouped).scrollContentBackground(.hidden)
-            .contentMargins(.top, 8, for: .scrollContent)
-            .listSectionSpacing(.compact)
-            .environment(\.defaultMinListRowHeight, 44)
             .background(Color(.systemBackground))
             .navigationHeaderFade()
             .scrollingNavigationTitle("Activity")
@@ -63,6 +44,51 @@ struct WorkInboxView: View {
         }
         .toolbar(.visible, for: .navigationBar)
         .refreshable { await session.refreshWorkInbox() }
+    }
+
+    private func inboxList(_ groups: WorkInboxGroups, now: Date, live: Bool, isLimited: Bool) -> some View {
+        let finishedByDay = Dictionary(grouping: groups.finished) { calendar.startOfDay(for: $0.run.updatedAt) }
+        return List {
+            Section { PageTitle("Activity").listRow }
+            if !session.isConnected || session.workInboxError != nil {
+                Section {
+                    VStack(alignment: groups.isEmpty ? .center : .leading, spacing: 4) {
+                        if !session.isConnected {
+                            Label("Saved activity. Connect to check requests and update your work.", systemImage: "wifi.slash")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            Button("Connection settings", action: openSettings)
+                                .font(.footnote.weight(.medium))
+                        } else if let error = session.workInboxError {
+                            Text(error).font(.footnote).foregroundStyle(.secondary)
+                            Button("Try again") { Task { await session.refreshWorkInbox() } }.font(.footnote.weight(.medium))
+                        }
+                    }
+                }
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            } else if session.workInboxLoading && !live && groups.isEmpty {
+                ContentLoadingView(title: "Checking your work…").listRow
+            }
+
+            inboxSection("Needs you", items: groups.needsYou, kind: .waiting, now: now, live: live)
+            inboxSection("Running", items: groups.running, kind: .running, now: now, live: live)
+            inboxSection("Needs attention", items: groups.failed, kind: .failed, now: now, live: live)
+            ForEach(finishedByDay.keys.sorted(by: >), id: \.self) { day in
+                inboxSection(activityDay(day, now: now), items: finishedByDay[day] ?? [], kind: .finished, now: now, live: live)
+            }
+
+            if isLimited {
+                limitNotice.listRowBackground(Color.clear).listRowSeparator(.hidden)
+            }
+        }
+        .listStyle(.insetGrouped).scrollContentBackground(.hidden)
+        .contentMargins(.top, 8, for: .scrollContent)
+        .listSectionSpacing(.compact)
+        .environment(\.defaultMinListRowHeight, 44)
+    }
+
+    private var limitNotice: some View {
+        Text("Showing up to 100 conversations, with requests and running work first. Older chats are available in Search.")
+            .font(.footnote).foregroundStyle(.secondary)
     }
 
     private func activityDay(_ day: Date, now: Date) -> LocalizedStringKey {

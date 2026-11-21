@@ -100,8 +100,8 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
       {setup.saved ? <p className={bubble}>{question.idleMessage}</p>
         : welcome.state === "failed" ? (
           <div className="space-y-2">
-            <p role="alert" className="text-danger">{welcome.error ? errorText(welcome.error) : "Could not draft the profile."}</p>
-            <Button variant="subtle" disabled={disabled} onClick={() => { setFailure(""); void onRetry(); }}>Retry profile draft</Button>
+            <p role="alert" className="whitespace-pre-wrap break-words text-danger">{welcome.error ? errorText(welcome.error) : "Could not draft the profile."}</p>
+            <Button variant="secondary" disabled={disabled} onClick={() => { setFailure(""); void onRetry(); }}>Retry profile draft</Button>
           </div>
         ) : pendingAnswer || welcome.state !== "ready" || request.isLoading && !draft ? (
           <p role="status" className={cn("text-primary-600 dark:text-primary-400",

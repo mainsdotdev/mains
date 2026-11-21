@@ -34,7 +34,10 @@ struct RemoteConversationQueueView: View {
                         }
                     }
                 }.frame(maxHeight: 180).fixedSize(horizontal: false, vertical: true)
-            }.padding(14).modifier(GlassSurface(radius: 22, interactive: false)).padding(.horizontal, 12)
+            }
+            .padding(14)
+            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 22))
+            .padding(.horizontal, 12)
                 .accessibilityIdentifier("computerMessageQueue")
         }
     }
@@ -86,7 +89,8 @@ struct ConversationQueueView: View {
                     }.padding(14)
                 }
             }
-            .modifier(GlassSurface(radius: 22, interactive: false)).padding(.horizontal, 12)
+            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 22))
+            .padding(.horizontal, 12)
             .accessibilityIdentifier("conversationMessageQueue")
         }
     }

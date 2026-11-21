@@ -196,7 +196,7 @@ private struct ContextPickerPanel: View {
         .accessibilityElement(children: .contain).accessibilityLabel("Context picker")
     }
     private func section(_ title: String) -> some View {
-        Text(title).font(.caption.weight(.semibold)).foregroundStyle(Color(uiColor: .secondaryLabel)).padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
+        Text(title).font(.caption.weight(.semibold).width(.expanded)).foregroundStyle(Color(uiColor: .secondaryLabel)).padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
             .accessibilityAddTraits(.isHeader).accessibilityIdentifier("contextSection-\(title)")
     }
 }

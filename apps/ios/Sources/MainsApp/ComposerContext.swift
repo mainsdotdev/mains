@@ -9,6 +9,7 @@ struct ComposerContext {
     let runID: String?
     let workspaceID: String?
     let lockedProfile: Bool
+    var supportsGoalMode: Bool { providerId == "codex" && mode != "chat" }
     init(space: Space, runID: String? = nil) {
         providerId = space.providerId; mode = space.mode; name = space.name
         spaceID = space.id; self.runID = runID; workspaceID = nil; lockedProfile = false

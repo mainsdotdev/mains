@@ -61,7 +61,7 @@ struct ConversationOutputsPane: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "doc.on.doc")
-                        Text(selection?.title ?? "Outputs").lineLimit(1).truncationMode(.middle)
+                        Text(selection?.title ?? "Outputs").fontWidth(.expanded).lineLimit(1).truncationMode(.middle)
                         Image(systemName: "chevron.down").font(.caption2)
                     }.font(.subheadline.weight(.medium)).frame(minHeight: 44)
                 }.accessibilityLabel("Choose output").accessibilityIdentifier("chooseCompanionOutput")
@@ -75,9 +75,10 @@ struct ConversationOutputsPane: View {
             if let selection, selection.owner == session.ownership {
                 preview(selection).id(selection.id).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if loading {
-                ProgressView("Loading outputs…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ContentLoadingView(title: "Loading outputs…").frame(maxHeight: .infinity)
             } else {
-                ContentUnavailableView("No outputs yet", systemImage: "doc.on.doc", description: Text("Files from this conversation appear here."))
+                EmptyStateView(artwork: .documents, title: "No outputs yet",
+                               description: Text("Files from this conversation appear here.")).centered
             }
             if let error {
                 HStack {

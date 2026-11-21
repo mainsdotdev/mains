@@ -12,7 +12,7 @@ struct ComposerSheet<Content: View>: View {
         NavigationStack {
             content()
                 .navigationHeaderFade(background: Color(.secondarySystemBackground))
-                .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+                .expandedNavigationTitle(title)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Close", systemImage: "xmark") { dismiss() }
@@ -25,72 +25,121 @@ struct ComposerSheet<Content: View>: View {
     }
 }
 
-struct TargetSheet: View {
+struct HomeTargetPicker: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
     let session: BackendSession
-    let space: Space
-    @Environment(\.dismiss) private var dismiss
-    private var target: HomeTarget { session.homeTargets[space.id] ?? HomeTarget() }
-    var body: some View {
-        ComposerSheet(title: space.mode == "developer" ? "Workspace" : "Project", backgroundStyle: AnyShapeStyle(Color(.secondarySystemBackground))) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(space.mode == "developer" ? "Mains runs code inside a workspace on your computer." : "File this run under a project, or leave it standalone.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .padding(.horizontal, 20).padding(.top, 8)
-                List {
-                    Section {
-                        if space.mode == "developer" {
-                            let local = session.workspaces.filter { $0.isReplica != true }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-                            if local.isEmpty { Text("No local workspaces yet.").foregroundStyle(.secondary).listRowBackground(Color(.tertiarySystemBackground)) }
-                            ForEach(local) { workspace in
-                                let missing = session.gitStates.first(where: { $0.workspaceId == workspace.id })?.pathExists == false
-                                Button {
-                                    var next = target; next.workspaceID = workspace.id
-                                    session.selectTarget(next, spaceID: space.id); dismiss()
-                                } label: {
-                                    HStack {
-                                        WorkspaceLabel(session: session, workspace: workspace)
-                                        if workspace.id == target.workspaceID { Image(systemName: "checkmark").foregroundStyle(.blue) }
-                                    }.contentShape(.rect)
-                                }.buttonStyle(.plain).disabled(missing)
-                                    .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
-                                    .listRowBackground(Color(.tertiarySystemBackground))
-                                    .accessibilityAddTraits(workspace.id == target.workspaceID ? .isSelected : [])
-                                    .accessibilityIdentifier("target-\(workspace.id)")
-                            }
-                        } else {
-                            projectChoice("No project", icon: nil, selected: target.collectionID == nil) {
-                                var next = target; next.collectionID = nil; session.selectTarget(next, spaceID: space.id); dismiss()
-                            }.accessibilityIdentifier("target-none")
-                            ForEach(session.collections) { collection in
-                                projectChoice(collection.name, icon: collection.icon, selected: target.collectionID == collection.id) {
-                                    var next = target; next.collectionID = collection.id; session.selectTarget(next, spaceID: space.id); dismiss()
-                                }.accessibilityIdentifier("target-\(collection.id)")
-                            }
-                        }
-                    }
+    let context: ComposerContext
+    let closing: Bool
+    let close: () -> Void
+    @State private var previewID: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .title2) private var rowHeight: CGFloat = 54
+
+    private struct Choice: Identifiable, Equatable {
+        let targetID: String?
+        let name: String
+        let icon: String?
+        var detail: String? = nil
+        var available = true
+        var id: String { targetID.map { "target-\($0)" } ?? "no-project" }
+        var accessibleName: String { detail.map { "\(name), \($0)" } ?? name }
+    }
+
+    private var isWorkspace: Bool { context.mode == "developer" }
+    private var title: String { isWorkspace ? "Workspace" : "Project" }
+    private var savedTarget: HomeTarget { context.spaceID.flatMap { session.homeTargets[$0] } ?? HomeTarget() }
+    private var savedID: String? { isWorkspace ? savedTarget.workspaceID : savedTarget.collectionID }
+    private var blocked: Bool { closing || !session.isConnected || session.changingMode || session.sending }
+
+    private var choices: [Choice] {
+        if isWorkspace {
+            let projects = Dictionary(session.projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let gitStates = Dictionary(session.gitStates.map { ($0.workspaceId, $0) }, uniquingKeysWith: { first, _ in first })
+            return session.workspaces.filter { $0.isReplica != true }
+                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                .map { workspace in
+                    let git = gitStates[workspace.id]
+                    let missing = git?.pathExists == false
+                    return Choice(targetID: workspace.id, name: workspace.name,
+                                  icon: workspace.projectId.flatMap { projects[$0]?.icon },
+                                  detail: missing ? "Folder unavailable" : git?.branch ?? "No branch", available: !missing)
                 }
-                .listStyle(.insetGrouped).scrollContentBackground(.hidden)
-                .contentMargins(.top, 0, for: .scrollContent)
-                .environment(\.defaultMinListRowHeight, 44)
-            }
+        }
+        return [Choice(targetID: nil, name: "No project", icon: nil)] + session.collections.map {
+            Choice(targetID: $0.id, name: $0.name, icon: $0.icon)
         }
     }
-    private func projectChoice(_ name: String, icon: String?, selected: Bool, action: @escaping () -> Void) -> some View {
-        return Button(action: action) {
-            HStack(spacing: 10) {
-                RegistryIcon(token: icon, fallback: "tray", size: 19)
-                Text(name).foregroundStyle(.primary).lineLimit(1)
-                Spacer(minLength: 8)
-                if selected { Image(systemName: "checkmark").foregroundStyle(.blue) }
-            }.font(.body).frame(minHeight: 32).contentShape(.rect)
+
+    var body: some View {
+        let items = choices
+        let saved = savedID
+        let selected = items.first { $0.id == previewID }
+            ?? items.first { $0.targetID == saved }
+            ?? items.first(where: \.available)
+            ?? items.first
+        VStack(spacing: 4) {
+            HStack(spacing: 4) {
+                Button(action: close) {
+                    Image(systemName: "xmark").foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44).contentShape(.circle)
+                }
+                .accessibilityLabel("Close").accessibilityIdentifier("closeTargetPicker")
+                Text(title).font(.headline.width(.expanded)).frame(maxWidth: .infinity)
+                    .accessibilityAddTraits(.isHeader)
+                Button {
+                    if let selected { apply(selected) }
+                } label: {
+                    Image(systemName: "checkmark").font(.body.weight(.semibold))
+                        .frame(width: 44, height: 44).contentShape(.circle)
+                }
+                .disabled(blocked || selected?.available != true)
+                .accessibilityLabel(isWorkspace ? "Confirm workspace" : "Confirm project")
+                .accessibilityIdentifier("confirmTarget")
+            }
+            .buttonStyle(ChatPressStyle())
+            if let selected {
+                ComposerChoiceWheel(items: items, selectedID: selected.id, accessibilityTitle: title,
+                                    accessibilityID: "selectTarget", enabled: !blocked, rowHeight: rowHeight,
+                                    reduceMotion: reduceMotion, alignsRowColumns: true, accessibleName: \.accessibleName,
+                                    canSelect: \.available, onSelect: { previewID = $0.id }) { choice in
+                    HStack(spacing: 10) {
+                        RegistryIcon(token: choice.icon, fallback: isWorkspace ? "folder" : "tray", size: 22)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(choice.name).font(.title2.weight(.semibold))
+                            if let detail = choice.detail {
+                                Text(detail).font(.caption).foregroundStyle(Color(.secondaryLabel))
+                            }
+                        }
+                        .lineLimit(1).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Image(systemName: "checkmark")
+                            .font(.footnote.weight(.semibold)).foregroundStyle(Provider.accent(context.providerId))
+                            .fixedSize().opacity(choice.targetID == saved ? 1 : 0)
+                    }
+                    .foregroundStyle(choice.available ? .primary : .secondary)
+                    .padding(.horizontal, 12)
+                }
+                .frame(height: rowHeight * (dynamicTypeSize.isAccessibilitySize || items.count == 1 ? 1.8 : 3))
+                .composerWheelFade()
+            } else {
+                Text("No local workspaces yet.").font(.subheadline).foregroundStyle(.secondary)
+                    .padding(.vertical, 16)
+            }
         }
-        .buttonStyle(.plain)
-        .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
-        .listRowBackground(Color(.tertiarySystemBackground))
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .padding(.horizontal, 20).padding(.bottom, 12)
+    }
+
+    private func apply(_ choice: Choice) {
+        guard !blocked, let space = session.selectedSpace, space.id == context.spaceID, space.mode == context.mode,
+              let current = choices.first(where: { $0.id == choice.id }), current.available else { return }
+        var next = savedTarget
+        if isWorkspace { next.workspaceID = current.targetID }
+        else { next.collectionID = current.targetID }
+        if next != savedTarget { session.selectTarget(next, spaceID: space.id) }
+        close()
     }
 }
 
@@ -152,6 +201,7 @@ private struct ComposerChoiceWheel<Item: Identifiable & Equatable, Row: View>: U
     let enabled: Bool
     let rowHeight: CGFloat
     let reduceMotion: Bool
+    var alignsRowColumns = false
     let accessibleName: (Item) -> String
     let canSelect: (Item) -> Bool
     let onSelect: (Item) -> Void
@@ -182,6 +232,7 @@ private struct ComposerChoiceWheel<Item: Identifiable & Equatable, Row: View>: U
         coordinator.items = nextItems; coordinator.lastRowHeight = rowHeight
         coordinator.lastEnabled = enabled
         view.rowHeight = rowHeight; view.rowCount = nextItems.count; view.reduceMotion = reduceMotion
+        view.alignsRowColumns = alignsRowColumns
         if changed { view.reloadRows(); view.layoutIfNeeded() }
         // History/effort refreshes must not interrupt an in-progress wheel spin.
         // Programmatic positioning/reload never invokes the selection callback.
@@ -278,6 +329,7 @@ final class ComposerWheelScroller: UIScrollView {
     var rowHeight: CGFloat = 52
     var rowCount = 0
     var reduceMotion = false
+    var alignsRowColumns = false
     var configureRow: (@MainActor (Int, UIView?) -> UIView)?
     var onChoose: (@MainActor (Int, Bool) -> Void)?
     var canChoose: (@MainActor (Int) -> Bool)?
@@ -331,9 +383,10 @@ final class ComposerWheelScroller: UIScrollView {
             let scale = 1 - min(2, abs(distance)) * 0.06
             var transform = CATransform3DIdentity
             if !reduceMotion {
-                transform.m34 = -1 / 600
+                // Leading-aligned rows can tilt without shifting their columns sideways.
+                transform.m34 = alignsRowColumns ? 0 : -1 / 600
                 transform = CATransform3DRotate(transform, max(-1.2, min(1.2, distance * .pi / 7)), 1, 0, 0)
-                transform = CATransform3DScale(transform, scale, scale, 1)
+                transform = CATransform3DScale(transform, alignsRowColumns ? 1 : scale, scale, 1)
             }
             row.layer.transform = transform
             row.alpha = max(0.15, 1 - abs(distance) * 0.45)
@@ -377,6 +430,10 @@ struct ComposerSpeed {
     let tiers: [ModelServiceTier]
     let fastTier: String?
     private let usesServiceTier: Bool
+
+    static func activeTint(in scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color(red: 1, green: 0.33, blue: 0.38) : Color(red: 0.7, green: 0.08, blue: 0.18)
+    }
 
     init?(model: ModelChoice?, providerID: String) {
         guard let model else { return nil }
@@ -451,7 +508,7 @@ struct RunOptionsSheet: View {
             VStack(spacing: 14) {
                 if context.mode == "developer" { permissionPicker }
                 VStack(spacing: 0) {
-                    if context.providerId == "codex" && context.mode != "chat" {
+                    if context.supportsGoalMode {
                         if context.mode == "developer" {
                             Toggle("Plan mode", isOn: configToggle("planMode", exclusive: "goalMode"))
                                 .accessibilityIdentifier("runPlanMode").padding(.vertical, 5)
@@ -489,7 +546,7 @@ struct RunOptionsSheet: View {
         let height = permissionRowHeight * (dynamicTypeSize.isAccessibilitySize ? 1.8 : 3)
         return Group {
             if context.providerId == "codex", loading {
-                ProgressView("Loading computer policy…").font(.subheadline)
+                ContentLoadingView(title: "Loading computer policy…")
             } else if let catalogError {
                 VStack(spacing: 8) {
                     Text(catalogError).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -631,7 +688,7 @@ private struct FastBolt: View {
     }
 
     var body: some View {
-        let glow = scheme == .dark ? Color(red: 1, green: 0.33, blue: 0.38) : Color(red: 0.7, green: 0.08, blue: 0.18)
+        let glow = ComposerSpeed.activeTint(in: scheme)
         ZStack {
             bolt("registry-bolt").foregroundStyle(.secondary).opacity(active ? 0 : 1)
             bolt("registry-bolt-fill")

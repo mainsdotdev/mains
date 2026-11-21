@@ -19,56 +19,24 @@ struct AtlasTrashView: View {
     private var key: String { "\(page):\(session.connection):\(session.atlasRevision):\(reload)" }
     var body: some View {
         NavigationStack {
-            List {
-                if loading { HStack(spacing: 12) { ProgressView(); Text("Loading Trash…").foregroundStyle(.secondary) } }
-                if let error {
-                    Text(error).foregroundStyle(.secondary)
-                    Button("Try again") { reload += 1 }.disabled(loading || !session.isConnected)
-                }
-                if let result {
-                    if result.items.isEmpty {
-                        ContentUnavailableView("Trash is empty", systemImage: "trash", description: Text("Items moved to Trash can be restored here."))
-                            .listRowBackground(Color.clear).accessibilityIdentifier("atlasTrashEmpty")
-                    }
-                    ForEach(result.items) { item in
-                        HStack(alignment: .center, spacing: 10) {
-                            RegistryIcon(token: "icon:atlas-" + item.kind, fallback: symbol(item.kind), size: 22, tint: .secondary)
-                                .frame(width: 24, height: 24)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(item.title).font(.subheadline.weight(.medium))
-                                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                                TimelineView(.periodic(from: .now, by: 60)) { clock in
-                                    let trashedAt = date(item.trashedAt)
-                                    let project = session.collections.first(where: { $0.id == item.collectionId })?.name
-                                    Text([trashedAt.map { compactRelativeAge($0, now: clock.date) }, project].compactMap { $0 }.joined(separator: " · "))
-                                        .font(.caption2).foregroundStyle(.secondary)
-                                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                                        .accessibilityLabel([trashedAt.map { "Trashed on " + $0.formatted(date: .abbreviated, time: .shortened) }, project].compactMap { $0 }.joined(separator: ", "))
-                                }
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                            if restoring == item.id { ProgressView().frame(minWidth: 44, minHeight: 44) }
-                            else {
-                                Button("Restore", systemImage: "arrow.uturn.backward") { restore(item) }
-                                    .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
-                                    .accessibilityLabel("Restore " + item.title).accessibilityIdentifier("atlasRestore-" + item.id)
-                                    .disabled(!session.canSaveToAtlas || owner != session.ownership)
-                            }
-                        }.frame(minHeight: AppListStyle.minimumContentHeight)
-                            .listRowInsets(AppListStyle.rowInsets)
-                            .accessibilityIdentifier("atlasTrashItem-" + item.id)
-                    }
-                    if result.page > 1 || result.hasNext {
-                        HStack {
-                            Button("Previous") { page = max(1, page - 1) }.disabled(page == 1 || loading)
-                            Spacer()
-                            Text("Page \(result.page)").font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Next") { page += 1 }.disabled(!result.hasNext || loading)
+            Group {
+                if result?.items.isEmpty == true || !session.isConnected && result == nil {
+                    ScrollView {
+                        if !session.isConnected {
+                            DisconnectedState(message: "Connect to your computer to see what’s in Trash.")
+                        } else {
+                            EmptyStateView(artwork: .trash, title: "Trash is empty",
+                                           description: Text("Items moved to Trash can be restored here."))
+                                .accessibilityIdentifier("atlasTrashEmpty")
                         }
                     }
+                    .defaultScrollAnchor(.center, for: .alignment)
+                } else {
+                    trashList
                 }
             }
-            .listStyle(.insetGrouped).navigationTitle("Trash").navigationBarTitleDisplayMode(.inline)
+            .background(Color(.systemGroupedBackground))
+            .expandedNavigationTitle("Trash")
             .navigationHeaderFade(background: Color(.systemGroupedBackground))
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Close", systemImage: "xmark") { dismiss() } }
@@ -82,6 +50,60 @@ struct AtlasTrashView: View {
         }
         .onChange(of: session.ownership) { _, _ in readID = UUID(); dismiss() }
         .onDisappear { readID = UUID() }
+    }
+
+    private var trashList: some View {
+        List {
+            if !session.isConnected {
+                DisconnectedState(message: "Connect to your computer to see what’s in Trash.")
+                    .listRowBackground(Color.clear).listRowSeparator(.hidden)
+            } else if loading {
+                ContentLoadingView(title: "Loading Trash…").listRow
+            }
+            if session.isConnected, let error {
+                Text(error).foregroundStyle(.secondary)
+                Button("Try again") { reload += 1 }.disabled(loading || !session.isConnected)
+            }
+            if let result {
+                ForEach(result.items) { item in
+                    HStack(alignment: .center, spacing: 10) {
+                        RegistryIcon(token: "icon:atlas-" + item.kind, fallback: symbol(item.kind), size: 22, tint: .secondary)
+                            .frame(width: 24, height: 24)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title).font(.subheadline.weight(.medium))
+                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                            TimelineView(.periodic(from: .now, by: 60)) { clock in
+                                let trashedAt = date(item.trashedAt)
+                                let project = session.collections.first(where: { $0.id == item.collectionId })?.name
+                                Text([trashedAt.map { compactRelativeAge($0, now: clock.date) }, project].compactMap { $0 }.joined(separator: " · "))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                                    .accessibilityLabel([trashedAt.map { "Trashed on " + $0.formatted(date: .abbreviated, time: .shortened) }, project].compactMap { $0 }.joined(separator: ", "))
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                        if restoring == item.id { ProgressView().frame(minWidth: 44, minHeight: 44) }
+                        else {
+                            Button("Restore", systemImage: "arrow.uturn.backward") { restore(item) }
+                                .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
+                                .accessibilityLabel("Restore " + item.title).accessibilityIdentifier("atlasRestore-" + item.id)
+                                .disabled(!session.canSaveToAtlas || owner != session.ownership)
+                        }
+                    }.frame(minHeight: AppListStyle.minimumContentHeight)
+                        .listRowInsets(AppListStyle.rowInsets)
+                        .accessibilityIdentifier("atlasTrashItem-" + item.id)
+                }
+                if result.page > 1 || result.hasNext {
+                    HStack {
+                        Button("Previous") { page = max(1, page - 1) }.disabled(page == 1 || loading)
+                        Spacer()
+                        Text("Page \(result.page)").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Next") { page += 1 }.disabled(!result.hasNext || loading)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
     }
     private func restore(_ item: AtlasTrashItem) {
         restoring = item.id

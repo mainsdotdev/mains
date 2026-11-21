@@ -4,13 +4,41 @@ import UIKit
 /// Run alongside scripts/mock-backend.mjs. No AI provider or real workspace is contacted.
 @MainActor
 final class MainsUITests: XCTestCase {
+    func testInterruptedReplyNoticeAlignsWithComposerWhileTyping() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        pairFixture(app, code: "ios-test-reply-interrupted").tap()
+
+        let input = app.textViews["messageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+
+        let notice = app.descendants(matching: .any)["replyInterruptedNotice"].firstMatch
+        let composer = app.descendants(matching: .any)["messageComposer"].firstMatch
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        XCTAssertTrue(composer.exists)
+        XCTAssertTrue(notice.staticTexts["Reply interrupted"].isHittable)
+        XCTAssertEqual(notice.frame.minX, composer.frame.minX, accuracy: 1)
+        XCTAssertEqual(notice.frame.maxX, composer.frame.maxX, accuracy: 1)
+        XCTAssertLessThan(notice.frame.maxY, composer.frame.minY)
+        attachScreenshot(app, name: "Interrupted reply above composer")
+
+        app.navigationBars.buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
     func testArchivedMateKeepsItsIdentityInAnOldRequestAndChat() {
         continueAfterFailure = false
         let app = makeApplication()
         app.launchArguments += ["-appearancePreference", "dark"]
         pairFixture(app, code: "ios-test-archived-mate").tap()
         XCTAssertTrue(app.staticTexts["Historical release report."].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Fixture Mate"].exists)
+        let request = app.buttons["openMateAssignment-fixture-old-mate-request"]
+        XCTAssertTrue(request.exists)
+        XCTAssertTrue(request.label.contains("Fixture Mate"))
+        XCTAssertTrue(request.label.contains("Completed"))
         let openChat = app.buttons["openMateTaskChat"]
         XCTAssertTrue(openChat.waitForExistence(timeout: 5))
         XCTAssertEqual(openChat.label, "Open archived Mate chat")
@@ -21,9 +49,59 @@ final class MainsUITests: XCTestCase {
         let namedArchive = NSPredicate(format: "label == %@", "Fixture Mate, archived Mate")
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: namedArchive, object: header)], timeout: 8), .completed)
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "archivedMateConversationNotice").firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["Restore this Mate on your computer to send messages."].exists)
+        XCTAssertFalse(app.buttons["restoreMateFromConversation"].exists)
         XCTAssertFalse(app.textViews["messageInput"].exists)
         XCTAssertFalse(app.buttons["newConversation"].exists)
         attachScreenshot(app, name: "Archived Mate chat")
+        app.navigationBars.buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testArchivedMateRestoresFromItsConversationUsingTheOriginalReceipt() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        pairFixture(app, code: "ios-test-restore-mate").tap()
+        let openChat = app.buttons["openMateTaskChat"]
+        XCTAssertTrue(openChat.waitForExistence(timeout: 5))
+        openChat.tap()
+        let history = app.staticTexts["Historical Mate reply."]
+        XCTAssertTrue(history.waitForExistence(timeout: 5))
+
+        let notice = app.descendants(matching: .any)["archivedMateConversationNotice"].firstMatch
+        let restore = notice.buttons["restoreMateFromConversation"]
+        XCTAssertTrue(restore.waitForExistence(timeout: 5))
+        XCTAssertTrue(restore.label.contains("Restore Mate"))
+        XCTAssertTrue(restore.isEnabled)
+        XCTAssertGreaterThanOrEqual(restore.frame.height, 44)
+        XCTAssertFalse(app.textViews["messageInput"].exists)
+        attachScreenshot(app, name: "Archived Mate restore card")
+        restore.tap()
+        let check = NSPredicate(format: "label CONTAINS %@", "Check Mate change")
+        let result = await XCTWaiter.fulfillment(of: [XCTNSPredicateExpectation(predicate: check, object: restore)], timeout: 5)
+        XCTAssertEqual(result, .completed)
+        XCTAssertFalse(app.textViews["messageInput"].exists)
+        restore.tap()
+
+        XCTAssertTrue(app.textViews["messageInput"].waitForExistence(timeout: 5))
+        XCTAssertFalse(restore.exists)
+        XCTAssertTrue(history.exists)
+        let header = app.descendants(matching: .any)["mateConversationHeader"].firstMatch
+        XCTAssertEqual(header.label, "Fixture Mate")
+
+        let url = URL(string: "http://127.0.0.1:18787/observations")!
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let calls = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let writes = calls.filter { $0["channel"] as? String == "assistants:mobileManage" }
+        XCTAssertEqual(writes.count, 2)
+        XCTAssertEqual(Set(writes.compactMap { $0["commandId"] as? String }).count, 1)
+        let arguments = try XCTUnwrap(writes.first?["args"] as? [Any])
+        XCTAssertEqual(arguments[1] as? String, "fixture-mate")
+        let change = try XCTUnwrap(arguments[2] as? [String: Any])
+        XCTAssertEqual(change["action"] as? String, "archive")
+        XCTAssertEqual(change["archived"] as? Bool, false)
+
         app.navigationBars.buttons["BackButton"].tap()
         forgetFixture(app)
     }
@@ -187,6 +265,244 @@ final class MainsUITests: XCTestCase {
         return app
     }
 
+    func testAtlasEmptyStatesFollowCategoryAndSearch() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test")
+        var empty = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/empty-atlas-library")!)
+        empty.httpMethod = "POST"
+        _ = try await URLSession.shared.data(for: empty)
+        app.buttons["openAtlas"].tap()
+        let filters = app.buttons["atlasFilters"]
+        XCTAssertTrue(filters.waitForExistence(timeout: 5))
+        let search = app.searchFields["Search Atlas"]
+
+        let categories = [("all", "No items here yet"), ("page", "No pages yet"), ("file", "No documents yet"),
+                          ("image", "No images yet"), ("bookmark", "No bookmarks yet")]
+        for (category, title) in categories {
+            let chip = app.buttons["atlasType-" + category]
+            let row = app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: 0, dy: filters.frame.midY - app.frame.minY))
+            if category == "image" {
+                row.withOffset(CGVector(dx: app.frame.width * 0.78, dy: 0))
+                    .press(forDuration: 0.05, thenDragTo: row.withOffset(CGVector(dx: app.frame.width * 0.15, dy: 0)))
+            }
+            if !chip.isSelected { chip.tap() }
+            let heading = app.staticTexts[title]
+            XCTAssertTrue(heading.waitForExistence(timeout: 5))
+            XCTAssertEqual(heading.frame.midX, app.frame.midX, accuracy: 2)
+            let contentMidY = (filters.frame.maxY + search.frame.minY) / 2
+            XCTAssertGreaterThan(heading.frame.midY, contentMidY)
+            XCTAssertLessThan(heading.frame.midY, contentMidY + 100)
+            attachScreenshot(app, name: "Atlas empty " + category)
+        }
+
+        search.tap()
+        search.typeText("Travel")
+        XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 5))
+        app.buttons["close"].tap()
+        XCTAssertTrue(app.staticTexts["No bookmarks yet"].waitForExistence(timeout: 5))
+        app.buttons["atlasOptions"].tap()
+        app.buttons["openAtlasTrash"].tap()
+        let trash = app.navigationBars["Trash"]
+        XCTAssertTrue(trash.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Trash is empty"].waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "Atlas empty Trash")
+        trash.buttons["Close"].tap()
+
+        app.terminate()
+        app.launchArguments = ["-appearancePreference", "light"]
+        app.launch()
+        openSidebar(app)
+        app.buttons["openAtlas"].tap()
+        let pages = app.buttons["atlasType-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.tap()
+        XCTAssertTrue(app.staticTexts["No pages yet"].waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "Atlas empty Pages light")
+        app.navigationBars["Atlas"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testAtlasTagFilterSearchesAndClearsFromCompactSheet() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["openAtlas"].tap()
+        let report = app.buttons["atlasItem-fixture-atlas-doc"]
+        XCTAssertTrue(report.waitForExistence(timeout: 5))
+
+        let filters = app.buttons["atlasFilters"]
+        let compactTitle = app.staticTexts["inlinePageTitle"]
+        attachScreenshot(app, name: "Atlas filters at rest")
+        XCTAssertTrue(filters.waitForExistence(timeout: 5))
+        XCTAssertTrue(filters.isHittable, "\(filters.frame)")
+        let restingFilterY = filters.frame.minY
+        app.swipeUp()
+        XCTAssertTrue(compactTitle.waitForExistence(timeout: 5))
+        let pinnedFilterY = filters.frame.minY
+        XCTAssertLessThan(pinnedFilterY, restingFilterY)
+        XCTAssertEqual(pinnedFilterY, app.navigationBars["Atlas"].frame.maxY, accuracy: 6)
+        app.swipeUp()
+        XCTAssertEqual(filters.frame.minY, pinnedFilterY, accuracy: 2)
+        XCTAssertTrue(filters.isHittable)
+        attachScreenshot(app, name: "Atlas pinned filters")
+        let all = app.buttons["atlasType-all"]
+        XCTAssertTrue(all.isHittable, "\(all.frame)")
+        XCTAssertEqual(all.frame.midY, filters.frame.midY, accuracy: 6)
+
+        func openTagFilter() {
+            filters.tap()
+            app.buttons["Tag…"].tap()
+            XCTAssertTrue(app.navigationBars["Filter by tag"].waitForExistence(timeout: 5))
+        }
+
+        openTagFilter()
+        let search = app.textFields["searchAtlasTags"]
+        let research = app.buttons["atlasTag-fixture-tag-research"]
+        let work = app.buttons["atlasTag-fixture-tag-work"]
+        XCTAssertTrue(search.exists)
+        XCTAssertTrue(work.waitForExistence(timeout: 5))
+        XCTAssertEqual(research.label, "#Research")
+        XCTAssertFalse(app.buttons["All tags"].exists)
+        XCTAssertLessThan(search.frame.maxY, research.frame.minY)
+        XCTAssertLessThan(work.frame.midY - research.frame.midY, 56)
+        attachScreenshot(app, name: "Atlas tag filter")
+
+        search.tap()
+        search.typeText("res")
+        XCTAssertTrue(work.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(research.waitForExistence(timeout: 5))
+        XCTAssertFalse(work.exists)
+        research.tap()
+        XCTAssertTrue(app.buttons["Reset"].waitForExistence(timeout: 5))
+        XCTAssertTrue(report.waitForNonExistence(timeout: 5))
+
+        openTagFilter()
+        app.buttons["Clear tag filter"].tap()
+        XCTAssertTrue(report.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Reset"].waitForNonExistence(timeout: 5))
+        app.swipeDown()
+        app.swipeDown()
+        XCTAssertTrue(compactTitle.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(filters.frame.minY, restingFilterY, accuracy: 4)
+        app.navigationBars.buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testAtlasKeepsScrolledLibraryVisibleWhileFavoriteAndTrashRefresh() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["openAtlas"].tap()
+        XCTAssertTrue(app.buttons["atlasItem-fixture-atlas-doc"].waitForExistence(timeout: 5))
+
+        let item = app.buttons["atlasItem-fixture-atlas-page-9"]
+        let neighbor = app.buttons["atlasItem-fixture-atlas-page-8"]
+        scrollTo(item, in: app)
+        XCTAssertTrue(neighbor.isHittable)
+        XCTAssertTrue(app.staticTexts["inlinePageTitle"].exists)
+        let neighborY = neighbor.frame.minY
+
+        var delay = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/delay-atlas-library")!)
+        delay.httpMethod = "POST"
+        delay.httpBody = Data(#"{"durationMs":5000}"#.utf8)
+        _ = try await URLSession.shared.data(for: delay)
+
+        func assertRetainedPage() {
+            XCTAssertTrue(neighbor.isHittable)
+            XCTAssertEqual(neighbor.frame.minY, neighborY, accuracy: 3)
+            XCTAssertFalse(app.staticTexts["Loading Atlas…"].exists)
+        }
+
+        item.press(forDuration: 0.7)
+        app.buttons["Add to favorites"].tap()
+        assertRetainedPage()
+        XCTAssertFalse(item.label.contains("Favorite"))
+        let favorite = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Favorite"), object: item)
+        let favoriteResult = await XCTWaiter.fulfillment(of: [favorite], timeout: 9)
+        XCTAssertEqual(favoriteResult, .completed)
+        assertRetainedPage()
+
+        item.press(forDuration: 0.7)
+        app.buttons["Move to Trash"].tap()
+        assertRetainedPage()
+        XCTAssertTrue(item.exists)
+        XCTAssertTrue(item.waitForNonExistence(timeout: 9))
+        assertRetainedPage()
+
+        app.navigationBars.buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testAtlasMoveToProjectUsesWorkChatPicker() async {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test-home")
+        chooseSidebarSpace("fixture-claude", in: app)
+        openSidebar(app)
+        await chooseSidebarMode("work", in: app)
+        app.buttons["conversation-fixture-work"].tap()
+        app.buttons["conversationOptions"].tap()
+        app.buttons["moveConversationToProject"].tap()
+
+        let sheet = app.navigationBars["Move to project"]
+        let close = sheet.buttons["Close"]
+        let search = app.searchFields["Search projects"]
+        let chatNoProject = app.buttons["moveChatNoProject"]
+        let chatProject = app.buttons["moveChatProject-fixture-kitchen"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        XCTAssertTrue(search.exists)
+        let workLayout = [chatNoProject.frame, chatProject.frame, search.frame]
+        attachScreenshot(app, name: "Work chat project picker")
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        app.navigationBars.buttons["BackButton"].tap()
+
+        openSidebar(app)
+        app.buttons["openAtlas"].tap()
+        let page = app.buttons["atlasItem-fixture-atlas-page"]
+        XCTAssertTrue(page.waitForExistence(timeout: 5))
+        page.tap()
+        app.buttons["atlasPageOptions"].tap()
+        app.buttons["moveAtlasPage"].tap()
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        let atlasNoProject = app.buttons["atlasMove-none"]
+        let atlasProject = app.buttons["atlasMove-fixture-kitchen"]
+        XCTAssertTrue(atlasNoProject.isEnabled, "Older computers may omit the page’s current project.")
+        XCTAssertEqual([atlasNoProject.frame, atlasProject.frame, search.frame], workLayout)
+        attachScreenshot(app, name: "Atlas Page project picker")
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        app.navigationBars.buttons["BackButton"].tap()
+
+        func moveFromLibrary() {
+            XCTAssertTrue(page.waitForExistence(timeout: 5))
+            page.press(forDuration: 0.7)
+            app.buttons["Move to project"].tap()
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+        }
+        moveFromLibrary()
+        XCTAssertFalse(atlasNoProject.isEnabled)
+        search.tap()
+        search.typeText("Kitchen")
+        XCTAssertTrue(app.buttons["atlasMove-fixture-life"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(atlasProject.exists)
+        atlasProject.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+
+        moveFromLibrary()
+        XCTAssertFalse(atlasProject.isEnabled)
+        XCTAssertTrue(atlasNoProject.isEnabled)
+        atlasNoProject.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        app.navigationBars.buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
     func testAtlasPageCoverDoesNotDelayItsCompactTitle() {
         continueAfterFailure = false
         let app = makeApplication()
@@ -327,6 +643,46 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(openChat.isHittable); openChat.tap()
         XCTAssertTrue(app.staticTexts["Mate chat opened."].waitForExistence(timeout: 10))
         app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMateRequestOpensAssignmentAndFollowsUpFromTheConversation() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        pairFixture(app, code: "ios-test-mate-request").tap()
+        let request = app.buttons["openMateAssignment-fixture-linked-mate-request"]
+        XCTAssertTrue(request.waitForExistence(timeout: 10))
+        XCTAssertTrue(request.label.contains("Blocked"))
+        XCTAssertTrue(app.buttons["openMateTaskChat"].exists)
+        attachScreenshot(app, name: "Mate request and blocked badge")
+        request.tap()
+
+        let assignment = app.navigationBars["Assignment"]
+        XCTAssertTrue(assignment.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Check the release notes first."].waitForExistence(timeout: 5))
+        let followup = app.buttons["Follow Up"]
+        scrollTo(followup, in: app)
+        followup.tap()
+        let form = app.navigationBars["Follow Up"]
+        let message = app.textViews["Task message"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        message.tap()
+        message.typeText("Send the notes for review.")
+        form.buttons["Send"].tap()
+        XCTAssertTrue(app.staticTexts["Share data with OpenAI?"].waitForExistence(timeout: 5))
+        app.buttons["allowDataSharing"].tap()
+        XCTAssertTrue(form.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(followup.waitForNonExistence(timeout: 5))
+
+        let chat = app.buttons["Open Chat"]
+        scrollTo(chat, in: app)
+        chat.tap()
+        XCTAssertTrue(assignment.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["I found two release options."].waitForExistence(timeout: 10))
+        app.navigationBars.buttons["BackButton"].tap()
+        XCTAssertTrue(request.waitForExistence(timeout: 5))
+        XCTAssertTrue(request.label.contains("Running"))
         app.navigationBars.buttons["BackButton"].tap()
         forgetFixture(app)
     }
@@ -562,6 +918,13 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [focusedAnswer], timeout: 3), .completed)
         setupAnswer.typeText("Help me plan meals")
         XCTAssertLessThanOrEqual(setupAnswer.frame.maxY, sendAnswer.frame.minY)
+        let blankY = (greeting.frame.maxY + setupAnswer.frame.minY) / 2
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: app.frame.width / 2, dy: blankY - app.frame.minY)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(setupAnswer.value as? String, "Help me plan meals")
+        setupAnswer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         sendAnswer.tap()
         let allow = app.buttons["allowDataSharing"]
         if allow.waitForExistence(timeout: 2) { allow.tap() }
@@ -711,18 +1074,23 @@ final class MainsUITests: XCTestCase {
         rowEdge.withOffset(CGVector(dx: 0, dy: firstMate.frame.midY - app.frame.minY)).tap()
         XCTAssertTrue(app.staticTexts["1m ago"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["1d ago"].exists)
+        let firstChat = app.staticTexts["Release check 1"]
+        let firstDay = app.staticTexts.matching(NSPredicate(format: "label IN %@", ["Today", "Yesterday"])).firstMatch
+        XCTAssertTrue(firstDay.exists)
+        XCTAssertLessThan(firstDay.frame.midY, firstChat.frame.midY)
         let description = app.staticTexts["Checks releases"]
         XCTAssertTrue(description.exists)
         XCTAssertEqual(description.frame.midX, app.frame.midX, accuracy: 2)
         XCTAssertFalse(app.staticTexts["Codex"].exists)
         let screenshot = try XCTUnwrap(app.screenshot().image.cgImage)
         let scale = CGFloat(screenshot.width) / app.frame.width
-        let sampleY = (description.frame.midY * scale).rounded()
-        func backgroundPatch(at x: CGFloat) throws -> Data {
-            let rect = CGRect(x: (x * scale).rounded(), y: sampleY, width: 6, height: 6)
+        func backgroundPatch(x: CGFloat, y: CGFloat) throws -> Data {
+            let rect = CGRect(x: (x * scale).rounded(), y: (y * scale).rounded(), width: 6, height: 6)
             return try XCTUnwrap(UIImage(cgImage: XCTUnwrap(screenshot.cropping(to: rect))).pngData())
         }
-        XCTAssertEqual(try backgroundPatch(at: 6), try backgroundPatch(at: 38))
+        let profileBackground = try backgroundPatch(x: 6, y: description.frame.midY)
+        XCTAssertEqual(profileBackground, try backgroundPatch(x: 38, y: description.frame.midY))
+        XCTAssertNotEqual(profileBackground, try backgroundPatch(x: 6, y: app.frame.maxY - 20))
         attachScreenshot(app, name: "Mate – centered profile summary and chats")
 
         let info = app.buttons["openMateInfo"]
@@ -741,7 +1109,6 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "Mate Details – saved profile")
         infoBar.buttons["BackButton"].tap()
 
-        let firstChat = app.staticTexts["Release check 1"]
         XCTAssertTrue(firstChat.waitForExistence(timeout: 5))
         let descriptionY = description.frame.midY
         let listInput = app.textViews["homeMessageInput"]
@@ -886,9 +1253,249 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
+    func testMateDetailsPinsTabsAndCondensesTheProfileTitle() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test-mate-scroll")
+        app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        mate.tap()
+        let info = app.buttons["openMateInfo"]
+        XCTAssertTrue(info.waitForExistence(timeout: 5))
+        info.tap()
+
+        let expandedBar = app.navigationBars["Mate Details"]
+        let compactBar = app.navigationBars["Fixture Mate"]
+        let scroll = app.scrollViews["mateInfoScroll"]
+        let tabs = app.descendants(matching: .any)["mateInfoTabs"].firstMatch
+        let profileName = app.staticTexts["mateInfoName"]
+        XCTAssertTrue(profileName.waitForExistence(timeout: 5))
+        XCTAssertTrue(expandedBar.staticTexts["Mate Details"].exists)
+        let originalY = tabs.frame.minY
+        scroll.swipeUp()
+        XCTAssertTrue(compactBar.staticTexts["Fixture Mate"].waitForExistence(timeout: 5))
+        let pinnedY = tabs.frame.minY
+        XCTAssertLessThan(pinnedY, originalY)
+        XCTAssertEqual(pinnedY, compactBar.frame.maxY, accuracy: 6)
+        XCTAssertFalse(profileName.isHittable)
+        scroll.swipeUp()
+        XCTAssertEqual(tabs.frame.minY, pinnedY, accuracy: 2)
+        attachScreenshot(app, name: "Mate Details – pinned tabs and fade")
+
+        app.buttons["mateInfoTab-Memory"].tap()
+        let newMemory = app.buttons["New Memory"]
+        XCTAssertTrue(newMemory.waitForExistence(timeout: 5))
+        XCTAssertTrue(newMemory.isHittable)
+        XCTAssertTrue(compactBar.staticTexts["Fixture Mate"].exists)
+        XCTAssertEqual(tabs.frame.minY, pinnedY, accuracy: 2)
+        scroll.swipeDown()
+        XCTAssertTrue(expandedBar.staticTexts["Mate Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(profileName.isHittable)
+        XCTAssertEqual(tabs.frame.minY, originalY, accuracy: 4)
+
+        expandedBar.buttons["BackButton"].tap()
+        app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMateDetailsEditsFromTheHeaderAndConfirmsArchive() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test-mate-info")
+        app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        mate.tap()
+        app.buttons["openMateInfo"].tap()
+
+        let details = app.navigationBars["Mate Details"]
+        let edit = details.buttons["editMateProfile"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(edit.frame.midX, details.frame.midX)
+        edit.tap()
+        let editor = app.navigationBars["Edit Profile"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.buttons["Cancel"].tap()
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 5))
+
+        let archive = app.buttons["archiveMateFromDetails"]
+        scrollTo(archive, in: app)
+        attachScreenshot(app, name: "Mate Details – archive button")
+        let confirmation = app.alerts["Archive Fixture Mate?"]
+        archive.tap()
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertEqual(confirmation.frame.midY, app.frame.midY, accuracy: 36)
+        attachScreenshot(app, name: "Mate Details – archive confirmation")
+        confirmation.buttons["Cancel"].tap()
+        XCTAssertTrue(confirmation.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(archive.isEnabled)
+        archive.tap()
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        confirmation.buttons["Archive"].tap()
+
+        XCTAssertTrue(app.buttons["Restore Mate"].waitForExistence(timeout: 5))
+        XCTAssertFalse(archive.exists)
+        XCTAssertFalse(app.navigationBars.buttons["editMateProfile"].exists)
+        let url = URL(string: "http://127.0.0.1:18787/observations")!
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let calls = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let writes = calls.filter { $0["channel"] as? String == "assistants:mobileManage" }
+        XCTAssertEqual(writes.count, 1)
+        let arguments = try XCTUnwrap(writes.first?["args"] as? [Any])
+        XCTAssertEqual(arguments[1] as? String, "fixture-mate")
+        let change = try XCTUnwrap(arguments[2] as? [String: Any])
+        XCTAssertEqual(change["action"] as? String, "archive")
+        XCTAssertEqual(change["archived"] as? Bool, true)
+
+        app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testEditMateSavesModelAndEffortFromTheSameScreen() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test-mate-info")
+        app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        mate.tap()
+        app.buttons["openMateInfo"].tap()
+        let edit = app.navigationBars.buttons["editMateProfile"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5))
+        edit.tap()
+
+        let editor = app.navigationBars["Edit Profile"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let name = app.textFields["editMateName"]
+        XCTAssertTrue(name.exists)
+        let scrollEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.025, dy: 0.58))
+        let distanceToHeader = name.frame.midY - editor.frame.midY
+        scrollEdge.press(forDuration: 0.05, thenDragTo: scrollEdge.withOffset(CGVector(dx: 0, dy: -distanceToHeader)),
+                         withVelocity: .slow, thenHoldForDuration: 0.25)
+        XCTAssertLessThan(name.frame.minY, editor.frame.maxY)
+        XCTAssertGreaterThan(name.frame.maxY, editor.frame.minY)
+        attachScreenshot(app, name: "Edit Profile – protected header while scrolling")
+        scrollEdge.press(forDuration: 0.05, thenDragTo: scrollEdge.withOffset(CGVector(dx: 0, dy: distanceToHeader + 100)),
+                         withVelocity: .slow, thenHoldForDuration: 0.25)
+        let keyboard = app.keyboards.firstMatch
+        func tapOutside(_ field: XCUIElement) {
+            app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: 8, dy: field.frame.midY - app.frame.minY)).tap()
+        }
+        name.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        tapOutside(name)
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5))
+        let save = editor.buttons["Save"]
+        XCTAssertFalse(save.isEnabled)
+        let model = app.descendants(matching: .any).matching(identifier: "selectModel").firstMatch
+        scrollTo(model, in: app)
+        XCTAssertEqual(model.value as? String, "Balanced")
+        chooseModel("fixture-deep", in: app)
+        let slider = app.descendants(matching: .any).matching(identifier: "effortSlider").firstMatch
+        scrollTo(slider, in: app)
+        selectEffort(at: 0, in: app)
+        XCTAssertEqual(slider.value as? String, "Medium")
+        XCTAssertTrue(save.isEnabled)
+        attachScreenshot(app, name: "Edit Profile – model and effort")
+        let description = app.descendants(matching: .any).matching(identifier: "editMateDescription").firstMatch
+        scrollTo(description, in: app)
+        XCTAssertTrue(app.textViews["editMateInstructions"].exists)
+        attachScreenshot(app, name: "Edit Profile – description and instructions")
+        description.tap()
+        description.typeText(" and signing")
+        let editedDescription = try XCTUnwrap(description.value as? String).trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertTrue(editedDescription.contains("and signing"))
+        XCTAssertTrue(keyboard.exists)
+        tapOutside(description)
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5))
+        XCTAssertEqual((description.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), editedDescription)
+        save.tap()
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(mateInfoRow(containing: "Deep Thinker", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(mateInfoRow(containing: "Medium", in: app).exists)
+
+        let url = URL(string: "http://127.0.0.1:18787/observations")!
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let calls = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let writes = calls.filter { $0["channel"] as? String == "assistants:mobileManage" }
+        XCTAssertEqual(writes.count, 1)
+        let args = try XCTUnwrap(writes.first?["args"] as? [Any])
+        let change = try XCTUnwrap(args[2] as? [String: Any])
+        XCTAssertEqual((change["profile"] as? [String: Any])?["description"] as? String, editedDescription)
+        XCTAssertEqual(change["modelChange"] as? [String: String], [
+            "model": "fixture-deep", "effort": "medium", "expectedModel": "fixture-balanced", "expectedEffort": "high",
+        ])
+
+        app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMateScreensAndTabsShareLoadingAndKeepLoadedContent() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test-mate-info")
+
+        func hold(_ path: String, delays: [String: Int]) async throws {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/\(path)")!)
+            request.httpMethod = "POST"
+            request.httpBody = try JSONEncoder().encode(delays)
+            let (_, response) = try await URLSession.shared.data(for: request)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        }
+
+        let loader = app.descendants(matching: .any).matching(identifier: "contentLoading").firstMatch
+        func checkLoader(_ title: String) {
+            XCTAssertTrue(loader.waitForExistence(timeout: 3))
+            XCTAssertEqual(loader.label, title)
+            XCTAssertEqual(loader.frame.midX, app.frame.midX, accuracy: 2)
+            attachScreenshot(app, name: title)
+        }
+
+        try await hold("hold-mate-loads", delays: ["directoryMs": 4500, "routinesMs": 4500])
+        app.buttons["openMates"].tap()
+        checkLoader("Loading Mates…")
+        let mate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 8))
+        mate.tap()
+
+        let info = app.buttons["openMateInfo"]
+        XCTAssertTrue(info.waitForExistence(timeout: 5))
+        try await hold("hold-mate-details", delays: ["durationMs": 4500])
+        info.tap()
+        checkLoader("Loading Mate details…")
+        XCTAssertTrue(app.staticTexts["mateInfoName"].waitForExistence(timeout: 8))
+
+        let routines = app.buttons["mateInfoTab-Routines"]
+        routines.tap()
+        checkLoader("Loading routines…")
+        let routine = app.staticTexts["Morning release check"]
+        XCTAssertTrue(routine.waitForExistence(timeout: 8))
+        app.buttons["mateInfoTab-Details"].tap()
+        XCTAssertFalse(routine.exists)
+        routines.tap()
+        XCTAssertTrue(routine.exists)
+        XCTAssertFalse(loader.exists)
+
+        app.navigationBars["Mate Details"].buttons["BackButton"].tap()
+        app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
     func testMateInfoTabsReadAndManageThePairedMate() {
         continueAfterFailure = false
         let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
         _ = pairFixture(app, code: "ios-test-mate-info")
         app.buttons["openMates"].tap()
         let openArchive = app.buttons["openArchivedMates"]
@@ -908,11 +1515,22 @@ final class MainsUITests: XCTestCase {
         openArchive.tap()
         XCTAssertTrue(archivedMate.waitForExistence(timeout: 5))
         archivedMate.tap()
+        let archivedChat = app.staticTexts["Archived release check"]
+        XCTAssertTrue(archivedChat.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.textViews["homeMessageInput"].exists)
+        let archivedBar = app.navigationBars["Retired Release Mate"]
+        let archivedInfo = archivedBar.buttons["openMateInfo"]
+        XCTAssertGreaterThan(archivedBar.buttons["closeArchivedMates"].frame.midX, archivedInfo.frame.midX)
+        archivedInfo.tap()
         let detailsBar = app.navigationBars["Mate Details"]
         XCTAssertTrue(detailsBar.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Restore Mate"].waitForExistence(timeout: 5))
-        detailsBar.buttons["closeArchivedMates"].tap()
-        XCTAssertTrue(detailsBar.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(detailsBar.buttons["closeArchivedMates"].exists)
+        detailsBar.buttons["BackButton"].tap()
+        archivedChat.tap()
+        XCTAssertTrue(app.staticTexts["Archived release checklist."].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["restoreMateFromConversation"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons["BackButton"].tap()
 
         let mate = app.buttons["mate-fixture-mate"]
         XCTAssertTrue(mate.waitForExistence(timeout: 5))
@@ -925,6 +1543,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(name.label, "Fixture Mate")
         XCTAssertTrue(detailsBar.staticTexts["Mate Details"].exists)
         XCTAssertTrue(app.buttons["Archive Mate"].exists)
+        XCTAssertFalse(app.buttons["mateInfoTab-Chats"].exists)
         attachScreenshot(app, name: "Mate Details – profile")
 
         app.buttons["mateInfoTab-Memory"].tap()
@@ -933,6 +1552,17 @@ final class MainsUITests: XCTestCase {
         addMemory.tap()
         let title = app.textFields["Title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
+        let pinned = app.switches["Pinned"]
+        let shared = app.switches["Share with team"]
+        assertControl(pinned, value: "0")
+        assertControl(shared, value: "1")
+        attachScreenshot(app, name: "New Memory – default switches")
+        let switchPosition = CGVector(dx: 0.94, dy: 0.5)
+        pinned.coordinate(withNormalizedOffset: switchPosition).tap()
+        assertControl(pinned, value: "1")
+        shared.coordinate(withNormalizedOffset: switchPosition).tap()
+        assertControl(shared, value: "0")
+        attachScreenshot(app, name: "New Memory – toggled switches")
         title.tap()
         title.typeText("QA release note")
         let note = app.textViews["mateMemoryText"]
@@ -961,14 +1591,259 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Paused"].exists)
         attachScreenshot(app, name: "Mate Details – Routines")
 
-        let chats = app.buttons["mateInfoTab-Chats"]
-        if !chats.isHittable { app.descendants(matching: .any)["mateInfoTabs"].firstMatch.swipeRight() }
-        chats.tap()
-        let chat = app.buttons["mateInfoChat-fixture-mate-chat-0"]
+        detailsBar.buttons["BackButton"].tap()
+        XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 5))
+        let chat = app.staticTexts["Release check 1"]
         XCTAssertTrue(chat.waitForExistence(timeout: 5))
         chat.tap()
         XCTAssertTrue(app.staticTexts["Check whether the build is ready."].waitForExistence(timeout: 10))
         app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMateDirectorySearchAndLiveActivity() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test-mate-info")
+        app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-fixture-mate"]
+        let reviewer = app.buttons["mate-fixture-reviewer"]
+        let planner = app.buttons["mate-fixture-planner"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        XCTAssertFalse(mate.label.contains("Working"))
+
+        func changeActivity(_ phase: String) async throws {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/mate-activity")!)
+            request.httpMethod = "POST"
+            request.httpBody = try JSONEncoder().encode(["phase": phase])
+            _ = try await URLSession.shared.data(for: request)
+        }
+        func waitForLabel(_ label: String, on row: XCUIElement, present: Bool) async {
+            let predicate = NSPredicate(format: present ? "label CONTAINS %@" : "NOT (label CONTAINS %@)", label)
+            let result = await XCTWaiter.fulfillment(of: [XCTNSPredicateExpectation(predicate: predicate, object: row)], timeout: 5)
+            XCTAssertEqual(result, .completed)
+        }
+
+        try await changeActivity("start")
+        await waitForLabel("Working", on: mate, present: true)
+        await waitForLabel("Needs you", on: planner, present: true)
+        attachScreenshot(app, name: "Mates – live status")
+        try await changeActivity("finish")
+        await waitForLabel("Working", on: mate, present: false)
+        await waitForLabel("Needs you", on: planner, present: false)
+
+        func beginSearch(_ prompt: String) -> XCUIElement {
+            let field = app.searchFields[prompt]
+            if !field.isHittable { app.buttons["Search"].tap() }
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            field.tap()
+            return field
+        }
+        func replaceSearch(_ text: String, in field: XCUIElement) {
+            if let value = field.value as? String, value != field.placeholderValue {
+                field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
+            }
+            field.typeText(text)
+        }
+        func closeSearch() {
+            let close = app.buttons["close"]
+            if close.exists { close.tap() }
+            else { app.buttons["Cancel"].tap() }
+        }
+
+        let search = beginSearch("Search Mates")
+        replaceSearch("PLANS TRIPS", in: search)
+        XCTAssertTrue(mate.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(planner.exists)
+        XCTAssertTrue(app.staticTexts["Planning Team"].exists)
+        replaceSearch("release team", in: search)
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        XCTAssertTrue(reviewer.exists)
+        XCTAssertFalse(planner.exists)
+        attachScreenshot(app, name: "Mates – search by team")
+        closeSearch()
+
+        app.buttons["openArchivedMates"].tap()
+        let retired = app.buttons["mate-fixture-retired-mate"]
+        XCTAssertTrue(retired.waitForExistence(timeout: 5))
+        let archivedSearch = beginSearch("Search archived Mates")
+        replaceSearch("no such mate", in: archivedSearch)
+        XCTAssertTrue(app.staticTexts["No matching Mates"].waitForExistence(timeout: 5))
+        XCTAssertFalse(retired.exists)
+        replaceSearch("retired", in: archivedSearch)
+        XCTAssertTrue(retired.waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "Archived Mates – search by name")
+        closeSearch()
+        app.navigationBars["Archived Mates"].buttons["closeArchivedMates"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testCreatesTeamsFromNewMateAndEditProfile() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test-mate-team")
+        app.buttons["openMates"].tap()
+        let newMate = app.buttons["newMate"]
+        XCTAssertTrue(newMate.waitForExistence(timeout: 5))
+        newMate.tap()
+        let name = app.textFields["mateName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap()
+        name.typeText("Team Mate\n")
+
+        let teams = app.buttons["mateTeamPicker"]
+        let field = app.textFields["mateTeamName"]
+        let submit = app.buttons["submitMateTeam"]
+        func beginTeam(_ name: String) {
+            scrollTo(teams, in: app)
+            teams.tap()
+            app.buttons["New Team"].tap()
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            XCTAssertFalse(submit.isEnabled)
+            let keyboard = app.keyboards.firstMatch
+            if !keyboard.exists { field.tap() }
+            XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+            field.typeText(name)
+            submit.tap()
+        }
+
+        XCTAssertEqual(teams.value as? String, "No team")
+        beginTeam("Launch Team")
+        let check = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Check"), object: submit)
+        let received = await XCTWaiter.fulfillment(of: [check], timeout: 5)
+        XCTAssertEqual(received, .completed)
+        XCTAssertEqual(field.value as? String, "Launch Team")
+        submit.tap()
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(teams.value as? String, "Launch Team")
+        XCTAssertEqual(name.value as? String, "Team Mate")
+        app.buttons["nextMateStep"].tap()
+        let create = app.buttons["createMate"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        create.tap()
+        let createdBar = app.navigationBars["Team Mate"]
+        XCTAssertTrue(createdBar.waitForExistence(timeout: 10))
+        createdBar.buttons["BackButton"].tap()
+        XCTAssertTrue(app.staticTexts["Launch Team"].waitForExistence(timeout: 5))
+
+        let existingMate = app.buttons["mate-fixture-mate"]
+        scrollTo(existingMate, in: app)
+        existingMate.tap()
+        let info = app.buttons["openMateInfo"]
+        XCTAssertTrue(info.waitForExistence(timeout: 5))
+        info.tap()
+        let edit = app.buttons["Edit Profile"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5))
+        scrollTo(edit, in: app)
+        edit.tap()
+        XCTAssertTrue(app.navigationBars["Edit Profile"].waitForExistence(timeout: 5))
+        beginTeam("Review Team")
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(teams.value as? String, "Review Team")
+        let url = URL(string: "http://127.0.0.1:18787/observations")!
+        func calls() async throws -> [[String: Any]] {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        }
+        let beforeSave = try await calls()
+        let teamCommands = beforeSave.filter { $0["channel"] as? String == "assistants:createTeam" }
+        XCTAssertEqual(teamCommands.count, 3)
+        XCTAssertEqual(teamCommands[0]["commandId"] as? String, teamCommands[1]["commandId"] as? String)
+        XCTAssertFalse(beforeSave.contains { $0["channel"] as? String == "assistants:mobileManage" })
+        app.navigationBars["Edit Profile"].buttons["Save"].tap()
+        XCTAssertTrue(mateInfoRow(containing: "Review Team", in: app).waitForExistence(timeout: 5))
+
+        app.navigationBars["Mate Details"].buttons["BackButton"].tap()
+        app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
+        XCTAssertTrue(app.staticTexts["Review Team"].waitForExistence(timeout: 5))
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMateExecutionAsksForTheWorkersProviderConsent() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test-mate-consent")
+        app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        mate.tap()
+        let info = app.buttons["openMateInfo"]
+        XCTAssertTrue(info.waitForExistence(timeout: 5))
+        info.tap()
+
+        func selectTab(_ name: String) {
+            let tab = app.buttons["mateInfoTab-" + name]
+            if !tab.isHittable { app.scrollViews["mateInfoTabs"].swipeLeft() }
+            tab.tap()
+        }
+        func writes() async throws -> [[String: Any]] {
+            let (data, _) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:18787/observations")!)
+            let calls = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+            return calls.filter { $0["channel"] as? String == "assistants:mobileManage" }
+                .compactMap { ($0["args"] as? [Any])?.dropFirst(2).first as? [String: Any] }
+        }
+
+        selectTab("Assignments")
+        let newAssignment = app.buttons["New Assignment"]
+        XCTAssertTrue(newAssignment.waitForExistence(timeout: 5))
+        newAssignment.tap()
+        let form = app.navigationBars["New Assignment"]
+        let title = app.textFields["Title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.tap(); title.typeText("Check the release")
+        let message = app.textViews["Task message"]
+        message.tap(); message.typeText("Review the sample.")
+        form.buttons["Assign"].tap()
+        let openAI = app.staticTexts["Share data with OpenAI?"]
+        XCTAssertTrue(openAI.waitForExistence(timeout: 5))
+        app.buttons["declineDataSharing"].tap()
+        XCTAssertTrue(openAI.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(title.value as? String, "Check the release")
+        XCTAssertEqual(message.value as? String, "Review the sample.")
+        let declined = try await writes()
+        XCTAssertTrue(declined.isEmpty)
+
+        form.buttons["Assign"].tap()
+        XCTAssertTrue(openAI.waitForExistence(timeout: 5))
+        app.buttons["allowDataSharing"].tap()
+        XCTAssertTrue(form.waitForNonExistence(timeout: 5))
+
+        let blocked = app.staticTexts["Needs report details"]
+        XCTAssertTrue(blocked.waitForExistence(timeout: 5))
+        blocked.tap()
+        let followup = app.buttons["Follow Up"]
+        XCTAssertTrue(followup.waitForExistence(timeout: 5))
+        if !followup.isHittable { app.swipeUp() }
+        followup.tap()
+        let followupForm = app.navigationBars["Follow Up"]
+        XCTAssertTrue(followupForm.waitForExistence(timeout: 5))
+        message.tap(); message.typeText("Use the updated sample.")
+        followupForm.buttons["Send"].tap()
+        XCTAssertTrue(app.staticTexts["Share data with Anthropic?"].waitForExistence(timeout: 5))
+        let beforeFollowup = try await writes()
+        XCTAssertEqual(beforeFollowup.compactMap { $0["action"] as? String }, ["assign"])
+        app.buttons["allowDataSharing"].tap()
+        XCTAssertTrue(followupForm.waitForNonExistence(timeout: 5))
+        app.buttons["closeMateAssignment"].tap()
+
+        selectTab("Routines")
+        let routineActions = app.buttons["Routine Actions"]
+        XCTAssertTrue(routineActions.waitForExistence(timeout: 5))
+        routineActions.tap()
+        app.buttons["Run Now"].tap()
+        var submitted = try await writes()
+        for _ in 0..<25 where submitted.count < 3 {
+            try await Task.sleep(for: .milliseconds(100))
+            submitted = try await writes()
+        }
+        XCTAssertEqual(submitted.compactMap { $0["action"] as? String }, ["assign", "followup", "runRoutine"])
+        XCTAssertEqual(submitted.first(where: { $0["action"] as? String == "followup" })?["message"] as? String, "Use the updated sample.")
+        XCTAssertFalse(app.buttons["allowDataSharing"].exists)
+
         app.navigationBars["Mate Details"].buttons["BackButton"].tap()
         app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
         app.navigationBars["Mates"].buttons["BackButton"].tap()
@@ -1271,6 +2146,39 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(activity.waitForNonExistence(timeout: 5))
     }
 
+    func testProjectPickerCancelsAppliesAndClears() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["closeSidebar"].tap()
+        let target = app.buttons["chooseTarget"]
+        target.tap()
+        let wheel = targetWheel("No project", in: app)
+        wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+        _ = targetWheel("Kitchen Notes", in: app)
+        let close = app.buttons["closeTargetPicker"]
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(target.label.contains("No project"))
+
+        target.tap()
+        _ = targetWheel("No project", in: app)
+        wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+        _ = targetWheel("Kitchen Notes", in: app)
+        confirmTarget(in: app)
+        XCTAssertTrue(target.label.contains("Kitchen Notes"))
+
+        target.tap()
+        _ = targetWheel("Kitchen Notes", in: app)
+        attachScreenshot(app, name: "Project picker")
+        wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        _ = targetWheel("No project", in: app)
+        confirmTarget(in: app)
+        XCTAssertTrue(target.label.contains("No project"))
+        forgetFixture(app)
+    }
+
     func testMissingWorkspaceExplainsSendAndKeepsTheDraft() throws {
         continueAfterFailure = false
         let app = makeApplication()
@@ -1286,8 +2194,17 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "Keep this request")
         XCTAssertFalse(app.buttons["allowDataSharing"].exists)
         app.buttons["chooseRequiredWorkspace"].tap()
-        let target = app.buttons["target-fixture-workspace"]
-        XCTAssertTrue(target.waitForExistence(timeout: 5)); target.tap()
+        let wheel = targetWheel("docs", in: app)
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.exists)
+        XCTAssertLessThan(wheel.frame.maxY, keyboard.frame.minY)
+        let start = wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.25)
+        _ = targetWheel("mains", in: app)
+        attachScreenshot(app, name: "Workspace picker above keyboard")
+        confirmTarget(in: app)
+        XCTAssertTrue(keyboard.exists)
         XCTAssertEqual(input.value as? String, "Keep this request")
         send.tap()
         XCTAssertTrue(app.buttons["allowDataSharing"].waitForExistence(timeout: 5))
@@ -1837,9 +2754,20 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "Settings – compact groups in system appearance")
         let sync = app.buttons["syncNow"]
         XCTAssertTrue(sync.isEnabled); sync.tap()
+        let system = app.buttons["appearance-system"]
+        let light = app.buttons["appearance-light"]
         let dark = app.buttons["appearance-dark"]
-        scrollTo(dark, in: app); dark.tap()
+        scrollTo(dark, in: app)
+        XCTAssertTrue(system.isHittable && light.isHittable && dark.isHittable)
+        XCTAssertEqual(light.frame.midY, system.frame.midY, accuracy: 1)
+        XCTAssertEqual(dark.frame.midY, system.frame.midY, accuracy: 1)
+        light.tap()
+        XCTAssertTrue(light.isSelected)
+        attachScreenshot(app, name: "Appearance – Day selected")
+        dark.tap()
         XCTAssertTrue(dark.isSelected)
+        XCTAssertFalse(light.isSelected)
+        attachScreenshot(app, name: "Appearance – Night selected")
 
         let sharing = app.buttons["aiDataSharing"]
         scrollTo(sharing, in: app)
@@ -1880,7 +2808,8 @@ final class MainsUITests: XCTestCase {
         scrollTo(dark, in: app)
         XCTAssertTrue(dark.isSelected, "Appearance persists across app launches.")
         attachScreenshot(app, name: "Settings – compact groups in dark appearance")
-        app.buttons["appearance-system"].tap()
+        system.tap()
+        XCTAssertTrue(system.isSelected)
         if !app.buttons["forgetComputer"].isHittable { app.swipeDown() }
         forgetFromSettings(app)
         XCTAssertTrue(app.buttons["scanPairingCode"].waitForExistence(timeout: 5))
@@ -2153,23 +3082,47 @@ final class MainsUITests: XCTestCase {
         continueAfterFailure = false
         let app = makeApplication()
         _ = pairFixture(app, code: "ios-test-workspace")
-        app.buttons["Search"].tap()
+        let sidebarSearch = app.buttons["sidebarSearch"]
+        let sidebarSearchFrame = sidebarSearch.frame
+        let hint = app.staticTexts["Search chats, messages and workspaces"]
+        let closeSearch = app.buttons["closeGlobalSearch"]
+        let keyboard = app.keyboards.firstMatch
         let input = app.textFields["globalSearchInput"]
         func assertInputAboveKeyboard() {
             let positioned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                guard input.exists, app.keyboards.firstMatch.exists else { return false }
-                let gap = app.keyboards.firstMatch.frame.minY - input.frame.maxY
-                return gap >= -1 && gap < 80
+                guard input.exists, keyboard.exists, closeSearch.exists else { return false }
+                let gap = keyboard.frame.minY - input.frame.maxY
+                return gap >= -1 && gap < 80 && app.frame.contains(input.frame) && app.frame.contains(closeSearch.frame)
             }, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [positioned], timeout: 5), .completed)
         }
-        XCTAssertTrue(input.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        assertInputAboveKeyboard()
-        XCTAssertTrue(app.staticTexts["Search chats, messages and workspaces"].exists)
+        func openSearch() {
+            sidebarSearch.tap()
+            XCTAssertTrue(input.waitForExistence(timeout: 5))
+            XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+            assertInputAboveKeyboard()
+            XCTAssertTrue(hint.exists)
+            XCTAssertEqual(hint.frame.midX, app.frame.midX, accuracy: 2)
+        }
+        func dismissSearch() {
+            closeSearch.tap()
+            XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["openSettings"].isHittable)
+            XCTAssertTrue(app.buttons["closeSidebar"].exists)
+            XCTAssertFalse(input.exists)
+            XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5))
+            XCTAssertEqual(sidebarSearch.frame, sidebarSearchFrame)
+        }
+        openSearch()
+        attachScreenshot(app, name: "Global search empty illustration")
+        dismissSearch()
+        openSearch()
+        let hintCenter = hint.frame.midY
         input.typeText("No matching result")
         XCTAssertEqual(input.value as? String, "No matching result", "Changing search results must preserve the editor and its focus.")
-        XCTAssertTrue(app.staticTexts["No results found"].waitForExistence(timeout: 5))
+        let noResults = app.staticTexts["No results found"]
+        XCTAssertTrue(noResults.waitForExistence(timeout: 5))
+        XCTAssertEqual(noResults.frame.midY, hintCenter, accuracy: 12)
         app.buttons["clearGlobalSearch"].tap()
         XCTAssertTrue(app.staticTexts["Search chats, messages and workspaces"].exists)
         input.typeText("m")
@@ -2189,22 +3142,45 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Hello from this workspace."].waitForExistence(timeout: 10))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         openSidebar(app)
-        app.buttons["Search"].tap()
-        XCTAssertTrue(input.waitForExistence(timeout: 5))
-        app.buttons["closeGlobalSearch"].tap()
-        XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["openSettings"].isHittable)
-        XCTAssertTrue(app.buttons["closeSidebar"].exists)
-        XCTAssertFalse(input.exists)
-        app.buttons["Search"].tap()
-        XCTAssertTrue(input.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        assertInputAboveKeyboard()
-        app.buttons["closeGlobalSearch"].tap()
-        XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["openSettings"].isHittable)
-        XCTAssertTrue(app.buttons["closeSidebar"].exists)
-        XCTAssertFalse(input.exists)
+        openSearch()
+        dismissSearch()
+        forgetFixture(app)
+    }
+
+    func testDisconnectedScreensRecoverAndKeepLoadedMates() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test-mate-info")
+        let disconnected = app.staticTexts["Computer disconnected"]
+        let fixtureMate = app.buttons["mate-fixture-mate"]
+        var offline = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/offline")!)
+        offline.httpMethod = "POST"
+        offline.httpBody = Data(#"{"durationMs":12000}"#.utf8)
+
+        _ = try await URLSession.shared.data(for: offline)
+        app.buttons["openMates"].tap()
+        let matesMessage = app.staticTexts["Connect to your computer to use Mates."]
+        XCTAssertTrue(matesMessage.waitForExistence(timeout: 5))
+        XCTAssertTrue(disconnected.exists)
+        XCTAssertLessThan(disconnected.frame.maxY, matesMessage.frame.minY)
+        XCTAssertGreaterThan(disconnected.frame.minY, app.frame.height * 0.32)
+        attachScreenshot(app, name: "Mates disconnected")
+        XCTAssertTrue(fixtureMate.waitForExistence(timeout: 24))
+        XCTAssertFalse(disconnected.exists)
+
+        _ = try await URLSession.shared.data(for: offline)
+        XCTAssertTrue(app.staticTexts["Connect to your computer to refresh Mates."].waitForExistence(timeout: 5))
+        XCTAssertTrue(fixtureMate.exists)
+        app.navigationBars.buttons["BackButton"].tap()
+        openSidebar(app)
+        app.buttons["openAtlas"].tap()
+        XCTAssertTrue(app.staticTexts["Connect to your computer to browse Atlas."].waitForExistence(timeout: 5))
+        XCTAssertTrue(disconnected.exists)
+        attachScreenshot(app, name: "Atlas disconnected")
+        XCTAssertTrue(app.buttons["atlasItem-fixture-atlas-page"].waitForExistence(timeout: 24))
+        XCTAssertFalse(disconnected.exists)
+        app.navigationBars.buttons["BackButton"].tap()
         forgetFixture(app)
     }
 
@@ -2297,6 +3273,123 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
+    func testCodexGoalSummaryFollowsAStartedRun() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        let otherConversation = pairFixture(app, code: "ios-test")
+        await chooseSidebarMode("work", in: app)
+        app.buttons["closeSidebar"].tap()
+        let input = app.textViews["homeMessageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        app.buttons["runOptions"].tap()
+        let goal = app.switches["runGoalMode"]
+        assertControl(goal, value: "0")
+        goal.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+        assertControl(goal, value: "1")
+        closeRunOptions(in: app)
+
+        let objective = "Refactor the hero section"
+        input.tap(); input.typeText(objective)
+        app.buttons["startConversation"].tap()
+        let allow = app.buttons["allowDataSharing"]
+        if allow.waitForExistence(timeout: 3) { allow.tap() }
+        let bar = app.descendants(matching: .any)["conversationGoalBar"].firstMatch
+        let usage = bar.staticTexts["goalSummaryUsage"].firstMatch
+        XCTAssertTrue(bar.staticTexts["Pursuing goal"].waitForExistence(timeout: 5))
+        XCTAssertTrue(bar.staticTexts[objective].exists)
+        attachScreenshot(app, name: "Active Codex goal")
+        XCTAssertTrue(usage.exists)
+        XCTAssertEqual(usage.label.components(separatedBy: " · ").first?.filter(\.isNumber), "26438")
+        XCTAssertLessThanOrEqual(bar.frame.maxY, app.textViews["messageInput"].frame.minY)
+        XCTAssertTrue(bar.staticTexts["Goal complete"].waitForExistence(timeout: 10))
+        XCTAssertEqual(usage.label.components(separatedBy: " · ").first?.filter(\.isNumber), "28000")
+        XCTAssertTrue(app.staticTexts["Native reply delivered."].waitForExistence(timeout: 5))
+
+        openSidebar(app)
+        await chooseSidebarMode("chat", in: app)
+        otherConversation.tap()
+        XCTAssertTrue(app.staticTexts["Hello from the computer."].waitForExistence(timeout: 5))
+        XCTAssertFalse(bar.exists)
+        app.navigationBars.buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testCodexGoalControlsEditPauseResumeAndClear() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test-goal-controls")
+        await chooseSidebarMode("work", in: app)
+        app.buttons["closeSidebar"].tap()
+        let input = app.textViews["homeMessageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        app.buttons["runOptions"].tap()
+        let goalMode = app.switches["runGoalMode"]
+        assertControl(goalMode, value: "0")
+        goalMode.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+        assertControl(goalMode, value: "1")
+        closeRunOptions(in: app)
+
+        input.tap(); input.typeText("Refactor the hero section")
+        app.buttons["startConversation"].tap()
+        let allow = app.buttons["allowDataSharing"]
+        if allow.waitForExistence(timeout: 3) { allow.tap() }
+        let bar = app.descendants(matching: .any)["conversationGoalBar"].firstMatch
+        let status = bar.staticTexts["Pursuing goal"]
+        XCTAssertTrue(status.waitForExistence(timeout: 8))
+        let objective = bar.staticTexts["Refactor the hero section"]
+        XCTAssertEqual(status.frame.midY, app.buttons["editGoal"].frame.midY, accuracy: 2)
+        XCTAssertEqual(status.frame.minY - bar.frame.minY, bar.frame.maxY - objective.frame.maxY, accuracy: 3)
+        attachScreenshot(app, name: "Codex goal controls")
+
+        app.buttons["editGoal"].tap()
+        let editor = app.textViews["goalObjectiveInput"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, "Refactor the hero section")
+        editor.tap(); editor.typeText(" Make it responsive.")
+        let edited = try XCTUnwrap(editor.value as? String).trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertTrue(edited.contains("Make it responsive."))
+        app.buttons["saveGoalObjective"].tap()
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(bar.staticTexts[edited].waitForExistence(timeout: 5))
+
+        app.buttons["pauseGoal"].tap()
+        XCTAssertTrue(bar.staticTexts["Goal paused"].waitForExistence(timeout: 12))
+        XCTAssertTrue(app.buttons["stopReply"].exists)
+        let resume = app.buttons["resumeGoal"]
+        let resumedControl = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: resume)
+        let ready = await XCTWaiter.fulfillment(of: [resumedControl], timeout: 8)
+        XCTAssertEqual(ready, .completed)
+        resume.tap()
+        XCTAssertTrue(bar.staticTexts["Pursuing goal"].waitForExistence(timeout: 5))
+
+        let clear = app.buttons["clearGoal"]
+        let confirmation = app.alerts["Clear this goal?"]
+        clear.tap()
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        confirmation.buttons["Cancel"].tap()
+        XCTAssertTrue(bar.exists)
+        clear.tap()
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        confirmation.buttons["Clear goal"].tap()
+        XCTAssertTrue(bar.waitForNonExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["stopReply"].exists)
+
+        let (data, _) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:18787/observations")!)
+        let calls = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let goalCalls = calls.filter { $0["channel"] as? String == "providers:changeMobileGoal" }
+        let actions = try goalCalls.map { call in
+            let args = try XCTUnwrap(call["args"] as? [Any])
+            let change = try XCTUnwrap(args[1] as? [String: String])
+            return try XCTUnwrap(change["action"])
+        }
+        XCTAssertEqual(actions, ["edit", "pause", "pause", "resume", "clear"])
+        XCTAssertEqual(goalCalls[1]["commandId"] as? String, goalCalls[2]["commandId"] as? String)
+        XCTAssertFalse(calls.contains { $0["channel"] as? String == "runs:abort" })
+        forgetFixture(app)
+    }
+
     func testRunOptionsControlsAndPersistence() async throws {
         continueAfterFailure = false
         let app = makeApplication()
@@ -2304,6 +3397,7 @@ final class MainsUITests: XCTestCase {
         pairFixture(app, code: "ios-test-design", search: true).tap()
         let options = app.buttons["runOptions"]
         XCTAssertTrue(options.waitForExistence(timeout: 10))
+        attachScreenshot(app, name: "Composer options – Fast and Goal off")
         options.tap()
         let permissions = permissionWheel("Auto", in: app)
         // The machine's policy forbids Full Access, the next option below Auto.
@@ -2324,16 +3418,23 @@ final class MainsUITests: XCTestCase {
         assertControl(tiers, value: "Fast")
         attachScreenshot(app, name: "Run Options – Fast on")
         closeRunOptions(in: app)
+        attachScreenshot(app, name: "Composer options – Fast only")
         options.tap()
         assertControl(fast, value: "On")
         tiers.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let ultrafast = app.buttons["Ultrafast"]
         XCTAssertTrue(ultrafast.waitForExistence(timeout: 5)); ultrafast.tap()
         assertControl(tiers, value: "Ultrafast")
+        goal.coordinate(withNormalizedOffset: trailing).tap(); assertControl(goal, value: "1")
+        closeRunOptions(in: app)
+        attachScreenshot(app, name: "Composer options – Fast and Goal on")
+        options.tap()
         fast.tap(); assertControl(fast, value: "Off")
         closeRunOptions(in: app)
+        attachScreenshot(app, name: "Composer options – Goal only")
 
         options.tap()
+        goal.coordinate(withNormalizedOffset: trailing).tap(); assertControl(goal, value: "0")
         let wheel = permissionWheel("Auto", in: app)
         let start = wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let end = wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
@@ -2455,9 +3556,11 @@ final class MainsUITests: XCTestCase {
         app.buttons["closeSidebar"].tap()
         XCTAssertTrue(app.buttons["closeSidebar"].waitForNonExistence(timeout: 5))
         app.buttons["chooseTarget"].tap()
+        let projects = targetWheel("No project", in: app)
+        projects.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+        _ = targetWheel("Kitchen Notes", in: app)
         attachScreenshot(app, name: "Native project – compact selection")
-        let kitchen = app.buttons["target-fixture-kitchen"]
-        XCTAssertTrue(kitchen.waitForExistence(timeout: 5)); kitchen.tap()
+        confirmTarget(in: app)
         XCTAssertTrue(app.buttons["chooseTarget"].label.contains("Kitchen Notes"))
         attachScreenshot(app, name: "Native project – icon color target")
 
@@ -2486,8 +3589,9 @@ final class MainsUITests: XCTestCase {
         app.buttons["newConversation"].tap()
         XCTAssertTrue(app.buttons["chooseTarget"].label.contains("mains"))
         app.buttons["chooseTarget"].tap()
+        _ = targetWheel("mains", in: app)
         attachScreenshot(app, name: "Native workspace – compact selection")
-        app.buttons["target-fixture-workspace"].tap()
+        confirmTarget(in: app)
 
         app.buttons["chooseModel"].tap()
         chooseModel("fixture-deep", in: app)
@@ -2772,6 +3876,20 @@ final class MainsUITests: XCTestCase {
     private func assertControl(_ control: XCUIElement, value: String) {
         let ready = NSPredicate(format: "enabled == true AND value == %@", value)
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ready, object: control)], timeout: 8), .completed)
+    }
+
+    private func targetWheel(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        let wheel = app.descendants(matching: .any).matching(identifier: "selectTarget").firstMatch
+        let ready = NSPredicate(format: "enabled == true AND value BEGINSWITH %@", title)
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ready, object: wheel)], timeout: 8), .completed)
+        return wheel
+    }
+
+    private func confirmTarget(in app: XCUIApplication) {
+        let confirm = app.buttons["confirmTarget"]
+        XCTAssertTrue(confirm.isHittable)
+        confirm.tap()
+        XCTAssertTrue(confirm.waitForNonExistence(timeout: 5))
     }
 
     private func permissionWheel(_ title: String, in app: XCUIApplication) -> XCUIElement {

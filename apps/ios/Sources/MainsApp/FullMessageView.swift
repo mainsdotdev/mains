@@ -21,7 +21,7 @@ struct FullMessageView: View {
                 else { Text(text).font(.system(.callout, design: .monospaced)).textSelection(.enabled) }
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
         }
-            .overlay { if loading { ProgressView() } }
+            .overlay { if loading && text.isEmpty { ContentLoadingView(title: "Loading message…") } }
             .safeAreaInset(edge: .bottom) {
                 VStack {
                     if let error { Text(error).font(.caption).foregroundStyle(.red) }
@@ -36,7 +36,7 @@ struct FullMessageView: View {
                 }.padding().background(.bar)
             }
             .navigationHeaderFade()
-            .navigationTitle(source == "tool-output" ? "Tool output" : source == "tool-input" ? "Tool input" : "Full message").navigationBarTitleDisplayMode(.inline)
+            .expandedNavigationTitle(source == "tool-output" ? "Tool output" : source == "tool-input" ? "Tool input" : "Full message")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task(id: offset) { await load() }
             .onChange(of: session.ownership) { _, _ in text = ""; dismiss() }

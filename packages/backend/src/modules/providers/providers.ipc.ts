@@ -153,6 +153,14 @@ export function registerProvidersIpc(): void {
     CHANNELS.providers.getGoal,
     handle((id: string, runId: string) => providersService.getGoal(id, runId)),
   );
+  ipcMain.handle(
+    CHANNELS.providers.getMobileGoalSummary,
+    handle((runId: string) => providersService.getMobileGoalSummary(runId)),
+  );
+  ipcMain.handle(
+    CHANNELS.providers.changeMobileGoal,
+    handle((runId: string, input: unknown) => providersService.changeMobileGoal(runId, input)),
+  );
 
   ipcMain.handle(
     CHANNELS.providers.clearGoal,
@@ -274,6 +282,8 @@ export function unregisterProvidersIpc(): void {
     CHANNELS.providers.resetCodexMemories,
     CHANNELS.providers.setGoal,
     CHANNELS.providers.getGoal,
+    CHANNELS.providers.getMobileGoalSummary,
+    CHANNELS.providers.changeMobileGoal,
     CHANNELS.providers.clearGoal,
     CHANNELS.providers.getAccountInfo,
     CHANNELS.providers.updateCli,

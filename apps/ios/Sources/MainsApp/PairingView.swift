@@ -166,7 +166,7 @@ struct PairingView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(session.pairingInProgress ? "PAIRING" : "CODE DETECTED")
                     .font(.caption.weight(.semibold)).tracking(0.6).foregroundStyle(.secondary)
-                Text(review.name).font(.title3.weight(.semibold))
+                Text(review.name).font(.title3.weight(.semibold).width(.expanded))
                 ForEach(review.endpoints, id: \.self) { endpoint in
                     Text(Self.address(endpoint)).font(.footnote.monospaced()).foregroundStyle(.secondary)
                         .textSelection(.enabled)
@@ -184,7 +184,7 @@ struct PairingView: View {
             .background(Color(.tertiarySystemBackground), in: .rect(cornerRadius: 18))
         } else if let error {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Not a Mains pairing link").font(.headline)
+                Text("Not a Mains pairing link").font(.headline.width(.expanded))
                 Text(error).font(.subheadline).foregroundStyle(.secondary).accessibilityIdentifier("pairingError")
                 retryButton
             }

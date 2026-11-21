@@ -63,6 +63,7 @@
 		7D914C11B4BA7F549E0091D8B2C6F7B2 /* WebSocketTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16F779B748626D568984BB10CFB0DF2 /* WebSocketTransport.swift */; };
 		7EB63A965BA4317D79E473AFF387CE08 /* TurnChanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3BC6C7F8434A7AC203CA8181802AED7 /* TurnChanges.swift */; };
 		7F7B3E835D9B12F5268C4E4B64A4A52C /* AppChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF468116EC8BEC96D4DCDCD71A0766B9 /* AppChrome.swift */; };
+		32586CA0379D440E90F668B2 /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93AECFDF32A04009A858762D /* EmptyStateView.swift */; };
 		807686D78C9ABAACD0960179C5726CD0 /* Math in Resources */ = {isa = PBXBuildFile; fileRef = F4E3177CE122C85706CE789290C119B9 /* Math */; };
 		84548F2DE9B64C353915E4F422E321D4 /* ConversationFork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27FCFB1DD3AC4855403E02EB610B66EE /* ConversationFork.swift */; };
 		84E2BE84B6A605C4EF1C912B40413AF0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EA4F393EC8807CA69C5153931C0248DF /* Assets.xcassets */; };
@@ -223,6 +224,7 @@
 		AB94B9D75279A64098018C3B709522B1 /* ConversationOutputsPane.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationOutputsPane.swift; sourceTree = "<group>"; };
 		AD3073A52B8BF9C1BF25314D4EB53A01 /* Info.Voice.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.Voice.plist; sourceTree = "<group>"; };
 		AF468116EC8BEC96D4DCDCD71A0766B9 /* AppChrome.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppChrome.swift; sourceTree = "<group>"; };
+		93AECFDF32A04009A858762D /* EmptyStateView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
 		AFB4DA1377602D46083840DEDC230A3D /* RunDecisions.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RunDecisions.swift; sourceTree = "<group>"; };
 		B50607620CDD3AB3ACB54301D512352D /* VoicePreviews */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; path = VoicePreviews; sourceTree = "<group>"; };
 		B56E9DF0BA454418814808A04C77C12F /* PairingView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
@@ -419,6 +421,7 @@
 			children = (
 				59354083176CAD7FF4CDEDFE9F16E85C /* AgentActivityView.swift */,
 				AF468116EC8BEC96D4DCDCD71A0766B9 /* AppChrome.swift */,
+				93AECFDF32A04009A858762D /* EmptyStateView.swift */,
 				11BC775DE7E53315544770070E08FEF9 /* AppShell.swift */,
 				3D60C5659346BDB1F2E8A5F5E40079F0 /* AtlasBookmarkEditor.swift */,
 				5FC466905847E89691054712C866CA65 /* AtlasSaveControls.swift */,
@@ -647,6 +650,7 @@
 				03F1600E2003F4DD1B7339B5485ECB26 /* WorkInbox.swift in Sources */,
 				70D6F3873493A38A1B2EABBD032AC9A7 /* AgentActivityView.swift in Sources */,
 				7F7B3E835D9B12F5268C4E4B64A4A52C /* AppChrome.swift in Sources */,
+				32586CA0379D440E90F668B2 /* EmptyStateView.swift in Sources */,
 				95A7B88EAF383A2718E58CE05044A767 /* AppShell.swift in Sources */,
 				C5BE7232C854AB0153A5E2712BAFE360 /* AtlasBookmarkEditor.swift in Sources */,
 				FCBEF00E6E980C0930F2DCDA2EDC303C /* AtlasSaveControls.swift in Sources */,

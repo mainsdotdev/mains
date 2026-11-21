@@ -102,12 +102,19 @@ export interface ChangeAssistantTeam {
     teamId: string | null;
 }
 export type AssistantProfile = Pick<Assistant, "name" | "description" | "instructions" | "avatar">;
+export interface AssistantModelChange {
+    model: string;
+    effort: string;
+    expectedModel: string;
+    expectedEffort: string;
+}
 export interface UpdateAssistantProfile {
     accountId: string;
     id: string;
     profile: AssistantProfile;
     expectedProfile: AssistantProfile;
     teamChange?: { teamId: string | null; expectedTeamId: string | null };
+    modelChange?: AssistantModelChange;
 }
 export interface AssistantMemory {
     id: string;
@@ -301,6 +308,8 @@ export type MobileMateAssignment = Pick<AssistantAssignment, "id" | "title" | "s
 };
 
 export const MOBILE_MATE_INFO_CAPABILITY = "mateInfo";
+export const MOBILE_MATE_TEAM_CREATION_CAPABILITY = "mateTeamCreation";
+export const MOBILE_MATE_MODEL_EDITING_CAPABILITY = "mateModelEditing";
 
 /** List responses carry a content preview. A selected id returns the entire note. */
 export type MobileMateMemory = Pick<AssistantMemory, "id" | "title" | "content" | "pinned" | "revision"> & { shared: boolean };
@@ -344,7 +353,7 @@ export interface MobileMateRoutines {
 }
 
 export type MobileMateChange =
-    | ({ action: "updateProfile" } & Pick<UpdateAssistantProfile, "profile" | "expectedProfile" | "teamChange">)
+    | ({ action: "updateProfile" } & Pick<UpdateAssistantProfile, "profile" | "expectedProfile" | "teamChange" | "modelChange">)
     | { action: "archive"; archived: boolean }
     | { action: "saveMemory"; note: MobileMateMemory; expectedTeamId: string | null }
     | { action: "deleteMemory"; id: string; revision: number }

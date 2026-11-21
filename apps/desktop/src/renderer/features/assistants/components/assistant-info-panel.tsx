@@ -7,11 +7,12 @@ import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { ResizeHandle } from "@/components/layout/resize-handle";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setAssistantInfoPanelWidth } from "@/lib/redux/slices/appSettingsSlice";
+import { useGetProviderModelsQuery } from "@/lib/redux/api";
 import { useUpdateAssistantProfileMutation } from "@/lib/redux/api/assistantsApi";
 import { ASSISTANT_INFO_PANEL_WIDTH_DEFAULT, ASSISTANT_INFO_PANEL_WIDTH_MIN, ASSISTANT_INFO_PANEL_WIDTH_MAX, clamp } from "@/lib/layout";
 import { formatEffortLevel } from "@/lib/format";
 import { formatModelDisplayName } from "@/lib/model-display";
-import { getProviderVariantById } from "@/lib/provider-variants";
+import { getProviderVariantById, pickDefaultEffort } from "@/lib/provider-variants";
 import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantAvatarPicker } from "./assistant-avatar-picker";
 import { AssistantRobotPreview } from "./assistant-robot-avatar";
@@ -23,7 +24,12 @@ import { AssistantTeamEditor } from "./assistant-team-editor";
 import { errorText, isAssistantWorking } from "../lib/assistant-ui";
 import type { AssistantAvatarState } from "../lib/assistant-avatar-activity";
 
-type EditableProfile = AssistantProfile & Pick<Assistant, "teamId">;
+type EditableProfile = AssistantProfile & Pick<Assistant, "teamId" | "model" | "effort">;
+
+function effortLabel(effort: string) {
+  const label = formatEffortLevel(effort);
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
 
 function AssistantProfileDetails({ assistant, overview, avatarState, archiving, error, onToggleArchive }: {
   assistant: Assistant;
@@ -44,6 +50,14 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
   const canEdit = !assistant.isArchived && !overview.welcomes?.some(welcome =>
     welcome.assistantId === assistant.id && welcome.question?.profileSetup && !welcome.question.profileSetup.saved);
   const draft = edit?.draft;
+  const provider = getProviderVariantById(assistant.providerId);
+  const {
+    currentData: models = [], isFetching: loadingModels, error: modelError, refetch: reloadModels,
+  } = useGetProviderModelsQuery(assistant.providerId, { skip: !draft || !canEdit });
+  const selectedModel = models.find(model => model.id === draft?.model);
+  const efforts = selectedModel?.supportedEffortLevels ?? [];
+  const modelChanged = !!edit && (edit.draft.model !== edit.original.model || edit.draft.effort !== edit.original.effort);
+  const canSaveModel = !modelChanged || !!selectedModel && (!draft?.effort || efforts.includes(draft.effort));
   const teamLabelId = `assistant-${assistant.id}-team-label`;
   const teams = new Map([...createdTeams, ...overview.teams]
     .filter(team => team.accountId === assistant.accountId).map(team => [team.id, team.name]));
@@ -58,13 +72,20 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
 
   function beginEdit(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
-    const { name, description, instructions, avatar, teamId } = assistant;
-    const original = { name, description, instructions, avatar, teamId };
+    const { name, description, instructions, avatar, teamId, model, effort } = assistant;
+    const original = { name, description, instructions, avatar, teamId, model, effort };
     setFailure("");
     setEdit({ original, draft: original });
   }
   function changeDraft(changes: Partial<EditableProfile>) {
     setEdit(current => current && { ...current, draft: { ...current.draft, ...changes } });
+  }
+  function selectModel(id: string) {
+    const next = models.find(model => model.id === id);
+    if (!draft || !next || id === draft.model) return;
+    const levels = next.supportedEffortLevels;
+    const preferred = draft.effort || (provider?.variant === "codex" && (levels?.length ?? 0) > 1 ? "medium" : "");
+    changeDraft({ model: id, effort: preferred ? pickDefaultEffort(levels, preferred) : "" });
   }
   function onTeamCreated(team: AssistantTeam) {
     setCreatedTeams(current => [...current.filter(value => value.id !== team.id), team]);
@@ -79,16 +100,17 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
   }
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!edit || !canEdit || archiving || creatingTeam || saving.current) return;
-    const { name, description, instructions, avatar, teamId } = edit.draft;
+    if (!edit || !canEdit || !canSaveModel || archiving || creatingTeam || saving.current) return;
+    const { name, description, instructions, avatar, teamId, model, effort } = edit.draft;
     if (!name.trim() || !instructions.trim()) return;
-    const { teamId: expectedTeamId, ...expectedProfile } = edit.original;
+    const { teamId: expectedTeamId, model: expectedModel, effort: expectedEffort, ...expectedProfile } = edit.original;
     saving.current = true;
     setFailure("");
     try {
       await updateProfile({ accountId: assistant.accountId, id: assistant.id, expectedProfile,
         profile: { name: name.trim(), description: description.trim(), instructions: instructions.trim(), avatar },
         ...(teamId !== expectedTeamId && { teamChange: { teamId, expectedTeamId } }),
+        ...(modelChanged && { modelChange: { model, effort, expectedModel, expectedEffort } }),
       }).unwrap();
       closeEditor();
     } catch (requestError) {
@@ -97,6 +119,24 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
       saving.current = false;
     }
   }
+
+  const detailRows = [
+    { label: "Space", value: assistant.spaceSnapshot.name },
+    {
+      label: "Model", value: formatModelDisplayName(assistant.model, provider?.variant),
+      control: draft && <Select aria-label="Model" size="sm" searchable value={draft.model}
+        placeholder={formatModelDisplayName(draft.model, provider?.variant)}
+        options={models.map(model => ({ value: model.id, label: formatModelDisplayName(model.displayName || model.id, provider?.variant) }))}
+        disabled={isLoading || creatingTeam || !models.length} onChange={selectModel} />,
+    },
+    {
+      label: "Effort", value: assistant.effort ? effortLabel(assistant.effort) : "—",
+      control: draft && <Select aria-label="Effort" size="sm" value={draft.effort}
+        placeholder={draft.effort ? effortLabel(draft.effort) : efforts.length ? "Select effort" : "—"}
+        options={efforts.map(value => ({ value, label: effortLabel(value) }))}
+        disabled={isLoading || creatingTeam || !efforts.length} onChange={effort => changeDraft({ effort })} />,
+    },
+  ];
 
   return <form aria-label={draft ? "Edit mate profile" : undefined} onSubmit={save} className="space-y-4 pt-2">
     {!draft && isAssistantRobotShape(assistant.avatar.shape) && <div className="flex justify-center">
@@ -132,9 +172,21 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
       <dt className="shrink-0 text-xs font-medium text-primary-600 dark:text-primary-300">Team</dt>
       <dd className="min-w-0 break-words text-right text-sm font-medium leading-6 text-primary-950 dark:text-primary-50">{teamName}</dd>
     </dl>}
-    <dl className="rounded-2xl glass-card px-3.5 text-sm">
-      {[["Space", assistant.spaceSnapshot.name], ["Model", formatModelDisplayName(assistant.model, getProviderVariantById(assistant.providerId)?.variant)], ["Effort", formatEffortLevel(assistant.effort || "Default")]].map(([label, value]) => <div key={label} className="flex items-baseline justify-between gap-4 border-b border-primary-200/70 py-3.5 last:border-b-0 dark:border-primary-800/60"><dt className="shrink-0 text-xs font-medium text-primary-600 dark:text-primary-300">{label}</dt><dd className={`min-w-0 max-w-[70%] break-words text-right font-medium leading-6 text-primary-950 dark:text-primary-50 ${label === "Effort" ? "capitalize" : ""}`}>{value}</dd></div>)}
-    </dl>
+    <div className="rounded-2xl glass-card px-3.5 text-sm">
+      <dl>
+        {detailRows.map(({ label, value, control }) => <div key={label}
+          className="flex items-center justify-between gap-4 border-b border-primary-200/70 py-3.5 last:border-b-0 dark:border-primary-800/60">
+          <dt className="shrink-0 text-xs font-medium text-primary-600 dark:text-primary-300">{label}</dt>
+          <dd className={`min-w-0 max-w-[70%] break-words text-right font-medium leading-6 text-primary-950 dark:text-primary-50 ${control ? "w-52" : ""} ${label === "Effort" ? "capitalize" : ""}`}>{control || value}</dd>
+        </div>)}
+      </dl>
+      {draft && (modelError ? <div className="flex items-center justify-between gap-2 pb-3.5 text-xs">
+        <span role="status" className="text-primary-600 dark:text-primary-300">Couldn’t load models.</span>
+        <Button type="button" variant="ghost" disabled={loadingModels || isLoading} onClick={() => void reloadModels()}>Retry</Button>
+      </div> : !models.length && <p role="status" className="pb-3.5 text-xs text-primary-600 dark:text-primary-300">
+        {loadingModels ? "Loading models…" : "No models available."}
+      </p>)}
+    </div>
     <div className="rounded-2xl glass-card p-3.5">
       {draft ? <label className="flex flex-col gap-1.5 text-sm">
         <span className="font-semibold text-primary-950 dark:text-primary-50">Instructions</span>
@@ -150,7 +202,7 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
       {draft ? <Fragment key="editing">
         <Button variant="ghost" className="inline-flex min-h-9" disabled={isLoading} onClick={closeEditor}>Cancel</Button>
         <Button type="submit" variant="primary" className="inline-flex min-h-9" isLoading={isLoading}
-          disabled={!canEdit || archiving || creatingTeam || !draft.name.trim() || !draft.instructions.trim()}>Save</Button>
+          disabled={!canEdit || !canSaveModel || archiving || creatingTeam || !draft.name.trim() || !draft.instructions.trim()}>Save</Button>
       </Fragment> : <Fragment key="viewing">
         <Button variant={assistant.isArchived ? "primary" : "danger"} className="inline-flex min-h-9" disabled={archiving} isLoading={archiving} onClick={onToggleArchive}>{assistant.isArchived ? "Restore mate" : "Archive mate"}</Button>
         {canEdit && <Button ref={editButton} variant="secondary" className="inline-flex min-h-9" disabled={archiving} onClick={beginEdit}>Edit</Button>}

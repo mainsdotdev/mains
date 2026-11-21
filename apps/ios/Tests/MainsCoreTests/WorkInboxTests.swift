@@ -2,8 +2,9 @@ import Foundation
 import Testing
 @testable import MainsCore
 
-private func inboxRun(_ id: String, status: String = "succeeded", age: TimeInterval = 0, replica: Bool = false, account: String = "account") -> Conversation {
-    Conversation(id: id, accountId: account, providerId: "codex", mode: "chat", spaceId: nil,
+private func inboxRun(_ id: String, status: String = "succeeded", age: TimeInterval = 0, replica: Bool = false,
+                      account: String = "account", mateID: String? = nil) -> Conversation {
+    Conversation(id: id, accountId: account, providerId: "codex", mode: "chat", spaceId: nil, assistantId: mateID,
                  title: id, status: status, model: nil, isArchived: false, isReplica: replica, lastError: nil,
                  createdAt: Date().addingTimeInterval(-age), updatedAt: Date().addingTimeInterval(-age))
 }
@@ -58,6 +59,22 @@ private func inboxRequest(_ runID: String, expires: TimeInterval = 300) throws -
         #expect(snapshot.groups(now: now.addingTimeInterval(2), live: true).needsYou.isEmpty)
         #expect(snapshot.groups(now: now, live: false).needsYou.isEmpty)
         #expect(snapshot.groups(now: now, live: false).running.map(\.id) == [waiting.id])
+    }
+
+    @Test func mateActivityPrioritizesCurrentRequestsOverActiveRuns() throws {
+        let now = Date()
+        let runs = [
+            inboxRun("waiting", mateID: "reviewer"),
+            inboxRun("review", status: "running", mateID: "reviewer"),
+            inboxRun("planning", status: "queued", mateID: "planner"),
+            inboxRun("stale", status: "running", mateID: "editor"),
+            inboxRun("replica", status: "running", replica: true, mateID: "replica"),
+        ]
+        let requests = try ["waiting", "replica"].map { try inboxRequest($0, expires: 1).decode(WorkInboxRequest.self) }
+        let snapshot = WorkInboxSnapshot(runs: runs, activeIDs: ["review", "planning", "replica"],
+                                         requests: requests, updatedAt: now, isLimited: false)
+        #expect(snapshot.mateActivity(now: now) == ["reviewer": .needsYou, "planner": .working])
+        #expect(snapshot.mateActivity(now: now.addingTimeInterval(2)) == ["reviewer": .working, "planner": .working])
     }
 
     @Test @MainActor func inFlightDecisionResolutionCannotResurrectAWaitingRowOrMoveTheReader() async throws {

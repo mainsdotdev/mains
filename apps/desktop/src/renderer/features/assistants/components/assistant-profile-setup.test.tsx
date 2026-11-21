@@ -156,3 +156,15 @@ it("restores the typed answer if sending fails", async () => {
   expect(input.value).toBe("Check signing");
   expect(screen.queryByText("Check signing", { selector: "p", exact: true })).toBeNull();
 });
+
+it("shows the provider error with a filled retry button for a failed profile draft", () => {
+  const error = "This account needs an active subscription to use Claude Code.\nUpdate your plan to continue.";
+  const onRetry = vi.fn().mockResolvedValue(undefined);
+  render(<AssistantProfileSetupCard {...props} onRetry={onRetry} welcome={{ ...welcome, state: "failed", error }} />);
+
+  expect(screen.getByRole("alert").textContent).toBe(error);
+  const retry = screen.getByRole("button", { name: "Retry profile draft" });
+  expect(retry.classList.contains("glass-secondary")).toBe(true);
+  fireEvent.click(retry);
+  expect(onRetry).toHaveBeenCalledOnce();
+});

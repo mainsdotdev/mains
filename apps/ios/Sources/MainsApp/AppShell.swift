@@ -22,9 +22,12 @@ struct AppShell: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
+    private enum ActivityWatch { case hidden, events, polling }
+
     let session: BackendSession
     let openPairing: () -> Void
     @State private var path: [AppRoute] = []
+    @State private var showingArchivedMates = false
     @State private var newMateDraft = NewMateDraft()
     @State private var homeRunID: String?
     @State private var drawerOpen = false
@@ -33,8 +36,6 @@ struct AppShell: View {
     @State private var searchMounted = false
     @State private var searchExpanded = false
     @State private var searchTransitionID = 0
-    @State private var searchPageHeight: CGFloat = 0
-    @State private var searchExitHeight: CGFloat?
     @State private var collapsedCollections: Set<String> = []
     @State private var wideSidebarHidden = false
     @State private var inlineSidebarVisible = false
@@ -102,7 +103,7 @@ struct AppShell: View {
                                     .id(session.ownership)
                                 case .atlasPage(let id): AtlasPageView(session: session, pageID: id, openPage: { path.append(.atlasPage($0)) }, openConversation: { path.append(.conversation($0)) })
                                     .id("\(session.ownership):atlas:\(id)")
-                                case .mates: MatesView(session: session, openMate: { path.append(.mate($0)) },
+                                case .mates: MatesView(session: session, showingArchive: $showingArchivedMates, openMate: { path.append(.mate($0)) },
                                                       navigateFromArchive: { if path.last == route { path.append($0) } }, newMate: { teams in
                                     newMateDraft = NewMateDraft()
                                     path.append(.newMate(teams))
@@ -126,9 +127,6 @@ struct AppShell: View {
                                 case .mateInfo(let id):
                                     MateInfoView(session: session, mateID: id, openChat: { runID, mateID in
                                         path.append(.conversation(runID, mate: mateID.map(MateConversationSource.profile) ?? .assignment))
-                                    }, newTask: {
-                                        if path.dropLast().last == .mate(id) { path.removeLast() }
-                                        else { path.append(.mate(id)) }
                                     })
                                         .id("\(session.ownership):mate-info:\(id)")
                                 }
@@ -216,20 +214,11 @@ struct AppShell: View {
             // the same stable bounds, including after Search leaves the screen.
             .ignoresSafeArea(drawerOpen && !inlineSidebarVisible || searchMounted ? .keyboard : [], edges: .bottom)
             if searchMounted {
-                GeometryReader { geometry in
-                    SearchView(session: session, focusRequested: searchExpanded, layoutChanged: { height in
-                        if searchMounted, searchExitHeight == nil, height > 0 { searchPageHeight = height }
-                    }, open: openSearchResult, close: closeSearch)
-                        // Freeze only the departing Search layout at its keyboard edge.
-                        .frame(height: searchExitHeight, alignment: .top)
-                        .ignoresSafeArea(searchExitHeight == nil ? [] : .keyboard, edges: .bottom)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .background(Color(.systemBackground))
-                        .clipShape(MainPaneClip(cornerRadius: searchExpanded ? 0 : 44, safeAreaInsets: geometry.safeAreaInsets))
-                        .offset(x: searchExpanded ? 0 : geometry.size.width)
-                        .allowsHitTesting(searchExpanded)
-                }
-                .transition(.identity)
+                SearchView(session: session, isPresented: searchExpanded, finish: finishSearch)
+                    .allowsHitTesting(searchExpanded)
+                    .accessibilityHidden(!searchExpanded)
+                    .transition(.identity)
+                    .zIndex(2)
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -237,6 +226,7 @@ struct AppShell: View {
                 ForkDeliveryNotice(session: session, open: { open(.conversation($0)) })
                 AtlasSaveDeliveryNotice(session: session)
                 ConversationActionDeliveryNotice(session: session)
+                GoalChangeDeliveryNotice(session: session)
 #if MAINS_GPT_LIVE
                 VoiceCallDock(session: session, visibleRunID: visibleVoiceRunID,
                     preparingHere: mainPaneInteractive && path.isEmpty && homeRunID == nil && session.voiceSpaceID == session.selectedSpaceID,
@@ -255,8 +245,8 @@ struct AppShell: View {
         #endif
         .attachmentOverlayHost()
         .contextPickerOverlayHost(isEnabled: mainPaneInteractive)
-        .onChange(of: !searchMounted && (drawerOpen || inlineSidebarVisible || path.last == .workInbox), initial: true) { _, visible in
-            session.setWorkInboxVisible(visible)
+        .onChange(of: activityWatch, initial: true) { _, watch in
+            session.setWorkInboxVisible(watch != .hidden, poll: watch == .polling)
         }
         .onDisappear { session.setWorkInboxVisible(false) }
         .onChange(of: session.retiredConversation) { _, retired in
@@ -271,6 +261,7 @@ struct AppShell: View {
         }
         .onChange(of: session.pairing?.deviceId) { _, _ in
             resetSearch()
+            showingArchivedMates = false
             path = []; homeRunID = nil; drawerOpen = false
         }
     }
@@ -305,6 +296,12 @@ struct AppShell: View {
     }
 
     private var mainPaneInteractive: Bool { !searchMounted && (!drawerOpen || inlineSidebarVisible) }
+
+    private var activityWatch: ActivityWatch {
+        if searchMounted || showingArchivedMates { return .hidden }
+        if drawerOpen || inlineSidebarVisible || path.last == .workInbox { return .polling }
+        return path.last == .mates ? .events : .hidden
+    }
 
     private func finishMateCreation(_ id: String, from route: AppRoute) {
         guard path.last == route else { return }
@@ -378,51 +375,37 @@ struct AppShell: View {
         guard !searchExpanded else { return }
         searchTransitionID += 1
         let transitionID = searchTransitionID
-        searchExitHeight = nil
-        // Mount Search offscreen before sliding it over the sidebar.
+        // Mount the editor before asking it to take focus.
         searchMounted = true
         DispatchQueue.main.async {
             guard searchMounted, transitionID == searchTransitionID else { return }
-            withAnimation(searchAnimation) {
+            withAnimation(.easeInOut(duration: reduceMotion ? 0.18 : 0.32)) {
                 searchExpanded = true
             }
         }
     }
-    private var searchAnimation: Animation? {
-        reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 1)
-    }
-    private func closeSearch() {
+    private func finishSearch(to route: AppRoute?, animation: Animation) {
         guard searchMounted, searchExpanded else { return }
-        searchTransitionID += 1
-        let transitionID = searchTransitionID
-        searchExitHeight = searchPageHeight > 0 ? searchPageHeight : nil
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        withAnimation(searchAnimation, completionCriteria: .logicallyComplete) {
-            searchExpanded = false
-        } completion: {
-            guard !searchExpanded, transitionID == searchTransitionID else { return }
+        if let route {
             var transaction = Transaction(animation: nil)
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                searchMounted = false
-                searchExitHeight = nil
-                searchPageHeight = 0
+                drawerOpen = false
+                open(route)
             }
+        }
+        searchTransitionID += 1
+        let transitionID = searchTransitionID
+        withAnimation(animation, completionCriteria: .logicallyComplete) {
+            searchExpanded = false
+        } completion: {
+            guard !searchExpanded, transitionID == searchTransitionID else { return }
+            searchMounted = false
         }
     }
     private func resetSearch() {
         searchTransitionID += 1
         searchExpanded = false; searchMounted = false
-        searchExitHeight = nil; searchPageHeight = 0
-    }
-    private func openSearchResult(_ route: AppRoute) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            resetSearch()
-            drawerOpen = false
-            open(route)
-        }
     }
     private func goHome() { leaveCurrentConversation(); path = []; homeRunID = nil; closeDrawerAfterNavigation() }
     private func leaveCurrentConversation() {

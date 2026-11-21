@@ -12,21 +12,28 @@ struct MateInfoView: View {
     #endif
 
     private enum Tab: String, CaseIterable, Identifiable {
-        case details = "Details", chats = "Chats", memory = "Memory", assignments = "Assignments", routines = "Routines"
+        case details = "Details", memory = "Memory", assignments = "Assignments", routines = "Routines"
         var id: Self { self }
-        var requiresMateInfo: Bool { self != .details && self != .chats }
+
+        var loadingTitle: LocalizedStringKey {
+            switch self {
+            case .details: "Loading Mate details…"
+            case .memory: "Loading memory…"
+            case .assignments: "Loading assignments…"
+            case .routines: "Loading routines…"
+            }
+        }
     }
 
     private enum Pane {
-        case chats([MateChat]), memory([MateMemoryNote]), assignments(MateTasks), routines(MateRoutines)
+        case memory([MateMemoryNote]), assignments(MateTasks), routines(MateRoutines)
     }
 
     private enum Sheet: Identifiable {
-        case profile, memory(String?), newAssignment, task(String), routine(String?)
+        case memory(String?), newAssignment, task(String), routine(String?)
 
         var id: String {
             switch self {
-            case .profile: "profile"
             case .memory(let id): "memory-\(id ?? "new")"
             case .newAssignment: "assignment-new"
             case .task(let id): "assignment-\(id)"
@@ -35,7 +42,7 @@ struct MateInfoView: View {
         }
     }
 
-    private struct LoadRequest: Equatable {
+    private struct LoadRequest: Hashable {
         let owner: Int
         let connected: Bool
         let supportsMateInfo: Bool
@@ -43,17 +50,21 @@ struct MateInfoView: View {
         let refresh: Int
     }
 
-    private struct PaneRequest: Equatable {
+    private struct PaneRequest: Hashable {
         let base: LoadRequest
         let tab: Tab
         let offset: Int
     }
 
+    private struct ScrollChrome: Equatable {
+        var pinned = false
+        var tabFade: Double = 0
+        var navigationFadeHeight = HeaderFade.defaultHeight
+    }
+
     let session: BackendSession
     let mateID: String
-    let currentChatID: String?
     let openChat: (String, String?) -> Void
-    let newTask: () -> Void
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -63,24 +74,29 @@ struct MateInfoView: View {
     @State private var rendersAvatar: Bool
     @State private var tab: Tab = .details
     @State private var offset = 0
-    @State private var pane: (request: PaneRequest, content: Pane)?
+    @State private var panes: [Tab: (request: PaneRequest, content: Pane)] = [:]
     @State private var paneError: (request: PaneRequest, message: String)?
     @State private var profileError: String?
     @State private var actionError: String?
+    @State private var submittingChange = false
+    @State private var consentRequest: MateConsentRequest?
     @State private var refresh = 0
     @State private var activeTasks = 0
     @State private var sheet: Sheet?
+    @State private var profileToEdit: MateInfoProfile?
     @State private var chatAfterSheet: (id: String, mateID: String?)?
     @State private var confirmArchive = false
     @State private var routineToDelete: MateRoutine?
+    @State private var profileHeight: CGFloat = 0
+    @State private var tabHeight: CGFloat = 44
+    @State private var scrollChrome = ScrollChrome()
+    @State private var scrollPosition = ScrollPosition()
 
-    init(session: BackendSession, mateID: String, initialProfile: MateInfoProfile? = nil, currentChatID: String? = nil,
-         openChat: @escaping (String, String?) -> Void, newTask: @escaping () -> Void) {
+    init(session: BackendSession, mateID: String, initialProfile: MateInfoProfile? = nil,
+         openChat: @escaping (String, String?) -> Void) {
         self.session = session
         self.mateID = mateID
-        self.currentChatID = currentChatID
         self.openChat = openChat
-        self.newTask = newTask
         _profile = State(initialValue: initialProfile)
         _rendersAvatar = State(initialValue: initialProfile == nil)
     }
@@ -91,33 +107,47 @@ struct MateInfoView: View {
     }
     private var paneRequest: PaneRequest { PaneRequest(base: request, tab: tab, offset: offset) }
 
-    private var canWrite: Bool { session.isConnected && session.supportsMateInfo && !session.mateCommandPending }
+    private var canWrite: Bool {
+        session.isConnected && session.supportsMateInfo && !session.mateCommandPending && !submittingChange && consentRequest == nil
+    }
+
+    private var navigationTitle: String {
+        if session.isConnected, scrollChrome.pinned, let profile { return profile.mate.name }
+        return "Mate Details"
+    }
 
     var body: some View {
         Group {
             if !session.isConnected {
-                ContentUnavailableView("Computer offline", systemImage: "wifi.slash",
-                                       description: Text("Connect to your computer to see this Mate’s details."))
+                DisconnectedState(message: "Connect to your computer to see this Mate’s details.").centered
             } else if let profile {
                 info(profile)
             } else if let profileError {
-                ContentUnavailableView {
-                    Label("Mate details unavailable", systemImage: "person.crop.circle.badge.exclamationmark")
-                } description: {
-                    Text(profileError)
-                } actions: {
+                EmptyStateView(artwork: .mates, title: "Mate details unavailable", description: Text(profileError)) {
                     Button("Try Again") { refresh += 1 }
-                }
+                }.centered
             } else {
-                ProgressView().accessibilityLabel("Loading Mate details")
+                ContentLoadingView(title: Tab.details.loadingTitle)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
-        .expandedNavigationTitle("Mate Details")
+        .expandedNavigationTitle(navigationTitle)
         .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar {
+            if session.isConnected, session.supportsMateInfo, let profile,
+               profile.mate.ready, MateEditableProfile(mate: profile.mate) != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Edit Profile", systemImage: "pencil") { profileToEdit = profile }
+                        .labelStyle(.iconOnly)
+                        .disabled(!canWrite)
+                        .accessibilityIdentifier("editMateProfile")
+                }
+            }
+        }
         .task(id: request) { await loadProfile(request) }
         .task(id: PaneActivity(request: paneRequest, foreground: scenePhase == .active)) { await watchPane(paneRequest) }
+        .onChange(of: session.ownership) { _, _ in panes.removeAll() }
         .task {
             guard !rendersAvatar else { return }
             // Keep the thumbnail visible while the system runs the zoom.
@@ -127,28 +157,60 @@ struct MateInfoView: View {
         .sheet(item: $sheet, onDismiss: openChatFromSheet) { selection in
             if let profile { sheetContent(selection, profile: profile) }
         }
+        .fullScreenCover(item: $profileToEdit) { profile in
+            if let original = MateEditableProfile(mate: profile.mate) {
+                MateProfileEditor(session: session, mate: profile.mate, original: original, teams: profile.teams)
+            }
+        }
+        .mateConsentSheet($consentRequest, session: session, resume: perform)
     }
 
     private func info(_ profile: MateInfoProfile) -> some View {
         let mate = profile.mate
-        return VStack(spacing: 0) {
-            header(mate)
-            tabStrip
-            List {
-                if session.mateCommandUncertain {
-                    Button("Check Mate change", systemImage: "arrow.clockwise") { Task { await checkChange() } }
+        let background = Color(.systemGroupedBackground)
+        return GeometryReader { viewport in
+            ScrollView {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    header(mate)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { profileHeight = $0 }
+                    Section {
+                        paneContent(profile)
+                            .frame(minHeight: max(0, viewport.size.height - tabHeight), alignment: .top)
+                    } header: {
+                        tabStrip
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { tabHeight = $0 }
+                            .background(background)
+                            .overlay(alignment: .bottom) {
+                                HeaderFade(background: background)
+                                    .offset(y: HeaderFade.defaultHeight)
+                                    .opacity(scrollChrome.tabFade)
+                            }
+                            .zIndex(1)
+                    }
                 }
-                if let actionError { Text(actionError).foregroundStyle(.secondary) }
-                if tab == .details { details(profile) }
-                else { tabContent(mate) }
             }
-            .listStyle(.insetGrouped)
-            .contentMargins(.top, 12, for: .scrollContent)
-            .id(tab)
+            .scrollPosition($scrollPosition)
+            .accessibilityIdentifier("mateInfoScroll")
+            .onScrollGeometryChange(for: ScrollChrome.self) { geometry in
+                guard profileHeight > 0 else { return ScrollChrome() }
+                let distancePastProfile = geometry.contentOffset.y + geometry.contentInsets.top - profileHeight
+                return ScrollChrome(pinned: distancePastProfile >= -0.5,
+                                    tabFade: min(max(distancePastProfile / 24, 0), 1),
+                                    navigationFadeHeight: min(max(-distancePastProfile, 0), HeaderFade.defaultHeight))
+            } action: { _, chrome in
+                scrollChrome = chrome
+            }
+            .onChange(of: tab) {
+                if scrollChrome.pinned { scrollPosition.scrollTo(y: profileHeight) }
+            }
+            .navigationHeaderFade(background: background, height: scrollChrome.navigationFadeHeight)
             .refreshable { refresh += 1 }
         }
-        .confirmationDialog("Archive \(mate.name)?", isPresented: $confirmArchive, titleVisibility: .visible) {
-            Button("Archive Mate", role: .destructive) { perform(.archive(true)) }
+        .alert("Archive \(mate.name)?", isPresented: $confirmArchive) {
+            Button("Cancel", role: .cancel) {}
+            Button("Archive", role: .destructive) {
+                if canWrite, mate.isArchived != true { perform(.archive(true)) }
+            }
         } message: {
             Text("This pauses the Mate’s future routines.")
         }
@@ -159,6 +221,33 @@ struct MateInfoView: View {
         } message: { routine in
             Text("Future runs of \(routine.schedule.title) will stop.")
         }
+    }
+
+    private func paneContent(_ profile: MateInfoProfile) -> some View {
+        LazyVStack(alignment: .leading, spacing: 24) {
+            if session.mateCommandUncertain || actionError != nil {
+                MateInfoSection {
+                    if session.mateCommandUncertain {
+                        rowAction("Check Mate change", systemImage: "arrow.clockwise") { Task { await checkChange() } }
+                    }
+                    if let actionError { Text(actionError).foregroundStyle(.secondary) }
+                }
+            }
+            if tab == .details { details(profile) }
+            else { tabContent(profile.mate) }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 16)
+    }
+
+    private func rowAction(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 
     private func header(_ mate: Mate) -> some View {
@@ -204,7 +293,6 @@ struct MateInfoView: View {
                             guard tab != item else { return }
                             tab = item
                             offset = 0
-                            pane = nil
                             paneError = nil
                         }) { foreground in
                             tabLabel(item, foreground: foreground)
@@ -256,7 +344,7 @@ struct MateInfoView: View {
         let mate = profile.mate
         let team = mate.teamId.map { id in profile.teams.first(where: { $0.id == id })?.name ?? "Unavailable team" } ?? "No team"
         let model = session.models[mate.providerId]?.first(where: { $0.id == mate.model })?.label(for: mate.providerId) ?? mate.model
-        Section {
+        MateInfoSection {
             LabeledContent("Team", value: team)
             if let details = mate.details { LabeledContent("Space", value: details.spaceName) }
             LabeledContent("Model", value: model)
@@ -265,90 +353,63 @@ struct MateInfoView: View {
             }
         }
         if let details = mate.details, !details.instructions.isEmpty {
-            Section { MateInfoMarkdown(text: details.instructions) } header: { MateSectionHeading("Instructions") }
+            MateInfoSection("Instructions") { MateInfoMarkdown(text: details.instructions) }
         }
         if session.supportsMateInfo {
-            Section {
-                if mate.isArchived == true {
-                    Button("Restore Mate", systemImage: "archivebox") { perform(.archive(false)) }
+            if mate.isArchived == true {
+                MateInfoSection {
+                    rowAction("Restore Mate", systemImage: "archivebox") { perform(.archive(false)) }
                         .disabled(!canWrite)
-                } else {
-                    if mate.ready, MateEditableProfile(mate: mate) != nil {
-                        Button("Edit Profile", systemImage: "pencil") { sheet = .profile }.disabled(!canWrite)
-                    }
-                    Button(role: .destructive) { confirmArchive = true } label: {
-                        HStack(spacing: 16) {
-                            Image(systemName: "archivebox").frame(width: 24).accessibilityHidden(true)
-                            Text("Archive Mate")
-                        }
-                        .foregroundStyle(Color(uiColor: .systemRed))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canWrite)
                 }
+            } else {
+                let red = Color(uiColor: .systemRed)
+                Button(role: .destructive) { confirmArchive = true } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "archivebox").accessibilityHidden(true)
+                        Text("Archive Mate")
+                    }
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(red)
+                    .padding(.horizontal, 20).padding(.vertical, 10)
+                    .frame(minHeight: 48)
+                    .contentShape(.capsule)
+                    .modifier(GlassSurface(radius: 24, tint: red.opacity(0.15)))
+                }
+                .buttonStyle(ChatPressStyle())
+                .disabled(!canWrite)
+                .accessibilityIdentifier("archiveMateFromDetails")
+                .frame(maxWidth: .infinity)
             }
         }
     }
 
     @ViewBuilder private func tabContent(_ mate: Mate) -> some View {
-        if tab.requiresMateInfo && !session.supportsMateInfo {
-            Label("Update Mains on your computer to use this tab.", systemImage: "arrow.down.circle")
-                .foregroundStyle(.secondary)
+        if !session.supportsMateInfo {
+            MateInfoSection {
+                Label("Update Mains on your computer to use this tab.", systemImage: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+            }
         } else if let failure = paneError, failure.request == paneRequest {
-            Section {
+            MateInfoSection {
                 Label(failure.message, systemImage: "exclamationmark.circle").foregroundStyle(.secondary)
                 Button("Try Again") { refresh += 1 }
             }
-        } else if let pane, pane.request == paneRequest {
+        } else if let pane = panes[tab], pane.request == paneRequest {
             switch pane.content {
-            case .chats(let chats): chatRows(chats, mate: mate)
             case .memory(let notes): memoryRows(notes, mate: mate)
             case .assignments(let tasks): taskRows(tasks, mate: mate)
             case .routines(let routines): routineRows(routines, mate: mate)
             }
         } else {
-            ProgressView().accessibilityLabel("Loading \(tab.rawValue)")
-        }
-    }
-
-    @ViewBuilder private func chatRows(_ chats: [MateChat], mate: Mate) -> some View {
-        let history = chats.filter { mate.showsChat($0) }
-        if mate.ready {
-            Section { Button("New Task", systemImage: "square.and.pencil", action: newTask) }
-        }
-        Section {
-            if history.isEmpty { Text("No chats yet").foregroundStyle(.secondary) }
-            ForEach(history) { chat in
-                Button { openChat(chat.id, mateID) } label: {
-                    HStack {
-                        Text(chat.displayTitle).lineLimit(2)
-                        Spacer()
-                        TimelineView(.periodic(from: .now, by: 60)) { clock in
-                            Text(compactRelativeAge(chat.updatedAt, now: clock.date)).font(.caption).foregroundStyle(.secondary)
-                        }
-                        if chat.id == currentChatID {
-                            Image(systemName: "checkmark").font(.caption).accessibilityLabel("Current chat")
-                        } else {
-                            Image(systemName: "chevron.right").font(.caption.weight(.semibold))
-                                .foregroundStyle(.tertiary).accessibilityHidden(true)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("mateInfoChat-\(chat.id)")
-            }
+            ContentLoadingView(title: tab.loadingTitle).id(paneRequest)
         }
     }
 
     @ViewBuilder private func memoryRows(_ notes: [MateMemoryNote], mate: Mate) -> some View {
         if mate.ready {
-            Section { Button("New Memory", systemImage: "plus") { sheet = .memory(nil) }.disabled(!canWrite) }
+            MateInfoSection { rowAction("New Memory", systemImage: "plus") { sheet = .memory(nil) }.disabled(!canWrite) }
         }
-        Section {
+        MateInfoSection {
             if notes.isEmpty { Text("No memories yet").foregroundStyle(.secondary) }
             ForEach(notes) { note in
                 Button { sheet = .memory(note.id) } label: {
@@ -362,9 +423,9 @@ struct MateInfoView: View {
 
     @ViewBuilder private func taskRows(_ tasks: MateTasks, mate: Mate) -> some View {
         if mate.ready {
-            Section { Button("New Assignment", systemImage: "plus") { sheet = .newAssignment }.disabled(!canWrite) }
+            MateInfoSection { rowAction("New Assignment", systemImage: "plus") { sheet = .newAssignment }.disabled(!canWrite) }
         }
-        Section {
+        MateInfoSection {
             if tasks.items.isEmpty { Text("No assignments yet").foregroundStyle(.secondary) }
             ForEach(tasks.items) { task in
                 Button { sheet = .task(task.id) } label: {
@@ -379,9 +440,9 @@ struct MateInfoView: View {
 
     @ViewBuilder private func routineRows(_ routines: MateRoutines, mate: Mate) -> some View {
         if mate.ready {
-            Section { Button("New Routine", systemImage: "plus") { sheet = .routine(nil) }.disabled(!canWrite) }
+            MateInfoSection { rowAction("New Routine", systemImage: "plus") { sheet = .routine(nil) }.disabled(!canWrite) }
         }
-        Section {
+        MateInfoSection {
             if routines.items.isEmpty { Text("No routines yet").foregroundStyle(.secondary) }
             ForEach(routines.items) { routine in
                 VStack(alignment: .leading, spacing: 10) {
@@ -429,7 +490,7 @@ struct MateInfoView: View {
 
     @ViewBuilder private func pagination(hasNext: Bool) -> some View {
         if offset > 0 || hasNext {
-            Section {
+            MateInfoSection {
                 if offset > 0 { Button("Previous Page") { offset -= 100 } }
                 if hasNext { Button("Next Page") { offset += 100 } }
             }
@@ -439,10 +500,6 @@ struct MateInfoView: View {
     @ViewBuilder private func sheetContent(_ selection: Sheet, profile: MateInfoProfile) -> some View {
         let mate = profile.mate
         switch selection {
-        case .profile:
-            if let original = MateEditableProfile(mate: mate) {
-                MateProfileEditor(session: session, mateID: mateID, original: original, teamID: mate.teamId, teams: profile.teams)
-            }
         case .memory(let id):
             if let id {
                 MateRecordView(session: session, title: "Memory", load: { try await session.readMateMemory(id, mateID: mateID) }) { note in
@@ -456,7 +513,7 @@ struct MateInfoView: View {
         case .task(let id):
             MateRecordView(session: session, title: "Assignment", reloadOnChange: true, dismissWithCheckmark: true,
                            load: { try await session.readMateTask(id, mateID: mateID) }) { task in
-                MateTaskDetail(session: session, mate: mate, task: task) { runID in
+                MateTaskDetail(session: session, managingMateID: mate.ready ? mate.id : nil, task: task) { runID in
                     chatAfterSheet = (runID, task.assignee?.id)
                     sheet = nil
                 }
@@ -490,12 +547,11 @@ struct MateInfoView: View {
     }
 
     private func loadPane(_ request: PaneRequest) async {
-        guard request.base.connected, !request.tab.requiresMateInfo || request.base.supportsMateInfo else { return }
+        guard request.base.connected, request.base.supportsMateInfo else { return }
         do {
             let content: Pane
             switch request.tab {
             case .details: return
-            case .chats: content = .chats(try await session.loadMateChats(mateID))
             case .memory: content = .memory(try await session.loadMateMemory(mateID))
             case .assignments: content = .assignments(try await session.loadMateTasks(mateID, offset: request.offset))
             case .routines: content = .routines(try await session.loadMateRoutines(mateID, offset: request.offset))
@@ -504,7 +560,7 @@ struct MateInfoView: View {
             if case .assignments(let tasks) = content, request.offset == 0 || !tasks.items.isEmpty {
                 activeTasks = tasks.activeCount
             }
-            pane = (request, content)
+            panes[request.tab] = (request, content)
             paneError = nil
         } catch {
             guard !Task.isCancelled, request == paneRequest else { return }
@@ -530,9 +586,17 @@ struct MateInfoView: View {
     private func perform(_ change: MateChange) {
         let owner = session.ownership
         Task {
-            guard owner == session.ownership, canWrite else { return }
-            do { try await session.manageMate(mateID, change: change); actionError = nil }
-            catch { if owner == session.ownership { actionError = error.localizedDescription } }
+            guard owner == session.ownership, !submittingChange, consentRequest == nil else { return }
+            submittingChange = true
+            defer { submittingChange = false }
+            actionError = nil
+            do {
+                try await session.manageMate(mateID, change: change)
+            } catch let requirement as MateConsentRequired {
+                if owner == session.ownership { consentRequest = MateConsentRequest(requirement: requirement, change: change) }
+            } catch {
+                if owner == session.ownership { actionError = error.localizedDescription }
+            }
         }
     }
 
@@ -559,6 +623,46 @@ struct MateInfoMarkdown: View {
             })
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
+    }
+}
+
+private struct MateInfoSection<Content: View>: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let title: String?
+    @ViewBuilder let content: Content
+
+    init(_ title: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let title {
+                MateSectionHeading(title)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 20)
+            }
+            Group(subviews: content) { rows in
+                LazyVStack(spacing: 0) {
+                    ForEach(rows) { row in
+                        row
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                            .overlay(alignment: .bottom) {
+                                if row.id != rows.last?.id {
+                                    Divider().padding(.horizontal, 20)
+                                        .allowsHitTesting(false).accessibilityHidden(true)
+                                }
+                            }
+                    }
+                }
+            }
+            .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 20))
+        }
     }
 }
 

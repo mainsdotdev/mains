@@ -29,16 +29,18 @@ struct AtlasTagsEditor: View {
     var body: some View {
         NavigationStack {
             List {
-                if loading { HStack(spacing: 12) { ProgressView(); Text("Loading tags…").foregroundStyle(.secondary) } }
+                if loading && original == nil { ContentLoadingView(title: "Loading tags…").listRow }
                 if let original {
-                    Section { Text(original.title).font(.headline) }
-                    Section("Selected tags (\(selected.count)/30)") {
+                    Section { Text(original.title).font(.headline.width(.expanded)) }
+                    Section {
                         if selected.isEmpty { Text("No tags selected").foregroundStyle(.secondary) }
                         ForEach(selected) { tag in
                             Button { selected.removeAll { $0.id == tag.id } } label: {
                                 HStack { Text(tag.name).foregroundStyle(.primary); Spacer(); Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.frame(minHeight: 44)
                             }.disabled(!editable).accessibilityLabel("Remove tag " + tag.name)
                         }
+                    } header: {
+                        Text("Selected tags (\(selected.count)/30)").fontWidth(.expanded)
                     }
                     Section {
                         TextField("New tag name", text: $newName).autocorrectionDisabled().textInputAutocapitalization(.never)
@@ -70,7 +72,7 @@ struct AtlasTagsEditor: View {
                 }
             }
             .navigationHeaderFade(background: Color(.systemGroupedBackground))
-            .navigationTitle("Edit tags").navigationBarTitleDisplayMode(.inline)
+            .expandedNavigationTitle("Edit tags")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") { save() }.disabled(!canSave).accessibilityIdentifier("saveAtlasTags") }
@@ -127,13 +129,18 @@ struct AtlasTagFilterView: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
-            List {
-                Button("All tags") { choose(nil) }.frame(minHeight: 44)
-                AtlasTagCatalogue(session: session, owner: owner, selected: Set([selected?.id].compactMap { $0 }), enabled: session.isConnected) { choose($0) }
-            }
+            AtlasTagCatalogue(session: session, owner: owner, selected: Set([selected?.id].compactMap { $0 }),
+                              enabled: session.isConnected, isFilter: true) { choose($0) }
             .navigationHeaderFade(background: Color(.systemGroupedBackground))
-            .navigationTitle("Filter by tag").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() } } }
+            .expandedNavigationTitle("Filter by tag")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() } }
+                if selected != nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Clear") { choose(nil) }.accessibilityLabel("Clear tag filter")
+                    }
+                }
+            }
         }
         .onChange(of: session.ownership) { _, _ in dismiss() }
     }
@@ -142,6 +149,8 @@ struct AtlasTagFilterView: View {
 
 /// One searchable page, independent of the item's in-memory edit selection.
 private struct AtlasTagCatalogue: View {
+    private static let filterRowInsets = EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20)
+
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
@@ -150,6 +159,7 @@ private struct AtlasTagCatalogue: View {
     let selected: Set<String>
     let enabled: Bool
     var allowsAdditional = true
+    var isFilter = false
     let onSelect: (AtlasTag) -> Void
     @State private var query = ""
     @State private var page = 1
@@ -159,30 +169,30 @@ private struct AtlasTagCatalogue: View {
     @State private var reload = 0
     @State private var readID = UUID()
     private var key: String { "\(query):\(page):\(session.connection):\(session.atlasRevision):\(reload)" }
+    private var searchField: some View {
+        TextField("Search tags", text: $query)
+            .autocorrectionDisabled().textInputAutocapitalization(.never)
+            .accessibilityIdentifier("searchAtlasTags")
+    }
     var body: some View {
-        Section("Find tags") {
-            TextField("Search tags", text: $query).autocorrectionDisabled().textInputAutocapitalization(.never).accessibilityIdentifier("searchAtlasTags")
-            if loading { ProgressView().accessibilityLabel("Loading tags") }
-            if let error {
-                Text(error).foregroundStyle(.secondary)
-                Button("Try again") { reload += 1 }.disabled(!session.isConnected || loading)
-            }
-            if let result {
-                if result.items.isEmpty { Text("No tags found").foregroundStyle(.secondary) }
-                ForEach(result.items) { tag in
-                    Button { onSelect(tag) } label: {
-                        HStack { Text(tag.name).foregroundStyle(.primary); Spacer(); if selected.contains(tag.id) { Image(systemName: "checkmark").foregroundStyle(.tint) } }.frame(minHeight: 44)
-                    }.disabled(!enabled || owner != session.ownership || !allowsAdditional && !selected.contains(tag.id))
-                        .accessibilityAddTraits(selected.contains(tag.id) ? .isSelected : [])
-                        .accessibilityIdentifier("atlasTag-" + tag.id)
-                }
-                if result.page > 1 || result.hasNext {
-                    HStack {
-                        Button("Previous") { page -= 1 }.disabled(page == 1 || loading)
-                        Spacer(); Text("Page \(result.page)").font(.caption).foregroundStyle(.secondary); Spacer()
-                        Button("Next") { page += 1 }.disabled(!result.hasNext || loading)
+        Group {
+            if isFilter {
+                List {
+                    Section {
+                        HStack(spacing: 10) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
+                            searchField
+                        }
+                        .frame(minHeight: 34)
+                        .listRowInsets(Self.filterRowInsets)
                     }
+                    resultsSection
                 }
+                .listSectionSpacing(12)
+                .contentMargins(.top, 12, for: .scrollContent)
+                .scrollDismissesKeyboard(.interactively)
+            } else {
+                resultsSection
             }
         }
         .task(id: key) { await load() }
@@ -192,6 +202,45 @@ private struct AtlasTagCatalogue: View {
             page = 1
         }
         .onDisappear { readID = UUID() }
+    }
+    private var resultsSection: some View {
+        Section {
+            if !isFilter { searchField }
+            if result == nil && error == nil { ContentLoadingView(title: "Loading tags…").listRow.id(key) }
+            if let error {
+                Text(error).foregroundStyle(.secondary)
+                Button("Try again") { reload += 1 }.disabled(!session.isConnected || loading)
+            }
+            if let result {
+                if result.items.isEmpty { Text("No tags found").foregroundStyle(.secondary) }
+                ForEach(result.items) { tag in
+                    let isSelected = selected.contains(tag.id)
+                    Button { onSelect(tag) } label: {
+                        HStack {
+                            Text(isFilter && !tag.name.hasPrefix("#") ? "#" + tag.name : tag.name)
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            if isSelected { Image(systemName: "checkmark").foregroundStyle(.tint).accessibilityHidden(true) }
+                        }
+                        .frame(minHeight: isFilter ? 34 : 44)
+                        .contentShape(.rect)
+                    }
+                    .listRowInsets(isFilter ? Self.filterRowInsets : nil)
+                    .disabled(!enabled || owner != session.ownership || !allowsAdditional && !isSelected)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .accessibilityIdentifier("atlasTag-" + tag.id)
+                }
+                if result.page > 1 || result.hasNext {
+                    HStack {
+                        Button("Previous") { page -= 1 }.disabled(page == 1 || loading)
+                        Spacer(); Text("Page \(result.page)").font(.caption).foregroundStyle(.secondary); Spacer()
+                        Button("Next") { page += 1 }.disabled(!result.hasNext || loading)
+                    }
+                }
+            }
+        } header: {
+            if !isFilter { Text("Find tags").fontWidth(.expanded) }
+        }
     }
     private func load() async {
         let ticket = UUID(); readID = ticket

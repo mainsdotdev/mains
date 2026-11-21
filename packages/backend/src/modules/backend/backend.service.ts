@@ -1,8 +1,9 @@
 import { getLocalBackendId } from "../../db/backend-identity";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { MOBILE_MATE_INFO_CAPABILITY } from "@mains/contracts/assistants";
+import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_MODEL_EDITING_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY } from "@mains/contracts/assistants";
 import { CHANNELS } from "@mains/contracts/channels";
+import { MOBILE_GOAL_CONTROLS_CAPABILITY, MOBILE_GOAL_SUMMARY_CAPABILITY } from "@mains/contracts/provider-goals";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { assertAuthActive, createAuthFence, createAuthGrants } from "@mains/contracts/auth-lifecycle";
 import { registeredChannels } from "../../ipc-kit";
@@ -99,6 +100,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   // Read-only listings — installing or editing a skill stays off this list.
   CHANNELS.providers.getSkills,
   CHANNELS.providers.getCodexPermissions,
+  CHANNELS.providers.getMobileGoalSummary,
   CHANNELS.providers.getCommands,
 ]);
 
@@ -113,6 +115,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
  */
 export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   CHANNELS.assistants.create,
+  CHANNELS.assistants.createTeam,
   CHANNELS.assistants.setupProfile,
   CHANNELS.assistants.prepareWelcome,
   CHANNELS.assistants.respondWelcome,
@@ -161,6 +164,7 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   // plan) as one narrow patch: `providers:update` replaces the whole config,
   // credentials included, and stays desktop-only.
   CHANNELS.providers.updateRunSettings,
+  CHANNELS.providers.changeMobileGoal,
 ]);
 
 /**
@@ -182,6 +186,7 @@ export const PAIRED_DEVICE_EVENTS: ReadonlySet<string> = new Set([
   CHANNELS.runs.toolApprovalResolved,
   CHANNELS.runs.diffUpdated,
   CHANNELS.providers.modelsUpdated,
+  CHANNELS.providers.mobileGoalChanged,
   CHANNELS.providers.skillsUpdated,
   CHANNELS.workspace.gitStateChanged,
 ]);
@@ -293,7 +298,14 @@ export const backendService = {
     const namespaces = reachable.map(namespaceOf);
     const mateInfoChannels = [CHANNELS.assistants.mobileMemory, CHANNELS.assistants.mobileAssignments,
       CHANNELS.assistants.mobileRoutines, CHANNELS.assistants.mobileManage];
-    if (mateInfoChannels.every(channel => reachable.includes(channel))) namespaces.push(MOBILE_MATE_INFO_CAPABILITY);
+    if (mateInfoChannels.every(channel => reachable.includes(channel))) {
+      namespaces.push(MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_MODEL_EDITING_CAPABILITY);
+    }
+    if (reachable.includes(CHANNELS.assistants.createTeam)) namespaces.push(MOBILE_MATE_TEAM_CREATION_CAPABILITY);
+    if (reachable.includes(CHANNELS.providers.getMobileGoalSummary)) namespaces.push(MOBILE_GOAL_SUMMARY_CAPABILITY);
+    if (reachable.includes(CHANNELS.providers.getMobileGoalSummary) && reachable.includes(CHANNELS.providers.changeMobileGoal)) {
+      namespaces.push(MOBILE_GOAL_CONTROLS_CAPABILITY);
+    }
     const capabilities = [...new Set(namespaces)].sort();
     return {
       backendId,

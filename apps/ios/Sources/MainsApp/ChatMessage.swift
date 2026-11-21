@@ -2,6 +2,8 @@ import SwiftUI
 
 extension EnvironmentValues {
     @Entry var mateChatTint: Color? = nil
+    @Entry var openMateAssignment: ((MateAssignmentLink) -> Void)? = nil
+    @Entry var solidChatNotices = false
 }
 
 struct ChatPressStyle: ButtonStyle {
@@ -52,7 +54,7 @@ struct ChatMessage: View {
                     Button { openVoiceConversation(task.id) } label: {
                         HStack(spacing: 10) {
                             Image(systemName: "arrow.triangle.branch")
-                            Text(task.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                            Text(task.title).font(.subheadline.weight(.medium).width(.expanded)).lineLimit(2)
                             Spacer(minLength: 8)
                             Image(systemName: "arrow.up.right").font(.caption)
                         }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
@@ -99,6 +101,7 @@ private struct MateTaskCard: View {
     let session: BackendSession
     let link: MateAssignmentLink
     @Environment(\.openMateConversation) private var openChat
+    @Environment(\.openMateAssignment) private var openAssignment
     @State private var loaded: (owner: Int, link: MateAssignmentLink, assignment: MateAssignment)?
     @State private var error: String?
     @State private var retry = 0
@@ -112,13 +115,16 @@ private struct MateTaskCard: View {
             taskSummary
             if let runID = assignment?.workerRunId, runID != link.runID {
                 Button { openChat(runID) } label: {
-                    Label(assignment?.assignee?.isArchived == true ? "Open archived Mate chat" : "Open Mate chat", systemImage: "arrow.up.right")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14).frame(minHeight: 44)
-                        .contentShape(.capsule)
+                    HStack(spacing: 10) {
+                        Text(assignment?.assignee?.isArchived == true ? "Open archived Mate chat" : "Open Mate chat")
+                        Image(systemName: "arrow.right").font(.caption.weight(.semibold)).accessibilityHidden(true)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 14).frame(minHeight: 44)
+                    .background(Color(.secondarySystemBackground), in: .capsule)
+                    .contentShape(.capsule)
                 }
                 .buttonStyle(ChatPressStyle())
-                .modifier(GlassSurface(radius: 22))
                 .accessibilityIdentifier("openMateTaskChat")
             }
         }
@@ -130,29 +136,29 @@ private struct MateTaskCard: View {
                 guard !Task.isCancelled, owner == session.ownership else { return }
                 loaded = (owner, link, assignment); error = nil
             }
-            catch { if !Task.isCancelled, session.viewingRunID == link.runID { self.error = error.localizedDescription } }
+            catch {
+                if !Task.isCancelled, owner == session.ownership, session.viewingRunID == link.runID {
+                    self.error = error.localizedDescription
+                }
+            }
         }
     }
 
     private var taskSummary: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                if let mate = assignment?.assignee {
-                    MateRobotThumbnail(preset: MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id))
-                        .frame(width: 30, height: 30).saturation(mate.isArchived ? 0.25 : 1)
-                } else { RegistryIcon(token: "icon:assistant-steps", tint: .primary) }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(assignment?.title ?? "Mate request").font(.headline)
-                    if let mate = assignment?.assignee {
-                        HStack(spacing: 8) {
-                            Text(mate.name).font(.subheadline).foregroundStyle(.secondary)
-                            if mate.isArchived { ArchivedMateBadge() }
-                        }
-                    }
+        let showDetails = assignment != nil && session.isConnected && openAssignment != nil
+        return VStack(alignment: .leading, spacing: 10) {
+            if showDetails, let openAssignment {
+                Button { openAssignment(link) } label: {
+                    cardHeader(disclosure: true)
+                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
                 }
+                .buttonStyle(ChatPressStyle())
+                .accessibilityHint("Opens assignment details")
+                .accessibilityIdentifier("openMateAssignment-\(link.id)")
+            } else {
+                cardHeader(disclosure: false)
             }
             if let assignment {
-                Text(assignment.status.capitalized).font(.subheadline).foregroundStyle(.secondary)
                 if let result = assignment.result, !result.isEmpty { ChatMessageBody(text: result) }
                 if let failure = assignment.error { Text(failure).font(.footnote).foregroundStyle(.secondary) }
             } else if error == nil && session.isConnected && session.supportsMates { ProgressView().controlSize(.small) }
@@ -162,8 +168,80 @@ private struct MateTaskCard: View {
             }
         }
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18))
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 20))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("mateAssignment-\(link.id)")
+    }
+
+    private func cardHeader(disclosure: Bool) -> some View {
+        HStack(spacing: 10) {
+            if let mate = assignment?.assignee {
+                MateRobotThumbnail(preset: MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id))
+                    .frame(width: 30, height: 30).saturation(mate.isArchived ? 0.25 : 1)
+            } else { RegistryIcon(token: "icon:assistant-steps", tint: .primary) }
+            VStack(alignment: .leading, spacing: 4) {
+                if let assignment {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            taskTitle.fixedSize(horizontal: true, vertical: false)
+                            MateTaskStatusBadge(status: assignment.status).fixedSize(horizontal: true, vertical: false)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            taskTitle
+                            MateTaskStatusBadge(status: assignment.status)
+                        }
+                    }
+                } else { taskTitle }
+                if let mate = assignment?.assignee {
+                    HStack(spacing: 8) {
+                        Text(mate.name).font(.subheadline).foregroundStyle(.secondary)
+                        if mate.isArchived { ArchivedMateBadge() }
+                    }
+                }
+            }
+            if disclosure {
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.forward").font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary).accessibilityHidden(true)
+            }
+        }
+    }
+
+    private var taskTitle: some View {
+        let title = assignment?.title ?? "Mate request"
+        return Text(title).font(.headline).fontWidth(title == "Mate request" ? nil : .expanded).foregroundStyle(.primary)
+    }
+}
+
+private struct MateTaskStatusBadge: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let status: String
+
+    private var appearance: (label: String, symbol: String, tint: Color) {
+        switch status {
+        case "queued": ("Queued", "clock", .blue)
+        case "running": ("Running", "play.fill", .blue)
+        case "blocked": ("Blocked", "exclamationmark.triangle.fill", .orange)
+        case "completed": ("Completed", "checkmark", .green)
+        case "failed": ("Failed", "xmark", .red)
+        case "canceled": ("Canceled", "stop.fill", .secondary)
+        case "uncertain": ("Delivery uncertain", "exclamationmark.triangle.fill", .orange)
+        default: (status.capitalized, "circle", .secondary)
+        }
+    }
+
+    var body: some View {
+        let (label, symbol, tint) = appearance
+        HStack(spacing: 4) {
+            Image(systemName: symbol).accessibilityHidden(true)
+            Text(label)
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(tint.mix(with: .primary, by: 0.35))
+        .padding(.horizontal, 7).padding(.vertical, 3)
+        .background(tint.opacity(0.14), in: .capsule)
     }
 }
 
@@ -483,20 +561,37 @@ struct ChatNotice<Actions: View>: View {
     let message: String
     let symbol: String
     let warning: Bool
-    var horizontalInset: CGFloat = 16
+    var horizontalInset: CGFloat = MessageComposer.horizontalInset
     @ViewBuilder var actions: () -> Actions
+    @Environment(\.solidChatNotices) private var solidChatNotices
+
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: symbol).foregroundStyle(warning ? Color.orange : .secondary).padding(.top, 2)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.subheadline.weight(.semibold))
-                Text(message).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        Group {
+            if solidChatNotices {
+                noticeContent.background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 20))
+            } else {
+                noticeContent.modifier(GlassSurface(radius: 20, interactive: false))
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .padding(.horizontal, horizontalInset)
+    }
+
+    private var noticeContent: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: symbol)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(warning ? Color.orange : Color(.secondaryLabel))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.subheadline.weight(.semibold).width(.expanded))
+                Text(message).font(.footnote).foregroundStyle(Color(.secondaryLabel))
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 16) { actions() }.font(.footnote.weight(.semibold)).buttonStyle(.plain)
             }
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 16))
-        .padding(.horizontal, horizontalInset)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
     }
 }

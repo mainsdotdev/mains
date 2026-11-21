@@ -284,7 +284,7 @@ struct SidebarView: View {
         }
     }
     private func sectionTitle(_ title: String) -> some View {
-        Text(title).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+        Text(title).font(.footnote.weight(.semibold).width(.expanded)).foregroundStyle(.secondary)
             .padding(.bottom, 6).accessibilityAddTraits(.isHeader)
     }
     private func empty(_ title: String) -> some View { Text(title).font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 8) }
@@ -297,7 +297,7 @@ struct SidebarView: View {
                     HStack(spacing: menuIconSpacing) {
                         RegistryIcon(token: collection.icon, fallbackAsset: folderAsset, size: menuIconSize)
                             .frame(width: menuIconWidth)
-                        Text(collection.name).foregroundStyle(.primary).lineLimit(1)
+                        Text(collection.name).fontWidth(.expanded).foregroundStyle(.primary).lineLimit(1)
                     }
                     .font(.body).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
                 }

@@ -8,6 +8,51 @@ struct ConsentContext: Identifiable {
     var id: String { backendID + ":" + providerID }
 }
 
+struct MateConsentRequest: Identifiable {
+    let id = UUID()
+    let requirement: MateConsentRequired
+    let change: MateChange
+}
+
+extension View {
+    func mateConsentSheet(_ request: Binding<MateConsentRequest?>, session: BackendSession,
+                          resume: @escaping (MateChange) -> Void) -> some View {
+        modifier(MateConsentSheet(request: request, session: session, resume: resume))
+    }
+}
+
+private struct MateConsentSheet: ViewModifier {
+    @Binding var request: MateConsentRequest?
+    let session: BackendSession
+    let resume: (MateChange) -> Void
+    @State private var approved: MateConsentRequest?
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $request, onDismiss: finish) { pending in
+            let requirement = pending.requirement
+            ConsentView(context: ConsentContext(backendID: requirement.backendID, providerID: requirement.providerID)) {
+                guard belongsToCurrentPairing(requirement) else { return }
+                session.grantConsent(providerID: requirement.providerID, backendID: requirement.backendID)
+                approved = pending
+            }
+        }
+        .onChange(of: session.ownership) { _, _ in
+            approved = nil
+            request = nil
+        }
+    }
+
+    private func belongsToCurrentPairing(_ requirement: MateConsentRequired) -> Bool {
+        requirement.owner == session.ownership && requirement.backendID == session.pairing?.descriptor.backendId
+    }
+
+    private func finish() {
+        let pending = approved
+        approved = nil
+        if let pending, belongsToCurrentPairing(pending.requirement) { resume(pending.change) }
+    }
+}
+
 struct ConsentView: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -51,7 +96,7 @@ struct ConsentView: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            Text(context.isDemo ? "Demo data sharing" : "AI data sharing").font(.headline)
+            Text(context.isDemo ? "Demo data sharing" : "AI data sharing").font(.headline.width(.expanded))
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .overlay(alignment: .leading) {
                     RoundControl(symbol: "xmark", label: "Close", size: 40) { dismiss() }
@@ -61,7 +106,8 @@ struct ConsentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     VStack(spacing: 6) {
-                        Text(context.isDemo ? "Continue the demo with \(Provider.name(context.providerID))?" : "Share data with \(recipient)?").font(.title3.bold())
+                        Text(context.isDemo ? "Continue the demo with \(Provider.name(context.providerID))?" : "Share data with \(recipient)?")
+                            .font(.title3.bold().width(.expanded))
                             .accessibilityAddTraits(.isHeader)
                         Text(disclosure)
                             .font(.footnote).foregroundStyle(.secondary)

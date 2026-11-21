@@ -53,9 +53,11 @@ struct LocalTextFilePreview: View {
                     if markdown { ChatMessageBody(text: page.text) }
                     else { Text(page.text).font(.system(.body, design: .monospaced)).textSelection(.enabled) }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
-            } else if let error { ContentUnavailableView("Preview unavailable", systemImage: "doc", description: Text(error)) }
-            else { ProgressView().padding() }
+            } else if let error {
+                EmptyStateView(artwork: .documents, title: "Preview unavailable", description: Text(error))
+            } else { ContentLoadingView(title: "Loading preview…") }
         }
+        .defaultScrollAnchor(error == nil ? .top : .center, for: .alignment)
         .id(offset)
         .accessibilityIdentifier("outputTextPreview")
         .safeAreaInset(edge: .bottom) {

@@ -20,17 +20,14 @@ struct MateRecordView<Record, Content: View>: View {
                 } else {
                     Group {
                         if !session.isConnected {
-                            ContentUnavailableView("Computer offline", systemImage: "wifi.slash")
+                            DisconnectedState(message: "Connect to your computer to load this information.").centered
                         } else if let error {
-                            ContentUnavailableView {
-                                Label("\(title) unavailable", systemImage: "exclamationmark.circle")
-                            } description: {
-                                Text(error)
-                            } actions: {
+                            EmptyStateView(artwork: .mates, title: "\(title) unavailable", description: Text(error)) {
                                 Button("Try Again") { retry += 1 }
-                            }
+                            }.centered
                         } else {
-                            ProgressView()
+                            ContentLoadingView(title: "Loading \(title)…")
+                                .frame(maxHeight: .infinity)
                         }
                     }
                     .expandedNavigationTitle(title)
@@ -81,37 +78,58 @@ private struct MateEditorForm<Content: View>: View {
     var editable = true
     let change: MateChange?
     var delete: MateChange? = nil
+    var avatarBackdrop: MateAvatar? = nil
+    var dismissFocus: (() -> Void)? = nil
     @ViewBuilder let content: () -> Content
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var submitting = false
     @State private var checking = false
     @State private var confirmDelete = false
     @State private var error: String?
+    @State private var consentRequest: MateConsentRequest?
 
     private var canWrite: Bool {
-        editable && !submitting && session.isConnected && session.supportsMateInfo && !session.mateCommandPending
+        editable && !submitting && consentRequest == nil && session.isConnected && session.supportsMateInfo && !session.mateCommandPending
     }
 
     var body: some View {
-        Form {
-            content().disabled(submitting || checking)
-            if let error {
-                Section { Text(error).foregroundStyle(.secondary) }
-            }
-            if checking && session.mateCommandUncertain {
-                Section {
-                    Button("Check Mate change", systemImage: "arrow.clockwise") { send(nil) }
-                        .disabled(!session.isConnected || submitting)
+        Group {
+            if let avatarBackdrop {
+                ZStack {
+                    MateAvatarBackdrop(avatar: avatarBackdrop)
+                    GeometryReader { viewport in
+                        ScrollViewReader { scroll in
+                            ScrollView {
+                                VStack(spacing: 20) {
+                                    content().disabled(submitting || checking)
+                                    feedback.id("mateEditorFeedback")
+                                }
+                                .padding(.vertical, 16)
+                                .frame(maxWidth: 560)
+                                .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .top)
+                                .background(alignment: .center) {
+                                    KeyboardDismissBackground(dismissFocus: dismissFocus)
+                                }
+                            }
+                            .scrollDismissesKeyboard(.interactively)
+                            .navigationHeaderFade(
+                                background: MateAvatarBackdrop.headerFill(for: avatarBackdrop, in: colorScheme),
+                                coversSafeAreaAtRest: false
+                            )
+                            .onChange(of: error) { _, message in
+                                if message != nil { scroll.scrollTo("mateEditorFeedback", anchor: .bottom) }
+                            }
+                        }
+                    }
                 }
-            }
-            if editable, delete != nil {
-                Section {
-                    Button("Delete Memory", role: .destructive) { confirmDelete = true }.disabled(!canWrite)
-                }
+                .mateCreationChrome(title, extendsBackdrop: true)
+            } else {
+                Form { formRows }
+                    .expandedNavigationTitle(title)
             }
         }
-        .expandedNavigationTitle(title)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button(editable ? "Cancel" : "Done") { dismiss() }.disabled(submitting)
@@ -123,17 +141,40 @@ private struct MateEditorForm<Content: View>: View {
             }
         }
         .interactiveDismissDisabled(submitting)
+        .mateConsentSheet($consentRequest, session: session) { send($0) }
         .confirmationDialog("Delete this memory?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete Memory", role: .destructive) { if let delete { send(delete) } }
+        }
+    }
+
+    @ViewBuilder private var formRows: some View {
+        content().disabled(submitting || checking)
+        feedback
+        if editable, delete != nil {
+            Section {
+                Button("Delete Memory", role: .destructive) { confirmDelete = true }.disabled(!canWrite)
+            }
+        }
+    }
+
+    @ViewBuilder private var feedback: some View {
+        if let error {
+            Section { Text(error).foregroundStyle(.secondary) }
+        }
+        if checking && session.mateCommandUncertain {
+            Section {
+                Button("Check Mate change", systemImage: "arrow.clockwise") { send(nil) }
+                    .disabled(!session.isConnected || submitting)
+            }
         }
     }
 
     private func send(_ change: MateChange?) {
         let owner = session.ownership
         Task {
-            guard !submitting, owner == session.ownership else { return }
+            guard !submitting, consentRequest == nil, owner == session.ownership else { return }
             if change != nil {
-                guard canWrite else { return }
+                guard editable else { return }
             } else {
                 guard checking, session.mateCommandUncertain, session.isConnected else { return }
             }
@@ -144,6 +185,10 @@ private struct MateEditorForm<Content: View>: View {
                 if let change { try await session.manageMate(mateID, change: change) }
                 else { try await session.checkMateCommand() }
                 if owner == session.ownership { dismiss() }
+            } catch let requirement as MateConsentRequired {
+                if let change, owner == session.ownership {
+                    consentRequest = MateConsentRequest(requirement: requirement, change: change)
+                }
             } catch {
                 if owner == session.ownership {
                     checking = session.mateCommandUncertain
@@ -154,62 +199,254 @@ private struct MateEditorForm<Content: View>: View {
     }
 }
 
-struct MateProfileEditor: View {
-    let session: BackendSession
-    let mateID: String
-    let teams: [MateTeam]
-    @State private var original: MateEditableProfile
-    @State private var profile: MateEditableProfile
-    @State private var originalTeamID: String?
-    @State private var teamID: String?
-    @State private var rememberedStyles: [String: String] = [:]
+struct MateTeamSelection {
+    var id: String?
+    private var created: [MateTeam] = []
 
-    init(session: BackendSession, mateID: String, original: MateEditableProfile, teamID: String?, teams: [MateTeam]) {
-        self.session = session
-        self.mateID = mateID
-        self.teams = teams
-        _original = State(initialValue: original)
-        _profile = State(initialValue: original)
-        _originalTeamID = State(initialValue: teamID)
-        _teamID = State(initialValue: teamID)
+    init(id: String? = nil) { self.id = id }
+
+    func choices(in teams: [MateTeam]) -> [MateTeam] {
+        teams + created.filter { team in !teams.contains { $0.id == team.id } }
     }
+
+    mutating func select(_ team: MateTeam) {
+        created.removeAll { $0.id == team.id }
+        created.append(team)
+        id = team.id
+    }
+}
+
+struct MateTeamPicker<MenuLabel: View>: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let teams: [MateTeam]
+    @Binding var selection: MateTeamSelection
+    let openEditor: () -> Void
+    @ViewBuilder let label: (String) -> MenuLabel
+
+    var body: some View {
+        let choices = selection.choices(in: teams)
+        let name = selection.id.map { id in choices.first { $0.id == id }?.name ?? "Unavailable team" } ?? "No team"
+        Menu {
+            option("No team", id: nil)
+            ForEach(choices) { team in option(team.name, id: team.id) }
+            if session.supportsMateTeamCreation || session.pendingMateTeamName != nil {
+                Divider()
+                Button("New Team", systemImage: "plus", action: openEditor)
+                    .disabled(session.mateCommandPending && !(session.mateCommandUncertain && session.pendingMateTeamName != nil))
+                    .accessibilityIdentifier("newMateTeam")
+            }
+        } label: {
+            label(name)
+        }
+        .accessibilityLabel("Team")
+        .accessibilityValue(name)
+        .accessibilityIdentifier("mateTeamPicker")
+        .disabled(choices.isEmpty && selection.id == nil && !session.supportsMateTeamCreation && session.pendingMateTeamName == nil)
+    }
+
+    private func option(_ name: String, id: String?) -> some View {
+        Button { selection.id = id } label: {
+            if selection.id == id { Label(name, systemImage: "checkmark") }
+            else { Text(name) }
+        }
+    }
+}
+
+struct MateTeamEditor: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let select: (MateTeam) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var enteringName: Bool
+    @State private var name = ""
+    @State private var sending = false
+    @State private var error: String?
+
+    private var checking: Bool { session.mateCommandUncertain && session.pendingMateTeamName != nil }
+    private var canSubmit: Bool {
+        guard session.isConnected, !sending else { return false }
+        return checking || (session.supportsMateTeamCreation && !session.mateCommandPending && validText(name, limit: 100))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Team name", text: $name)
+                    .textInputAutocapitalization(.words)
+                    .submitLabel(.done)
+                    .focused($enteringName)
+                    .onSubmit(submit)
+                    .disabled(sending || checking)
+                    .accessibilityIdentifier("mateTeamName")
+                if let error { Text(error).foregroundStyle(.secondary) }
+                if sending { ProgressView() }
+            }
+            .defaultFocus($enteringName, true)
+            .expandedNavigationTitle("New Team")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.disabled(sending)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(checking ? "Check" : "Create", action: submit)
+                        .disabled(!canSubmit)
+                        .accessibilityIdentifier("submitMateTeam")
+                }
+            }
+        }
+        .onAppear { if let pending = session.pendingMateTeamName { name = pending } }
+        .interactiveDismissDisabled(sending)
+    }
+
+    private func submit() {
+        guard canSubmit else { return }
+        let owner = session.ownership
+        let recover = checking
+        sending = true
+        error = nil
+        Task {
+            defer { sending = false }
+            guard owner == session.ownership else { return }
+            do {
+                let team = if recover { try await session.checkMateTeamCreation() }
+                else { try await session.createMateTeam(name: name) }
+                guard owner == session.ownership else { return }
+                select(team)
+                dismiss()
+            } catch {
+                if owner == session.ownership { self.error = error.localizedDescription }
+            }
+        }
+    }
+}
+
+struct MateProfileEditor: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let mate: Mate
+    let teams: [MateTeam]
+    let original: MateEditableProfile
+    @State private var profile: MateEditableProfile
+    @State private var team: MateTeamSelection
+    @State private var settings: ComposerSettings
+    @State private var rememberedStyles: [String: String] = [:]
+    @State private var showingTeamEditor = false
+    @State private var previewActive = false
+    private enum Field: Hashable { case name, description, instructions }
+    @FocusState private var focusedField: Field?
+
+    init(session: BackendSession, mate: Mate, original: MateEditableProfile, teams: [MateTeam]) {
+        self.session = session
+        self.mate = mate
+        self.original = original
+        self.teams = teams
+        _profile = State(initialValue: original)
+        _team = State(initialValue: MateTeamSelection(id: mate.teamId))
+        var settings = ComposerSettings(model: mate.model)
+        settings.setEffort(mate.details?.effort ?? "", provider: mate.providerId)
+        _settings = State(initialValue: settings)
+    }
+
+    private var provider: String { mate.providerId }
+    private var models: [ModelChoice] { session.models[provider] ?? [] }
+    private var selectedModel: ModelChoice? { models.first { $0.id == settings.model } }
+    private var originalEffort: String { mate.details?.effort ?? "" }
+    private var canSelectModel: Bool { session.supportsMateModelEditing && !session.mateCommandPending }
 
     private var change: MateChange? {
         var edited = profile
         edited.name = edited.name.trimmingCharacters(in: .whitespacesAndNewlines)
         edited.description = edited.description.trimmingCharacters(in: .whitespacesAndNewlines)
         edited.instructions = edited.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effort = settings.effort(provider: provider)
+        let settingsChanged = settings.model != mate.model || effort != originalEffort
+        let modelChange = settingsChanged
+            ? MateModelChange(model: settings.model, effort: effort, expectedModel: mate.model, expectedEffort: originalEffort)
+            : nil
         guard validText(edited.name, limit: 100), edited.description.utf16.count <= 1000,
-              validText(edited.instructions, limit: 16_000), edited != original || teamID != originalTeamID else { return nil }
-        return .updateProfile(edited, original: original, teamID: teamID, originalTeamID: originalTeamID)
+              validText(edited.instructions, limit: 16_000),
+              !settingsChanged || session.supportsMateModelEditing,
+              edited != original || team.id != mate.teamId || settingsChanged else { return nil }
+        return .updateProfile(edited, original: original, teamID: team.id, originalTeamID: mate.teamId, modelChange: modelChange)
     }
 
     var body: some View {
         NavigationStack {
-            MateEditorForm(session: session, mateID: mateID, title: "Edit Profile", change: change) {
+            MateEditorForm(session: session, mateID: mate.id, title: "Edit Profile", change: change,
+                           avatarBackdrop: profile.avatar, dismissFocus: { focusedField = nil }) {
+                TextField("Mate name", text: $profile.name)
+                    .font(.largeTitle.weight(.semibold).width(.expanded))
+                    .multilineTextAlignment(.center).textInputAutocapitalization(.words)
+                    .focused($focusedField, equals: .name).submitLabel(.done)
+                    .onSubmit { focusedField = nil }
+                    .padding(.horizontal, 24).frame(minHeight: 52)
+                    .accessibilityIdentifier("editMateName")
                 if let catalogue = MateRobotAssets.catalogue {
-                    Section {
-                        MateRobotPicker(catalogue: catalogue, avatar: $profile.avatar, remembered: $rememberedStyles,
-                                        stageHeight: 135, previewActive: true, isSelecting: true)
-                    }
+                    MateRobotPicker(catalogue: catalogue, avatar: $profile.avatar, remembered: $rememberedStyles,
+                                    stageHeight: 215, previewActive: previewActive, isSelecting: true)
+                } else {
+                    MateRobotThumbnail(preset: nil).frame(height: 160)
                 }
-                Section {
-                    TextField("Name", text: $profile.name)
-                    TextField("Description", text: $profile.description, axis: .vertical).lineLimit(2...5)
-                    Picker("Team", selection: $teamID) {
-                        Text("No team").tag(nil as String?)
-                        ForEach(teams) { team in Text(team.name).tag(Optional(team.id)) }
-                        if let teamID, !teams.contains(where: { $0.id == teamID }) {
-                            Text("Unavailable team").tag(Optional(teamID))
-                        }
-                    }
-                }
-                Section {
-                    TextEditor(text: $profile.instructions).frame(minHeight: 120)
-                        .accessibilityLabel("Instructions")
-                } header: {
+                MateTeamPicker(session: session, teams: teams, selection: $team, openEditor: {
+                    focusedField = nil
+                    showingTeamEditor = true
+                }) { name in
+                    mateCreationChoiceLabel(name, icon: "icon:users")
+                }.frame(maxWidth: 230).padding(.horizontal, 24)
+                modelOptions
+                VStack(alignment: .leading, spacing: 16) {
+                    MateSectionHeading("Description")
+                    TextField("Description", text: $profile.description, axis: .vertical)
+                        .lineLimit(2...5).focused($focusedField, equals: .description)
+                        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                        .modifier(GlassSurface(radius: 20, interactive: false))
+                        .accessibilityIdentifier("editMateDescription")
                     MateSectionHeading("Instructions")
+                    TextEditor(text: $profile.instructions).frame(minHeight: 120)
+                        .scrollContentBackground(.hidden)
+                        .focused($focusedField, equals: .instructions)
+                        .padding(12).modifier(GlassSurface(radius: 20, interactive: false))
+                        .accessibilityLabel("Instructions")
+                        .accessibilityIdentifier("editMateInstructions")
                 }
+                .padding(.horizontal, 20)
+            }
+            .background(alignment: .center) {
+                MatePickerAppearance(isVisible: $previewActive)
+                    .frame(width: 0, height: 0).allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
+        .task(id: canSelectModel) {
+            if canSelectModel { await session.loadModels(provider) }
+        }
+        .sheet(isPresented: $showingTeamEditor) {
+            MateTeamEditor(session: session) { team.select($0) }
+        }
+    }
+
+    private var modelOptions: some View {
+        VStack(spacing: 8) {
+            Text("Model & Effort").font(.headline.width(.expanded)).accessibilityAddTraits(.isHeader)
+            if session.supportsMateModelEditing {
+                ModelEffortPicker(providerID: provider, models: models, model: selectedModel, settings: settings,
+                                  loading: session.loadingModels.contains(provider), enabled: canSelectModel,
+                                  storedEffortOnly: true, compactWheel: true, error: session.modelErrors[provider],
+                                  canRetry: canSelectModel, retry: { Task { await session.loadModels(provider, force: true) } },
+                                  selectModel: { model in
+                                      focusedField = nil
+                                      settings = mateSettings(settings, selecting: model, provider: provider)
+                                  }, updateEffort: { settings = $0 })
+            } else {
+                Text(mate.model + " · " + ComposerSettings.effortLabel(originalEffort, provider: provider))
+                Text("Update Mains on your computer to change the model and effort.")
+                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
             }
         }
     }
@@ -245,8 +482,10 @@ struct MateMemoryEditor: View {
                 Section {
                     TextField("Title", text: $note.title)
                     Toggle("Pinned", isOn: $note.pinned)
+                        .tint(AppBrand.accent)
                     if note.revision == 0, originalTeamID != nil {
                         Toggle("Share with team", isOn: $note.shared)
+                            .tint(AppBrand.accent)
                     } else {
                         LabeledContent("Visibility", value: note.shared ? "Team" : "Private")
                     }
@@ -313,7 +552,7 @@ struct MateTaskEditor: View {
 
 struct MateTaskDetail: View {
     let session: BackendSession
-    let mate: Mate
+    let managingMateID: String?
     let task: MateTask
     let openChat: (String) -> Void
     @State private var showFollowup = false
@@ -325,7 +564,10 @@ struct MateTaskDetail: View {
     var body: some View {
         List {
             Section {
-                Text(task.title).font(.headline).accessibilityAddTraits(.isHeader)
+                Text(task.title)
+                    .font(.headline)
+                    .fontWidth(task.title == "Mate request" ? nil : .expanded)
+                    .accessibilityAddTraits(.isHeader)
                 LabeledContent("Status", value: mateTaskStatus(task.status))
                 if let assignee = task.assignee { LabeledContent("Assigned to", value: assignee.name) }
                 if let id = task.workerRunId {
@@ -354,7 +596,7 @@ struct MateTaskDetail: View {
                 Section {
                     Button("Check Mate change", systemImage: "arrow.clockwise") { perform(nil) }.disabled(!session.isConnected)
                 }
-            } else if mate.ready {
+            } else if managingMateID != nil {
                 actions
             }
         }
@@ -364,7 +606,9 @@ struct MateTaskDetail: View {
             ToolbarItem(placement: .cancellationAction) { MateRecordDoneButton(checkmark: true) }
         }
         .sheet(isPresented: $showFollowup) {
-            NavigationStack { MateTaskEditor(session: session, mateID: mate.id, taskID: task.id) }
+            if let managingMateID {
+                NavigationStack { MateTaskEditor(session: session, mateID: managingMateID, taskID: task.id) }
+            }
         }
         .confirmationDialog("Cancel this assignment?", isPresented: $confirmCancel, titleVisibility: .visible) {
             Button("Cancel Assignment", role: .destructive) { perform(.cancelTask(task.id)) }
@@ -372,7 +616,7 @@ struct MateTaskDetail: View {
     }
 
     @ViewBuilder private var actions: some View {
-        if task.isOpen || (task.status == "completed" && task.error != nil) {
+        if task.hasManagementActions {
             Section {
                 if task.status == "blocked" {
                     Button("Follow Up", systemImage: "arrow.turn.up.right") { showFollowup = true }
@@ -393,8 +637,8 @@ struct MateTaskDetail: View {
             guard owner == session.ownership, session.isConnected else { return }
             do {
                 if let change {
-                    guard canWrite else { return }
-                    try await session.manageMate(mate.id, change: change)
+                    guard canWrite, let managingMateID else { return }
+                    try await session.manageMate(managingMateID, change: change)
                 } else {
                     try await session.checkMateCommand()
                 }

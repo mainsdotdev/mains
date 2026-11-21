@@ -20,6 +20,7 @@ final class DemoBackend {
     private var tools: [String: [[String: JSONValue]]]
     private var turns: [String: [[String: JSONValue]]]
     private var patches: [String: [Int: String]] = [:]
+    private var goals: [String: MobileGoalSummary] = [:]
     private var spaces: [[String: JSONValue]]
     private var images: [Int: JSONValue] = [:]
     private var attachments: [String: DemoFile] = [:]
@@ -56,12 +57,12 @@ final class DemoBackend {
     private static let sampleVoices = ["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"]
 #endif
 
-    private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:fork", "runs:archive", "runs:delete", "runs:moveToCollection", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings",
+    private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:fork", "runs:archive", "runs:delete", "runs:moveToCollection", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings", "providers:changeMobileGoal",
         "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:editMobileBookmark", "atlas:setMobileTrash", "atlas:setMobileTags"]
 
     var pairing: PairedBackend {
         PairedBackend(descriptor: BackendDescriptor(backendId: Self.backendID, name: "Demo Mac",
-                      appVersion: "Demo", protocolVersion: Wire.protocolVersion, capabilities: ["runs","workspace","providers","space","projects","collections"],
+                      appVersion: "Demo", protocolVersion: Wire.protocolVersion, capabilities: ["runs","workspace","providers","space","projects","collections","mobileGoalSummary","mobileGoalControls"],
                       serverTime: Date().ISO8601Format()),
                       endpoints: [Self.endpoint], deviceId: "native-demo-device", deviceToken: "on-device-demo", pairedAt: Date())
     }
@@ -177,7 +178,7 @@ final class DemoBackend {
                 }
                 if channel == "runs:delete" {
                     runs.remove(at: index); tasks.removeValue(forKey: runID)?.cancel(); replays[runID] = nil
-                    artifacts[runID] = nil; tools[runID] = nil; turns[runID] = nil; patches[runID] = nil
+                    artifacts[runID] = nil; tools[runID] = nil; turns[runID] = nil; patches[runID] = nil; goals[runID] = nil
                     push("runs:updated", ["runId": .string(runID)])
                     return .null
                 }
@@ -230,6 +231,29 @@ final class DemoBackend {
 #endif
 
         case "providers:getModels": return seed["models"][first.string ?? ""]
+        case "providers:getMobileGoalSummary":
+            guard let id = first.string, let goal = goals[id] else { return .null }
+            return try .encode(goal)
+        case "providers:changeMobileGoal":
+            guard let id = first.string, let current = goals[id],
+                  runs.contains(where: { $0["id"]?.string == id && $0["isArchived"] != .bool(true) }),
+                  let change = args.dropFirst().first, change["expectedRevision"].string == current.revision else {
+                throw MainsError.server("Couldn’t change this goal. Check its current state and try again.")
+            }
+            switch change["action"].string {
+            case "edit" where current.status != "complete":
+                guard let objective = change["objective"].string, !objective.isEmpty, objective.unicodeScalars.count <= 2048 else { throw MainsError.invalidReply }
+                setGoal(id, objective: objective, status: current.status)
+            case "pause" where current.status == "active":
+                setGoal(id, objective: current.objective, status: "paused", truncated: current.objectiveTruncated == true)
+            case "resume" where current.status == "paused":
+                setGoal(id, objective: current.objective, status: "active", truncated: current.objectiveTruncated == true)
+            case "clear":
+                goals[id] = nil
+                push("providers:mobileGoalChanged", ["runId": .string(id)])
+            default: throw MainsError.server("This goal cannot be changed right now.")
+            }
+            return .object(["applied": .bool(true)])
         case "providers:getSkills":
             guard seed["providers"].array.contains(where: { $0["id"].string == first.string }) else { throw MainsError.server("Choose a demo provider.") }
             return .object(["skills": .array(DemoContext.skills(workspace: args.dropFirst().first?.string != nil))])
@@ -435,6 +459,13 @@ final class DemoBackend {
         try recordPrompt(runID, prompt: prompt, files: files, promptMetadata: promptMetadata)
         if let index = runs.firstIndex(where: { $0["id"]?.string == runID }) {
             runs[index]["status"] = .string("running"); runs[index]["updatedAt"] = Self.now; runs[index]["endedAt"] = .null
+            let run = JSONValue.object(runs[index])
+            let objective = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if run["providerId"].string == "codex", run["mode"].string != "chat",
+               run["configSnapshot"]["conversationSettings"]["config"]["goalMode"].bool, !objective.isEmpty,
+               goals[runID] == nil || goals[runID]?.status == "complete" {
+                setGoal(runID, objective: objective, status: "active")
+            }
             let count = turns[runID]?.count ?? 0
             turns[runID, default: []].append(["id": .number(Double(takeID())), "turnIndex": .number(Double(count)),
                 "status": .string("active"), "model": runs[index]["model"] ?? .null, "startedAt": Self.now, "createdAt": Self.now])
@@ -608,7 +639,18 @@ final class DemoBackend {
             turns[runID]![last]["status"] = .string(status == "succeeded" ? "completed" : "canceled")
             turns[runID]![last]["endedAt"] = Self.now
         }
+        if status == "succeeded", let goal = goals[runID], goal.status == "active" {
+            setGoal(runID, objective: goal.objective, status: "complete", truncated: goal.objectiveTruncated == true)
+        }
         push("runs:statusChanged", ["runId": .string(runID), "status": .string(status)])
+    }
+
+    private func setGoal(_ runID: String, objective: String, status: String, truncated: Bool = false) {
+        let revision = SHA256.hash(data: Data(UUID().uuidString.utf8)).map { String(format: "%02x", $0) }.joined()
+        let text = String(objective.unicodeScalars.prefix(2048))
+        goals[runID] = MobileGoalSummary(objective: text, status: status, tokensUsed: nil, timeUsedSeconds: nil,
+                                         revision: revision, objectiveTruncated: truncated || text != objective)
+        push("providers:mobileGoalChanged", ["runId": .string(runID)])
     }
 
     private func decisionScenario() -> [Step] {
@@ -739,7 +781,7 @@ final class DemoBackend {
             guard let index = runs.indices.filter({ runs[$0]["id"]?.string != Self.tourID && runs[$0]["status"]?.string != "running" })
                 .min(by: { time(runs[$0], "updatedAt") < time(runs[$1], "updatedAt") }),
                   let id = runs[index]["id"]?.string else { return }
-            runs.remove(at: index); artifacts[id] = nil; tools[id] = nil; turns[id] = nil; patches[id] = nil
+            runs.remove(at: index); artifacts[id] = nil; tools[id] = nil; turns[id] = nil; patches[id] = nil; goals[id] = nil
             let keys = attachments.keys.filter { $0.hasPrefix(id + ":") }
             for key in keys { if let file = attachments.removeValue(forKey: key) { attachmentBytes -= file.bytes.count } }
         }

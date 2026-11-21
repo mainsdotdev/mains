@@ -175,9 +175,9 @@ export const assistantsMobile = {
         assistantsService.requireForWork(mate.id, accountId);
         switch (action) {
             case "updateProfile": {
-                onlyKeys(value, ["action", "profile", "expectedProfile", "teamChange"]);
+                onlyKeys(value, ["action", "profile", "expectedProfile", "teamChange", "modelChange"]);
                 const { action: _action, ...profile } = value;
-                assistantsService.updateProfile({ ...profile, accountId, id: mate.id });
+                await assistantsService.updateProfile({ ...profile, accountId, id: mate.id }, assistantWork.guard());
                 return;
             }
             case "saveMemory": {

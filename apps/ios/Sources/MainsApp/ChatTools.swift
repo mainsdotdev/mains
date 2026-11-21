@@ -185,11 +185,11 @@ private struct ToolBody: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let input, !input.isEmpty {
-                Text("Input").font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                Text("Input").font(.caption2.weight(.medium).width(.expanded)).foregroundStyle(.secondary)
                 preview(input)
             }
             if !text.isEmpty {
-                if input != nil { Text(error ? "Error" : "Output").font(.caption2.weight(.medium)).foregroundStyle(.secondary) }
+                if input != nil { Text(error ? "Error" : "Output").font(.caption2.weight(.medium).width(.expanded)).foregroundStyle(.secondary) }
                 preview(text, diff: diff, command: command, error: error)
             }
         }

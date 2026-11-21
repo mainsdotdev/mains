@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum ComposerPicker: Hashable {
-    case model, runOptions
+    case model, runOptions, target
 }
 
 struct ComposerPickerSourceFrames: PreferenceKey {
@@ -20,9 +20,9 @@ extension View {
         }
     }
 
-    func composerPickers(model: Binding<Bool>, options: Binding<Bool>, session: BackendSession,
+    func composerPickers(model: Binding<Bool>, options: Binding<Bool>, target: Binding<Bool> = .constant(false), session: BackendSession,
                          context: ComposerContext?, withinPane: Bool = false) -> some View {
-        modifier(ComposerPickers(model: model, options: options, session: session, context: context, withinPane: withinPane))
+        modifier(ComposerPickers(model: model, options: options, target: target, session: session, context: context, withinPane: withinPane))
     }
 }
 
@@ -32,6 +32,7 @@ private struct ComposerPickers: ViewModifier {
     #endif
     @Binding var model: Bool
     @Binding var options: Bool
+    @Binding var target: Bool
     let session: BackendSession
     let context: ComposerContext?
     let withinPane: Bool
@@ -39,7 +40,7 @@ private struct ComposerPickers: ViewModifier {
     @Environment(\.conversationPaneVisible) private var paneVisible
 
     func body(content: Content) -> some View {
-        let picker: ComposerPicker? = model ? .model : options ? .runOptions : nil
+        let picker: ComposerPicker? = model ? .model : options ? .runOptions : target ? .target : nil
         content
             .onPreferenceChange(ComposerPickerSourceFrames.self) { sourceFrames = $0 }
             .onChange(of: paneVisible) { _, visible in
@@ -49,10 +50,11 @@ private struct ComposerPickers: ViewModifier {
                 if let picker, let context {
                     ComposerPickerPanel(sourceFrame: sourceFrames[picker] ?? .zero,
                                         currentSourceFrame: { sourceFrames[picker] ?? .zero },
-                                        close: { if picker == .model { model = false } else { options = false } }) { close, closing in
+                                        close: { dismiss(picker) }) { close, closing in
                         switch picker {
                         case .model: EffortOverlayView(session: session, context: context, closing: closing, close: close)
                         case .runOptions: RunOptionsSheet(session: session, context: context, closing: closing, close: close)
+                        case .target: HomeTargetPicker(session: session, context: context, closing: closing, close: close)
                         }
                     }
                     .id("\(picker):\(session.ownership):\(context.providerId):\(context.spaceID ?? ""):\(context.runID ?? "")")
@@ -61,6 +63,14 @@ private struct ComposerPickers: ViewModifier {
                     .accessibilityAddTraits(.isModal)
                 }
             }
+    }
+
+    private func dismiss(_ picker: ComposerPicker) {
+        switch picker {
+        case .model: model = false
+        case .runOptions: options = false
+        case .target: target = false
+        }
     }
 }
 

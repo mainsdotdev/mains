@@ -9,7 +9,7 @@ struct HomeView: View {
     let openComputer: () -> Void
     let openPairing: () -> Void
     let onCreated: (String) -> Void
-    @State private var targetSheet = false
+    @State private var targetPicker = false
     @State private var modelSheet = false
     @State private var optionsSheet = false
     @State private var consent: ConsentContext?
@@ -53,16 +53,18 @@ struct HomeView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let space {
-                HomeComposerArea(session: session, space: space, targetSheet: $targetSheet, modelSheet: $modelSheet,
+                HomeComposerArea(session: session, space: space, targetPicker: $targetPicker, modelSheet: $modelSheet,
                                  optionsSheet: $optionsSheet, consent: $consent, onCreated: onCreated)
                     .id(space.id)
             } else if session.pairing == nil {
                 UnpairedHomeArea(session: session, pair: openPairing)
             }
         }
-        .sheet(isPresented: $targetSheet) { if let space { TargetSheet(session: session, space: space) } }
-        .composerPickers(model: $modelSheet, options: $optionsSheet, session: session,
+        .composerPickers(model: $modelSheet, options: $optionsSheet, target: $targetPicker, session: session,
                          context: space.map { ComposerContext(space: $0) })
+        .onChange(of: session.ownership) { _, _ in targetPicker = false }
+        .onChange(of: space?.id) { _, _ in targetPicker = false }
+        .onChange(of: space?.mode) { _, _ in targetPicker = false }
         .task(id: "\(space?.providerId ?? ""):\(session.isConnected)") {
             if let space { await session.loadModels(space.providerId, force: true) }
         }
@@ -71,7 +73,8 @@ struct HomeView: View {
     @ViewBuilder private var homeContent: some View {
         Spacer(minLength: 20)
         if session.pairing != nil && space == nil && !session.connection.isBusy {
-            ContentUnavailableView("Choose a space", systemImage: "square.grid.2x2", description: Text("Open the sidebar to choose where to start."))
+            EmptyStateView(artwork: .spaces, title: "Choose a space",
+                           description: Text("Open the sidebar to choose where to start."))
         } else if let space, session.isConnected, !session.homeDraft(for: space.id).hasContent {
             ViewThatFits(in: .vertical) {
                 Text(welcomeTitle(for: space.mode))
@@ -148,7 +151,7 @@ private struct HomeComposerArea: View {
     #endif
     let session: BackendSession
     let space: Space
-    @Binding var targetSheet: Bool
+    @Binding var targetPicker: Bool
     @Binding var modelSheet: Bool
     @Binding var optionsSheet: Bool
     @Binding var consent: ConsentContext?
@@ -161,9 +164,9 @@ private struct HomeComposerArea: View {
     private var uncertain: Bool { session.pendingMessage?.status == .uncertain }
     private var ready: Bool { session.isConnected && !session.changingMode && !session.sending && !uncertain && session.pendingFork == nil && session.pendingConversationAction == nil }
     private var targetReady: Bool { space.mode != "developer" || workspace != nil && session.gitStates.first(where: { $0.workspaceId == workspace?.id })?.pathExists != false }
-    init(session: BackendSession, space: Space, targetSheet: Binding<Bool>, modelSheet: Binding<Bool>, optionsSheet: Binding<Bool>,
+    init(session: BackendSession, space: Space, targetPicker: Binding<Bool>, modelSheet: Binding<Bool>, optionsSheet: Binding<Bool>,
          consent: Binding<ConsentContext?>, onCreated: @escaping (String) -> Void) {
-        self.session = session; self.space = space; _targetSheet = targetSheet; _modelSheet = modelSheet; _optionsSheet = optionsSheet
+        self.session = session; self.space = space; _targetPicker = targetPicker; _modelSheet = modelSheet; _optionsSheet = optionsSheet
         _consent = consent; self.onCreated = onCreated; draft = session.homeDraft(for: space.id)
     }
     var body: some View {
@@ -217,7 +220,7 @@ private struct HomeComposerArea: View {
                 }
             } else if let failure = draft.failure {
                 ChatNotice(title: draft.failureTitle, message: failure, symbol: "exclamationmark.circle", warning: true) {
-                    if !targetReady { Button("Choose a workspace") { targetSheet = true }.accessibilityIdentifier("chooseRequiredWorkspace") }
+                    if !targetReady { Button("Choose a workspace") { targetPicker = true }.accessibilityIdentifier("chooseRequiredWorkspace") }
                     if let unsent = draft.unsentText {
                         Button("Copy unsent message") { UIPasteboard.general.string = unsent }
                         if !draft.unsentAttachments.isEmpty { Button("Use failed message and files") { draft.restoreUnsent() } }
@@ -225,7 +228,7 @@ private struct HomeComposerArea: View {
                     Button("Dismiss") { draft.dismissFailure() }
                 }
             }
-            Button { targetSheet = true } label: {
+            Button { targetPicker = true } label: {
                 HStack(spacing: 8) {
                     if space.mode == "developer" {
                         RegistryIcon(token: workspaceIcon, size: 15)
@@ -238,6 +241,7 @@ private struct HomeComposerArea: View {
                 .foregroundStyle(.primary).padding(.horizontal, 14).frame(minHeight: 36)
             }
             .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 20))
+            .composerPickerSource(.target)
             .disabled(!ready).padding(.horizontal, 16).accessibilityIdentifier("chooseTarget")
             MessageComposer(session: session, context: ComposerContext(space: space), draft: draft, canSend: ready,
                          model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend, voiceCreated: onCreated)

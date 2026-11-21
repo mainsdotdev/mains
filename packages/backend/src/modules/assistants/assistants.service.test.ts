@@ -610,12 +610,12 @@ describe("assistant profiles and shared knowledge", () => {
         const { runId } = await assistantWork.sendChat("default", assistant.id, "Prepare release", "profile-first-turn");
         await settled(runId);
 
-        expect(() => assistantsService.updateProfile({ ...input, accountId: "another-account" })).toThrow("unavailable");
-        expect(() => assistantsService.updateProfile({ ...input, profile: { ...profile, model: "different" } })).toThrow("Unknown assistant field: model");
-        const updated = assistantsService.updateProfile(input);
+        await expect(assistantsService.updateProfile({ ...input, accountId: "another-account" })).rejects.toThrow("unavailable");
+        await expect(assistantsService.updateProfile({ ...input, profile: { ...profile, model: "different" } })).rejects.toThrow("Unknown assistant field: model");
+        const updated = await assistantsService.updateProfile(input);
         expect(updated).toEqual({ ...assistant, ...profile, updatedAt: expect.any(Date) });
-        expect(assistantsService.updateProfile(input)).toEqual(updated);
-        expect(() => assistantsService.updateProfile({ ...input, profile: { ...profile, instructions: "Stale instructions." } })).toThrow("profile changed");
+        await expect(assistantsService.updateProfile(input)).resolves.toEqual(updated);
+        await expect(assistantsService.updateProfile({ ...input, profile: { ...profile, instructions: "Stale instructions." } })).rejects.toThrow("profile changed");
 
         await assistantWork.sendChat("default", assistant.id, "Check the release again", "profile-next-turn", runId);
         await settled(runId);
@@ -633,18 +633,48 @@ describe("assistant profiles and shared knowledge", () => {
         const profile = { ...expectedProfile, instructions: "Verify signing first." };
         const input = { id, accountId, expectedProfile, profile, teamChange: { teamId: destination.id, expectedTeamId: teamId } };
 
-        expect(() => assistantsService.updateProfile({ ...input, teamChange: { ...input.teamChange, teamId: "missing" } })).toThrow("Team not found");
-        expect(() => assistantsService.updateProfile({ ...input, teamChange: { ...input.teamChange, expectedTeamId: null } })).toThrow("team changed");
+        await expect(assistantsService.updateProfile({ ...input, teamChange: { ...input.teamChange, teamId: "missing" } })).rejects.toThrow("Team not found");
+        await expect(assistantsService.updateProfile({ ...input, teamChange: { ...input.teamChange, expectedTeamId: null } })).rejects.toThrow("team changed");
         createRun(db, { id: "active-edit-chat", assistantId: id, status: "running" });
-        expect(() => assistantsService.updateProfile(input)).toThrow("running conversations");
+        await expect(assistantsService.updateProfile(input)).rejects.toThrow("running conversations");
         expect(assistantsService.get(id, accountId)).toEqual(assistant);
         expect(assistantsRepo.memory(note.id)).toMatchObject({ teamId, revision: note.revision });
 
         db.update(runs).set({ status: "succeeded" }).where(eq(runs.id, "active-edit-chat")).run();
-        const saved = assistantsService.updateProfile(input);
+        const saved = await assistantsService.updateProfile(input);
         expect(saved).toEqual({ ...assistant, ...profile, teamId: destination.id, updatedAt: expect.any(Date) });
-        expect(assistantsService.updateProfile(input)).toEqual(saved);
+        await expect(assistantsService.updateProfile(input)).resolves.toEqual(saved);
         expect(assistantsRepo.memory(note.id)).toMatchObject({ teamId: destination.id, revision: note.revision + 1 });
+    });
+    it("saves validated model and effort changes with the profile and uses them for new Mate chats", async () => {
+        assistantWork.start();
+        const mate = await makeAssistant("Release");
+        const { id, accountId, name, description, instructions, avatar } = mate;
+        const expectedProfile = { name, description, instructions, avatar };
+        const { runId } = await assistantWork.sendChat(accountId, id, "Initial review", "before-model-edit");
+        await settled(runId);
+        vi.mocked(providersService.getModels).mockResolvedValue([{ id: "next-model", displayName: "Next model", supportedEffortLevels: ["low"] }]);
+        const change = {
+            action: "updateProfile", expectedProfile, profile: { ...expectedProfile, description: "Release review" },
+            modelChange: { model: "next-model", effort: "low", expectedModel: mate.model, expectedEffort: mate.effort },
+        };
+        await expect(assistantsMobile.manage(accountId, id, {
+            ...change, modelChange: { ...change.modelChange, effort: "high" },
+        }, "invalid-mate-effort")).rejects.toThrow("does not support");
+        await expect(assistantsMobile.manage(accountId, id, {
+            ...change, modelChange: { ...change.modelChange, expectedEffort: "medium" },
+        }, "stale-mate-settings")).rejects.toThrow("model or effort changed");
+        expect(assistantsService.get(id, accountId)).toEqual(mate);
+
+        await assistantsMobile.manage(accountId, id, change, "mate-settings");
+        expect(assistantsService.get(id, accountId)).toMatchObject({
+            description: "Release review", model: "next-model", effort: "low",
+            conversationSettings: { model: "next-model", config: { ...mate.conversationSettings.config, modelReasoningEffort: "low" } },
+        });
+        const next = await assistantWork.sendChat(accountId, id, "Next review", "after-model-edit");
+        await settled(next.runId);
+        expect(await runsService.getRunById(next.runId)).toMatchObject({ model: "next-model", configSnapshot: { modelReasoningEffort: "low" } });
+        expect(await runsService.getRunById(runId)).toMatchObject({ model: mate.model, configSnapshot: { modelReasoningEffort: mate.effort } });
     });
     it("projects direct and delegated running conversations into account-scoped avatar activity", async () => {
         const assistant = await makeAssistant("Coordinator"), idle = await makeAssistant("Idle");

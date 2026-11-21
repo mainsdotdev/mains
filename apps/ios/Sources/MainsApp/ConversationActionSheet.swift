@@ -7,48 +7,18 @@ struct ConversationProjectSheet: View {
     let session: BackendSession
     let runID: String
     let owner: Int
-    @State private var query = ""
     @State private var error: String?
     @State private var active = true
     @Environment(\.dismiss) private var dismiss
-    private var current: String? { session.conversations.first { $0.id == runID }?.collectionId }
-    private var projects: [ProjectCollection] {
-        session.collections.filter { !$0.isArchived && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)) }
-    }
     var body: some View {
-        NavigationStack {
-            List {
-                if let error { Text(error).foregroundStyle(.red).font(.subheadline) }
-                Button { move(nil) } label: {
-                    HStack {
-                        Label("No project", systemImage: "tray")
-                        Spacer()
-                        if current == nil { Image(systemName: "checkmark").foregroundStyle(.secondary) }
-                    }.contentShape(.rect)
-                }.disabled(!canMove || current == nil).accessibilityIdentifier("moveChatNoProject")
-                Section("Projects") {
-                    ForEach(projects) { project in
-                        Button { move(project.id) } label: {
-                            HStack(spacing: 10) {
-                                RegistryIcon(token: project.icon, fallback: "folder", size: 20)
-                                Text(project.name).foregroundStyle(.primary)
-                                Spacer()
-                                if current == project.id { Image(systemName: "checkmark").foregroundStyle(.secondary) }
-                            }.contentShape(.rect)
-                        }.disabled(!canMove || current == project.id).accessibilityIdentifier("moveChatProject-" + project.id)
-                    }
-                    if projects.isEmpty { Text(query.isEmpty ? "No projects yet." : "No matching projects.").foregroundStyle(.secondary) }
-                }
-            }
-            .navigationHeaderFade(background: Color(.systemGroupedBackground))
-            .navigationTitle("Move to project").navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, prompt: "Search projects")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-            .safeAreaInset(edge: .bottom) {
-                if session.pendingConversationAction?.runID == runID { ConversationActionDeliveryNotice(session: session) }
-            }
-            .task { if owner == session.ownership { await session.refresh() } }
+        MoveToProjectSheet(projects: session.collections,
+                           selectedProjectID: session.conversations.first { $0.id == runID }?.collectionId,
+                           canMove: canMove, error: error,
+                           rowIdentifier: { $0.map { "moveChatProject-" + $0 } ?? "moveChatNoProject" },
+                           move: move) {
+            if session.pendingConversationAction?.runID == runID { ConversationActionDeliveryNotice(session: session) }
         }
+        .task { if owner == session.ownership { await session.refresh() } }
         .onChange(of: session.ownership) { _, _ in dismiss() }
         .onDisappear { active = false }
         .accessibilityIdentifier("moveChatProjectSheet")
@@ -70,6 +40,70 @@ struct ConversationProjectSheet: View {
                 }
             }
         }
+    }
+}
+
+struct MoveToProjectSheet<Status: View>: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let projects: [ProjectCollection]
+    let selectedProjectID: String?
+    var isSelectionKnown = true
+    let canMove: Bool
+    let error: String?
+    let rowIdentifier: (String?) -> String
+    let move: (String?) -> Void
+    @ViewBuilder let status: () -> Status
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    private var visibleProjects: [ProjectCollection] {
+        projects.filter { !$0.isArchived && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let error { Text(error).foregroundStyle(.red).font(.subheadline) }
+                destination(nil, spacing: nil) {
+                    Label("No project", systemImage: "tray")
+                }
+                Section {
+                    ForEach(visibleProjects) { project in
+                        destination(project.id, spacing: 10) {
+                            RegistryIcon(token: project.icon, fallback: "folder", size: 20)
+                            Text(project.name).foregroundStyle(.primary)
+                        }
+                    }
+                    if visibleProjects.isEmpty {
+                        Text(query.isEmpty ? "No projects yet." : "No matching projects.").foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Projects").fontWidth(.expanded)
+                }
+            }
+            .navigationHeaderFade(background: Color(.systemGroupedBackground))
+            .expandedNavigationTitle("Move to project")
+            .searchable(text: $query, prompt: "Search projects")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .safeAreaInset(edge: .bottom, content: status)
+        }
+    }
+
+    private func destination<Label: View>(_ id: String?, spacing: CGFloat?,
+                                          @ViewBuilder label: () -> Label) -> some View {
+        let selected = isSelectionKnown && selectedProjectID == id
+        return Button { move(id) } label: {
+            HStack(spacing: spacing) {
+                label()
+                Spacer()
+                if selected { Image(systemName: "checkmark").foregroundStyle(.secondary).accessibilityHidden(true) }
+            }.contentShape(.rect)
+        }
+        .disabled(!canMove || selected)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier(rowIdentifier(id))
     }
 }
 

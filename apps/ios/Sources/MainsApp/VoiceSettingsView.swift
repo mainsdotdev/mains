@@ -20,8 +20,8 @@ struct VoiceSettingsView: View {
     var body: some View {
         List {
             Section {
-                if session.loadingVoiceSettings {
-                    HStack(spacing: 12) { ProgressView(); Text("Loading voices…").foregroundStyle(.secondary) }
+                if session.loadingVoiceSettings && choices.isEmpty {
+                    ContentLoadingView(title: "Loading voices…").listRow
                 }
                 if !session.isConnected {
                     Label("Connect to your computer to change voices.", systemImage: "wifi.slash")
@@ -49,7 +49,7 @@ struct VoiceSettingsView: View {
                     voiceRow(voice)
                 }
             } header: {
-                Text("Voice")
+                Text("Voice").fontWidth(.expanded)
             } footer: {
                 Text("Saved with Codex on your computer. Changes apply to your next voice conversation.")
             }
@@ -64,8 +64,7 @@ struct VoiceSettingsView: View {
             }
         }
         .navigationHeaderFade(background: Color(.systemGroupedBackground))
-        .navigationTitle("Voices")
-        .navigationBarTitleDisplayMode(.inline)
+        .expandedNavigationTitle("Voices")
         .toolbar(.visible, for: .navigationBar)
         .task(id: session.isConnected) { if session.isConnected { await session.loadVoiceSettings() } }
         .onChange(of: session.ownership) { _, _ in preview.stop(); dismiss() }

@@ -122,7 +122,7 @@ struct TurnFileDiffView: View {
                     } else if let error {
                         message(error)
                         Button("Try again") { attempt += 1 }.frame(minHeight: 44).accessibilityIdentifier("retryFileDiff")
-                    } else { ProgressView("Loading file diff…").frame(maxWidth: .infinity).padding(.vertical, 24) }
+                    } else { ContentLoadingView(title: "Loading file diff…") }
                 }.padding(.horizontal, 16).padding(.bottom, 20)
             }.accessibilityIdentifier("fileDiffContent")
                 .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -146,8 +146,8 @@ struct TurnFileDiffView: View {
         }
         .background(Color(.systemBackground))
         .navigationHeaderFade()
-        .navigationTitle(selection.file.path.split(separator: "/").last.map(String.init) ?? "File diff")
-        .navigationBarTitleDisplayMode(.inline).toolbarRole(.editor)
+        .expandedNavigationTitle(selection.file.path.split(separator: "/").last.map(String.init) ?? "File diff")
+        .toolbarRole(.editor)
         .navigationBarBackButtonHidden()
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {

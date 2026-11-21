@@ -30,13 +30,23 @@ struct AtlasBookmarkEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                if loading { HStack(spacing: 12) { ProgressView(); Text("Loading bookmark…").foregroundStyle(.secondary) } }
+                if loading { ContentLoadingView(title: "Loading bookmark…").listRow }
                 if let original {
-                    Section("Link") { Text(original.url).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled) }
+                    Section {
+                        Text(original.url).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                    } header: {
+                        Text("Link").fontWidth(.expanded)
+                    }
                     Group {
-                        Section("Title") { TextField("Title", text: $draft.title).accessibilityIdentifier("editBookmarkTitle") }
-                        Section("Description") { TextField("Description", text: $draft.description, axis: .vertical).lineLimit(2...6).accessibilityIdentifier("editBookmarkDescription") }
-                        Section("Note") { TextEditor(text: $draft.note).frame(minHeight: 160).accessibilityIdentifier("editBookmarkNote") }
+                        Section {
+                            TextField("Title", text: $draft.title).accessibilityIdentifier("editBookmarkTitle")
+                        } header: { Text("Title").fontWidth(.expanded) }
+                        Section {
+                            TextField("Description", text: $draft.description, axis: .vertical).lineLimit(2...6).accessibilityIdentifier("editBookmarkDescription")
+                        } header: { Text("Description").fontWidth(.expanded) }
+                        Section {
+                            TextEditor(text: $draft.note).frame(minHeight: 160).accessibilityIdentifier("editBookmarkNote")
+                        } header: { Text("Note").fontWidth(.expanded) }
                     }.disabled(loading || saving || session.pendingAtlasSave != nil)
                     Section {
                         Button("Edit tags", systemImage: "tag") { tagEdit = AtlasTagEditSelection(itemID: original.id, owner: selection.owner) }
@@ -61,7 +71,7 @@ struct AtlasBookmarkEditor: View {
                 }
             }
             .navigationHeaderFade(background: Color(.systemGroupedBackground))
-            .navigationTitle("Edit bookmark").navigationBarTitleDisplayMode(.inline)
+            .expandedNavigationTitle("Edit bookmark")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

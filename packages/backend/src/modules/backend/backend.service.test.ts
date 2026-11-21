@@ -119,6 +119,14 @@ describe("backendService", () => {
       expect(descriptor.capabilities).toEqual([]);
     });
 
+    it("advertises the mobile goal summary when the reader is registered", async () => {
+      registerHandler("providers:getMobileGoalSummary", async () => ok(null));
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).toContain("mobileGoalSummary");
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).not.toContain("mobileGoalControls");
+      registerHandler("providers:changeMobileGoal", async () => ok({ applied: true }));
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).toContain("mobileGoalControls");
+    });
+
     it("shows a paired device only the namespaces it may reach", async () => {
       registerHandler("runs:getAll", async () => ok([]));
       registerHandler("runs:execute", async () => ok(null));
@@ -156,6 +164,10 @@ describe("backendService", () => {
       expect(PAIRED_DEVICE_CHANNELS.has("search:conversations")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("search:query")).toBe(false);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:getAll")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("providers:getMobileGoalSummary")).toBe(true);
+      for (const channel of ["providers:getGoal", "providers:setGoal", "providers:clearGoal"]) {
+        expect(PAIRED_DEVICE_CHANNELS.has(channel) || PAIRED_DEVICE_COMMANDS.has(channel)).toBe(false);
+      }
       expect(PAIRED_DEVICE_CHANNELS.has("runs:getQueue")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:publishQueue")).toBe(false);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:readTextFile")).toBe(true);
@@ -169,6 +181,7 @@ describe("backendService", () => {
     it("is exactly the control loop's verbs plus the picker writes, disjoint from the read list", () => {
       expect([...PAIRED_DEVICE_COMMANDS].sort()).toEqual([
         "assistants:create",
+        "assistants:createTeam",
         "assistants:mobileManage",
         "assistants:prepareWelcome",
         "assistants:respondWelcome",
@@ -180,6 +193,7 @@ describe("backendService", () => {
         "atlas:setMobileTags",
         "atlas:setMobileTrash",
         "atlas:updateMobileItem",
+        "providers:changeMobileGoal",
         "providers:updateRunSettings",
         "runs:abort",
         "runs:answerAsyncQuestions",
@@ -488,6 +502,7 @@ describe("PAIRED_DEVICE_EVENTS", () => {
     expect([...PAIRED_DEVICE_EVENTS].sort()).toEqual([
       "assistants:changed",
       "atlas:changed",
+      "providers:mobileGoalChanged",
       "providers:modelsUpdated",
       "providers:skillsUpdated",
       "runs:diffUpdated",

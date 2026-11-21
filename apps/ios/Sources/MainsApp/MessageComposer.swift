@@ -2,6 +2,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct MessageComposer: View {
+    static let horizontalInset: CGFloat = 12
+
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
@@ -40,11 +42,13 @@ struct MessageComposer: View {
     @State private var fileOwner = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.conversationPaneVisible) private var paneVisible
     @Environment(\.mateChatTint) private var mateTint
     @State private var attachmentError: String?
     private var settings: ComposerSettings { context.settings(session) }
     private var selectedModel: ModelChoice? { context.model(session) }
+    private var speed: ComposerSpeed? { ComposerSpeed(model: selectedModel, providerID: context.providerId) }
     #if MAINS_GPT_LIVE
     private var ownsVoice: Bool {
         session.voice.ownsCall && (session.voice.runID == context.runID && context.runID != nil || context.runID == nil && voiceStartOwner == session.ownership)
@@ -66,8 +70,13 @@ struct MessageComposer: View {
             let value = settings.permission(provider: context.providerId)
             return PermissionChoice.title(for: value, provider: context.providerId) ?? "Options"
         }
-        return context.mode == "work" && context.providerId == "codex" || ComposerSpeed(model: selectedModel, providerID: context.providerId) != nil
+        return context.mode == "work" && context.supportsGoalMode || speed != nil
             ? "Options" : nil
+    }
+
+    private var optionsTint: Color {
+        if context.supportsGoalMode && settings.config["goalMode"]?.bool == true { return AppBrand.accent }
+        return speed?.isFast(in: settings) == true ? ComposerSpeed.activeTint(in: colorScheme) : .secondary
     }
     var body: some View {
         VStack(spacing: 8) {
@@ -167,7 +176,10 @@ struct MessageComposer: View {
             }
         }
         .padding(.horizontal, 8).padding(.vertical, compactMatePage ? 4 : 8)
-        .modifier(GlassSurface(radius: 34, interactive: false)).padding(.horizontal, 12)
+        .modifier(GlassSurface(radius: 34, interactive: false))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("messageComposer")
+        .padding(.horizontal, Self.horizontalInset)
         .animation(reduceMotion ? nil : MateComposerLayout.transition, value: expanded)
     }
 
@@ -200,7 +212,7 @@ struct MessageComposer: View {
             .composerPickerSource(.model)
             .disabled(!session.isConnected || session.sending || context.saving(session)).accessibilityIdentifier("chooseModel")
             if let label = optionsLabel {
-                Button(label, action: options).fontWeight(.semibold).frame(minHeight: 44)
+                Button(label, action: options).fontWeight(.semibold).foregroundStyle(optionsTint).frame(minHeight: 44)
                     .fixedSize(horizontal: true, vertical: false).layoutPriority(1)
                     .composerPickerSource(.runOptions)
                     .disabled(!session.isConnected || session.sending || context.saving(session)).accessibilityIdentifier("runOptions")

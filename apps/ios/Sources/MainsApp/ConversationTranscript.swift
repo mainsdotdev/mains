@@ -36,6 +36,9 @@ final class TranscriptScrollState {
 }
 
 struct ConversationTranscript: View {
+    private static let transcriptInset: CGFloat = 16
+    private static let noticeInset = MessageComposer.horizontalInset - transcriptInset
+
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
@@ -100,6 +103,9 @@ struct ConversationTranscript: View {
         let pending = self.pending
         let searchRowID = self.searchRowID
         let isMate = run?.assistantId != nil
+        let empty = rows.isEmpty && pending == nil && run?.isActive != true
+        let needsConnection = empty && !session.isConnected
+        let showsEmptyState = needsConnection || empty && !session.historyLoading && session.historyError == nil
         let sections = TranscriptSection.build(rows, foldsResponses: !isMate)
         let liveSectionID = run?.isActive == true && !session.transcript.isHistorical ? sections.last?.id : nil
         let forkRowID = isMate || run?.isReplica == true ? nil : TranscriptForkAnchor.rowID(
@@ -120,28 +126,13 @@ struct ConversationTranscript: View {
                         .accessibilityIdentifier("loadEarlierMessages")
                 }
                 Color.clear.frame(height: 1).id("transcript-top")
-                if session.historyLoading && rows.isEmpty {
-                    VStack(spacing: 12) {
-                        if isMate {
-                            if let mate { MateActivityAvatar(mate: mate) }
-                            else { Color.clear.frame(height: 34).accessibilityHidden(true) }
-                        } else { ProgressView() }
-                        Text("Loading conversation…").font(.footnote).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 48)
-                } else if rows.isEmpty && pending == nil && session.historyError == nil && run?.isActive != true {
-                    ContentUnavailableView {
-                        Label {
-                            Text(session.isConnected ? "Pick up where you left off" : "Not downloaded yet")
-                                .font(.title2.weight(.medium).width(.expanded))
-                                .accessibilityAddTraits(.isHeader)
-                        } icon: {
-                            Image(systemName: session.isConnected ? "bubble.left.and.bubble.right" : "wifi.slash")
-                        }
-                    } description: {
-                        Text(session.isConnected ? "Send a message to continue with \(Provider.name(providerID))." : "Reconnect to your computer to load this conversation.")
-                    }
-                    .padding(.vertical, 24)
+                if needsConnection {
+                    DisconnectedState(title: "Not downloaded yet", message: "Reconnect to your computer to load this conversation.")
+                } else if session.historyLoading && rows.isEmpty {
+                    ContentLoadingView(title: "Loading conversation…").padding(.vertical, 24)
+                } else if empty && session.historyError == nil {
+                    EmptyStateView(artwork: .chats, title: "Pick up where you left off",
+                                   description: Text("Send a message to continue with \(Provider.name(providerID))."))
                 }
                 ForEach(sections) { section in
                     VStack(alignment: .leading, spacing: 12) {
@@ -166,8 +157,9 @@ struct ConversationTranscript: View {
                     }.buttonStyle(ChatPressStyle()).disabled(!session.isConnected)
                         .accessibilityIdentifier("moreConversationActivity")
                 }
-                if let error = session.historyError {
-                    ChatNotice(title: "Messages couldn't load", message: error, symbol: "wifi.exclamationmark", warning: true) {
+                if !needsConnection, let error = session.historyError {
+                    ChatNotice(title: "Messages couldn't load", message: error, symbol: "wifi.exclamationmark", warning: true,
+                               horizontalInset: Self.noticeInset) {
                         Button("Retry") { navigate(session.historyRetryDirection) }
                             .disabled(!session.isConnected || session.historyLoading || scroll.paging)
                     }
@@ -181,10 +173,9 @@ struct ConversationTranscript: View {
                 Color.clear.frame(height: 1).id("transcript-bottom")
             }
             .scrollTargetLayout()
-            .padding(.horizontal, 16).padding(.top, 24).padding(.bottom, 12)
-            // Short conversations still need a tappable blank area below the
-            // messages. Keep the content top-aligned and leave controls above it.
-            .frame(minHeight: minimumHeight, alignment: .top)
+            .padding(.horizontal, Self.transcriptInset).padding(.top, 24).padding(.bottom, 12)
+            // Keep a tappable blank area around short conversations to dismiss the keyboard.
+            .frame(minHeight: minimumHeight, alignment: showsEmptyState ? .center : .top)
             .background(alignment: .center) { KeyboardDismissBackground() }
             .coordinateSpace(name: "transcript-content")
             .animation(nil, value: rows)
@@ -252,7 +243,8 @@ struct ConversationTranscript: View {
                     navigate("latest")
                 } label: {
                     Image(systemName: "arrow.down").font(.system(size: 22, weight: .regular))
-                        .frame(width: 40, height: 40).modifier(GlassSurface(radius: 20))
+                        .frame(width: 40, height: 40)
+                        .background(Color(.secondarySystemBackground), in: .circle)
                 }
                 .buttonStyle(ChatPressStyle())
                 .accessibilityLabel("Jump to latest").accessibilityIdentifier("jumpToLatest")
@@ -265,6 +257,7 @@ struct ConversationTranscript: View {
         }
         .sheet(item: $activitySelection) { selection in
             ConversationActivitySheet(session: session, selection: selection, isMate: isMate)
+                .environment(\.openMateAssignment, nil)
         }
     }
 
@@ -287,7 +280,9 @@ struct ConversationTranscript: View {
         } else if run?.status == "canceled" {
             ChatActivity(title: "Reply stopped", symbol: "stop.circle", busy: false)
         } else if run?.status == "failed", run?.archivedReplyError == nil {
-            ChatNotice(title: "Reply interrupted", message: run?.lastError ?? "You can send a follow-up to continue.", symbol: "exclamationmark.circle", warning: true) { EmptyView() }
+            ChatNotice(title: "Reply interrupted", message: run?.lastError ?? "You can send a follow-up to continue.",
+                       symbol: "exclamationmark.circle", warning: true, horizontalInset: Self.noticeInset) { EmptyView() }
+                .accessibilityIdentifier("replyInterruptedNotice")
         }
     }
 
@@ -384,7 +379,7 @@ private struct ConversationActivitySheet: View {
                     ForEach(TranscriptGroup.build(rows)) { group in
                         if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, isMate: isMate) }
                         else if let row = group.rows.first {
-                            if row.id.hasPrefix("child-artifact:") { Text("Agent message").font(.caption).foregroundStyle(.secondary) }
+                            if row.id.hasPrefix("child-artifact:") { Text("Agent message").font(.caption.width(.expanded)).foregroundStyle(.secondary) }
                             ChatMessage(session: session, row: row, providerID: "", readContent: { if valid { fullMessage = ActivityMessageReference(id: $0) } },
                                         isMate: isMate)
                         }
@@ -393,7 +388,7 @@ private struct ConversationActivitySheet: View {
                 }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
             }
             .id(page?.start).defaultScrollAnchor(.top)
-            .overlay { if loading { ProgressView() } }
+            .overlay { if loading && rows.isEmpty { ContentLoadingView(title: "Loading conversation activity…") } }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 8) {
                     if let error {
@@ -408,7 +403,7 @@ private struct ConversationActivitySheet: View {
                 }.font(.subheadline).padding().background(.bar)
             }
             .navigationHeaderFade()
-            .navigationTitle("Messages and activity").navigationBarTitleDisplayMode(.inline)
+            .expandedNavigationTitle("Messages and activity")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task { await load("refresh") }
             .sheet(item: $fullMessage) { item in if valid { NavigationStack { FullMessageView(session: session, artifactID: item.id) } } }

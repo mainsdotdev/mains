@@ -11,6 +11,11 @@ import Testing
     var failSendAfter = false
     var overrideSkills: JSONValue?
     var supportsMates = false
+    var supportsMateInfo = false
+    var mateTaskAssignee: JSONValue = .object([
+        "id": .string("reviewer"), "name": .string("Reviewer"), "isArchived": .bool(false),
+        "avatar": .object(["shape": .string("sphere"), "color": .string("mint")]),
+    ])
     var loseMateCreation = false
     var emit: ((String, JSONValue) -> Void)?
 }
@@ -32,6 +37,24 @@ import Testing
             if faults.loseMateCreation { faults.loseMateCreation = false; throw MainsError.timeout }
             return .object(["id": .string("release")])
         }
+        if faults.supportsMateInfo {
+            switch channel {
+            case "assistants:mobileDirectory":
+                let id = args.dropFirst().first?.string ?? "release"
+                let provider = id == "reviewer" ? "claude_code" : "codex"
+                return .object(["teams": .array([]), "mates": .array([.object([
+                    "id": .string(id), "name": .string(id), "description": .string(""), "providerId": .string(provider),
+                    "model": .string("test-model"), "needsSetup": .bool(false),
+                    "avatar": .object(["shape": .string("sphere"), "color": .string("mint")]),
+                ])])])
+            case "assistants:mobileAssignments":
+                return .object(["id": .string("review"), "title": .string("Review"), "status": .string("blocked"),
+                                "brief": .string("Review the sample"), "evidence": .array([]), "assignee": faults.mateTaskAssignee])
+            case "assistants:mobileManage":
+                return .object(["accepted": .bool(true)])
+            default: break
+            }
+        }
         if channel == "providers:getSkills" {
             let value = faults.overrideSkills
             if faults.delaySkills { faults.delaySkills = false; try await Task.sleep(for: .milliseconds(100)) }
@@ -42,7 +65,8 @@ import Testing
         let value = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
         if channel == "backend:describe", faults.supportsMates {
             var descriptor = value.objectValue
-            descriptor["capabilities"] = .array(value["capabilities"].array + [.string("assistants")])
+            let mateCapabilities: [JSONValue] = faults.supportsMateInfo ? [.string("assistants"), .string("mateInfo")] : [.string("assistants")]
+            descriptor["capabilities"] = .array(value["capabilities"].array + mateCapabilities)
             return .object(descriptor)
         }
         if channel == "runs:execute" && faults.failSendAfter { faults.failSendAfter = false; throw MainsError.timeout }
@@ -134,6 +158,48 @@ import Testing
         #expect(payload["workspaceId"] == .null)
         #expect(payload["clientPromptId"].string == call.id)
         #expect(!Experience.allowsMateMentions("work", isMateConversation: true, hasLocalWorkspace: false))
+    }
+
+    @Test @MainActor func newAssignmentsFollowupsAndManualRoutinesRequireTheWorkerProvidersConsent() async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+        let faults = ContextFaults(), storage = MemoryStorage()
+        faults.supportsMates = true
+        faults.supportsMateInfo = true
+        storage.pairing = backend.pairing
+        let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        try await eventually { session.isConnected && session.supportsMateInfo }
+
+        let assignment = MateChange.assign(title: "Release", prompt: "Check the sample")
+        let manualRun = MateChange.runRoutine("release-check")
+        let followup = MateChange.followup(id: "review", message: "Use the updated sample")
+        let codexConsent = MateConsentRequired(owner: session.ownership, backendID: DemoBackend.backendID, providerID: "codex")
+        for change in [assignment, manualRun] {
+            await #expect(throws: codexConsent) { try await session.manageMate("release", change: change) }
+        }
+        #expect(!session.mateCommandPending)
+        #expect(!faults.calls.contains { $0.channel == "assistants:mobileManage" })
+        try await session.manageMate("release", change: .toggleRoutine(id: "release-check", isActive: false))
+
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+        try await session.manageMate("release", change: assignment)
+        try await session.manageMate("release", change: manualRun)
+        let claudeConsent = MateConsentRequired(owner: session.ownership, backendID: DemoBackend.backendID, providerID: "claude_code")
+        await #expect(throws: claudeConsent) { try await session.manageMate("release", change: followup) }
+        #expect(!session.mateCommandPending)
+        #expect(faults.calls.filter { $0.channel == "assistants:mobileManage" }.count == 3)
+
+        session.grantConsent(providerID: "claude_code", backendID: DemoBackend.backendID)
+        try await session.manageMate("release", change: followup)
+        faults.mateTaskAssignee = .null
+        await #expect(throws: MainsError.server("The Mate assigned to this task is unavailable.")) {
+            try await session.manageMate("release", change: followup)
+        }
+        let writes = faults.calls.filter { $0.channel == "assistants:mobileManage" }
+        #expect(writes.compactMap { $0.args[2]["action"].string } == ["toggleRoutine", "assign", "runRoutine", "followup"])
+        #expect(writes.last?.args[2]["message"].string == "Use the updated sample")
+        #expect(faults.calls.contains { $0.channel == "assistants:mobileDirectory" && $0.args.last?.string == "reviewer" })
     }
 
     @Test @MainActor func mateSelectionsKeepTheirIdentityWithDuplicateNamesAndPlainSavedDrafts() throws {

@@ -515,7 +515,7 @@ interface SDKResultError extends SDKResultBase {
 
 type SDKResultMessage = SDKResultSuccess | SDKResultError;
 
-function describeClaudeResultError(result: SDKResultError): string {
+function describeClaudeResultError(result: SDKResultError, fallback = "Claude could not complete this request."): string {
   const reasons: Record<string, string> = {
     config_file_invalid: "Claude could not start because a configuration file contains invalid JSON. Fix the file named below and try again.",
     initialize_not_first: "Claude could not initialize its session. Restart the Claude runtime and try again.",
@@ -523,7 +523,7 @@ function describeClaudeResultError(result: SDKResultError): string {
   };
   const reason = result.startup_failure_reason;
   return [reason ? reasons[reason] ?? `Claude could not start (${reason}).` : undefined,
-    ...result.errors].filter(Boolean).join(" ") || "Claude could not complete this request.";
+    ...result.errors].filter(Boolean).join(" ") || fallback;
 }
 
 interface ClaudeTurnModelMessage {
@@ -4044,7 +4044,6 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     const cancel = () => controller.abort();
     opts?.signal?.addEventListener("abort", cancel, { once: true });
     if (opts?.signal?.aborted) cancel();
-    let text = "";
     try {
       await owner.run(ensureSDK);
       owner.assertActive();
@@ -4072,23 +4071,38 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       options.systemPrompt = opts?.system ??
         "You are a helpful assistant. Follow the user's instructions exactly and output only what is requested.";
       const query = owner.acquire(() => queryFn!({ prompt, options }));
-      try {
-        await owner.run(async () => {
-          for await (const msg of query) {
-            owner.assertActive();
-            if (msg.type !== "assistant") continue;
-            const assistantMsg = msg as { message?: { content?: Array<{ type: string; text?: string }> } };
-            for (const block of assistantMsg.message?.content ?? []) {
-              if (block.type === "text" && block.text) text += block.text;
+      const text = await owner.run(async () => {
+        let output = "";
+        let assistantError: string | undefined;
+        for await (const msg of query) {
+          owner.assertActive();
+          if (msg.type === "assistant") {
+            const { message, error } = msg as SDKAssistantMessage;
+            let content = "";
+            for (const block of message?.content ?? []) {
+              if (block.type === "text" && block.text) content += block.text;
+            }
+            if (error) {
+              // The SDK can put the provider error in a synthetic assistant message.
+              const details = content.trim();
+              if (details) throw new Error(details);
+              assistantError = `Claude: ${describeAssistantError(error)?.text ?? error}`;
+            } else {
+              output += content;
+            }
+          } else if (msg.type === "result") {
+            const result = msg as SDKResultMessage;
+            if (result.subtype !== "success") throw new Error(describeClaudeResultError(result, assistantError));
+            if (result.is_error) {
+              throw new Error(result.result?.trim() || assistantError || "Claude could not complete this request.");
             }
           }
-        });
-      } catch (error) {
-        // Retain text from SDK error results; cancellation cannot become success.
-        if (!owner.active || !text.trim()) throw error;
-      }
+        }
+        if (assistantError) throw new Error(assistantError);
+        return output.trim();
+      });
       if (opts?.signal?.aborted) throw new Error("Text generation canceled");
-      return text.trim();
+      return text;
     } finally {
       opts?.signal?.removeEventListener("abort", cancel);
       await owner.close();

@@ -80,7 +80,7 @@ struct AttachmentPanel: View {
             await Task.yield()
             guard !Task.isCancelled, !closing else { return }
             appeared = true
-            withAnimation(transition) { revealed = true }
+            withAnimation(reduceMotion ? transition : transition.speed(1.35)) { revealed = true }
         }
         .onDisappear { visible = false; closeTask?.cancel(); importGeneration += 1; camera.stop(); importTask?.cancel() }
         .onChange(of: scenePhase) { _, phase in
@@ -198,7 +198,7 @@ struct AttachmentPanel: View {
         GeometryReader { geometry in
             let side = (geometry.size.width - 4) / 3
             ZStack {
-                if library.loading { ProgressView() }
+                if library.loading { ContentLoadingView(title: "Loading photos…") }
                 else if let message = library.message {
                     Text(message).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(32)
                 } else {

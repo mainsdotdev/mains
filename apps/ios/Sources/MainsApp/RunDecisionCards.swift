@@ -73,7 +73,8 @@ private struct PendingApprovalCard: View {
                         Text(remaining).font(.caption.monospacedDigit()).foregroundStyle(.secondary).accessibilityLabel("Time remaining: \(remaining)")
                     }
                 }
-                Text(display.title).font(isTool ? .subheadline.weight(.medium) : .headline).accessibilityIdentifier("approvalTitle")
+                Text(display.title).font((isTool ? Font.subheadline.weight(.medium) : .headline).width(.expanded))
+                    .accessibilityIdentifier("approvalTitle")
                 if isTool {
                     ApprovalPreviewViewport {
                         VStack(alignment: .leading, spacing: 8) {
@@ -313,7 +314,7 @@ private struct AsyncQuestionCard: View {
                     if delivery.phase == .sending { ProgressView().controlSize(.mini) }
                     Text("\(index + 1) of \(pending.questions.count)").foregroundStyle(.secondary)
                 }.font(.subheadline.weight(.semibold))
-                Text(question.title).font(.headline).accessibilityIdentifier("asyncQuestionTitle")
+                Text(question.title).font(.headline.width(.expanded)).accessibilityIdentifier("asyncQuestionTitle")
                 VStack(spacing: 10) {
                     ForEach(Array(question.options.enumerated()), id: \.offset) { _, option in
                         DecisionOption(title: option, selected: answers[index] == option, accent: accent) { answers[index] = option }

@@ -95,6 +95,14 @@ public final class BackendSession {
     public private(set) var atlasRevision = 0
     public private(set) var pendingAtlasSave: PendingAtlasSave?
     public private(set) var pendingConversationAction: PendingConversationAction?
+    private struct GoalChangeAttempt {
+        let id: String
+        let runID: String
+        let owner: Int
+        let args: [JSONValue]
+        var uncertain = false
+    }
+    private var pendingGoalChange: GoalChangeAttempt?
     public private(set) var retiredConversation: RetiredConversation?
     @ObservationIgnored private var conversationActionRevision = 0
     #if MAINS_GPT_LIVE || SWIFT_PACKAGE
@@ -142,8 +150,18 @@ public final class BackendSession {
     private var pendingMateCommand: PendingMateCommand?
     public var mateCommandPending: Bool { pendingMateCommand != nil }
     public var mateCommandUncertain: Bool { pendingMateCommand?.uncertain == true }
+    var pendingMateTeamName: String? {
+        guard let pendingMateCommand, pendingMateCommand.channel == "assistants:createTeam" else { return nil }
+        return pendingMateCommand.args.first?["name"].string
+    }
     public var supportsMates: Bool { connectedDescriptor?.capabilities.contains("assistants") == true && !isDemo }
     public var supportsMateInfo: Bool { supportsMates && connectedDescriptor?.capabilities.contains("mateInfo") == true }
+    public var supportsMateModelEditing: Bool { supportsMateInfo && connectedDescriptor?.capabilities.contains("mateModelEditing") == true }
+    public var supportsMobileGoalSummary: Bool { connectedDescriptor?.capabilities.contains("mobileGoalSummary") == true }
+    public var supportsMobileGoalControls: Bool { connectedDescriptor?.capabilities.contains("mobileGoalControls") == true }
+    public var goalChangeNeedsCheck: Bool { pendingGoalChange?.uncertain == true }
+    public private(set) var goalSummaryRevision = 0
+    var supportsMateTeamCreation: Bool { supportsMates && connectedDescriptor?.capabilities.contains("mateTeamCreation") == true }
     public var mateSpaces: [Space] {
         spaces.filter { ($0.providerId == "codex" || $0.providerId == "claude_code") && providerConfigs[$0.providerId] != nil }
     }
@@ -207,6 +225,7 @@ public final class BackendSession {
     @ObservationIgnored private var approvalExpiryTask: Task<Void, Never>?
     private var decisionRevision = 0
     @ObservationIgnored private var workInboxVisible = false
+    @ObservationIgnored private var workInboxPolling = false
     @ObservationIgnored private var workInboxRead: Task<Void, Never>?
     @ObservationIgnored private var workInboxPoll: Task<Void, Never>?
     @ObservationIgnored private var workInboxRefresh: Task<Void, Never>?
@@ -628,6 +647,74 @@ public final class BackendSession {
         }
     }
 
+    public func readGoalSummary(_ runID: String) async throws -> MobileGoalSummary? {
+        guard isConnected, supportsMobileGoalSummary, viewingRunID == runID, let transport,
+              let run = conversations.first(where: { $0.id == runID }), run.providerId == "codex", run.isReplica != true else { return nil }
+        let owner = pairingOwner, current = generation
+        let value = try await transport.invoke("providers:getMobileGoalSummary", args: [.string(runID)])
+        try Task.checkCancellation()
+        guard owner == pairingOwner, current == generation, self.transport === transport,
+              isConnected, viewingRunID == runID else { throw MainsError.changedBackend }
+        if value == .null { return nil }
+        let summary = try value.decode(MobileGoalSummary.self)
+        guard !summary.objective.isEmpty, summary.objective.unicodeScalars.count <= 2048,
+              !summary.status.isEmpty, summary.status.utf16.count <= 64,
+              (summary.tokensUsed ?? 0) >= 0, (summary.timeUsedSeconds ?? 0) >= 0,
+              summary.revision.map({ $0.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil }) != false else { throw MainsError.invalidReply }
+        return summary
+    }
+
+    public func canChangeGoal(_ runID: String) -> Bool {
+        isConnected && supportsMobileGoalControls && pendingGoalChange == nil && viewingRunID == runID
+            && conversations.contains { $0.id == runID && $0.providerId == "codex" && $0.accountId == accountID && $0.isReplica != true && !$0.isArchived }
+    }
+
+    public func changeGoal(_ runID: String, revision: String, change: MobileGoalChange) async throws {
+        guard canChangeGoal(runID), revision.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else {
+            throw MainsError.server("This goal cannot be changed right now.")
+        }
+        var payload: [String: JSONValue] = ["expectedRevision": .string(revision)]
+        switch change {
+        case .edit(let text):
+            let objective = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !objective.isEmpty, objective.unicodeScalars.count <= 2048 else {
+                throw MainsError.server("Enter a goal objective of up to 2,048 characters.")
+            }
+            payload["action"] = .string("edit"); payload["objective"] = .string(objective)
+        case .pause: payload["action"] = .string("pause")
+        case .resume: payload["action"] = .string("resume")
+        case .clear: payload["action"] = .string("clear")
+        }
+        let attempt = GoalChangeAttempt(id: UUID().uuidString, runID: runID, owner: pairingOwner, args: [.string(runID), .object(payload)])
+        try await deliverGoalChange(attempt)
+    }
+
+    public func checkGoalChange() async throws {
+        guard isConnected, supportsMobileGoalControls, let attempt = pendingGoalChange, attempt.uncertain else { throw MainsError.disconnected }
+        try await deliverGoalChange(attempt)
+    }
+
+    private func deliverGoalChange(_ original: GoalChangeAttempt) async throws {
+        var attempt = original
+        attempt.uncertain = false; pendingGoalChange = attempt
+        defer { if attempt.owner == pairingOwner, attempt.runID == viewingRunID { goalSummaryRevision += 1 } }
+        do {
+            let result = try await command("providers:changeMobileGoal", args: attempt.args, commandID: attempt.id, owner: attempt.owner)
+            guard attempt.owner == pairingOwner else { throw MainsError.changedBackend }
+            guard result["applied"].bool else { throw MainsError.invalidReply }
+            // Receipt replay confirms delivery, but a later desktop change may already supersede it.
+            pendingGoalChange = nil
+        } catch {
+            if attempt.owner == pairingOwner {
+                let failure = error as? MainsError
+                if case .server = failure, failure?.isUnconfirmedCommand == false { pendingGoalChange = nil }
+                else if failure == .unauthorized || failure == .incompatible { pendingGoalChange = nil }
+                else { attempt.uncertain = true; pendingGoalChange = attempt }
+            }
+            throw error
+        }
+    }
+
     public func listOutputs(_ runID: String, offset: Int = 0, artifactID: Int? = nil) async throws -> RunOutputsPage {
         guard let transport, isConnected else { throw MainsError.disconnected }
         let current = generation
@@ -862,6 +949,27 @@ public final class BackendSession {
         return task
     }
 
+    func readConversationMateTask(_ link: MateAssignmentLink) async throws -> (task: MateTask, managingMateID: String?) {
+        let owner = pairingOwner, current = generation
+        guard viewingRunID == link.runID else { throw MainsError.changedBackend }
+        let summary = try await loadMateAssignment(link.id, runID: link.runID)
+        guard supportsMateInfo, let assignee = summary.assignee else { return (MateTask(summary: summary), nil) }
+        let task: MateTask
+        do {
+            task = try await readMateTask(link.id, mateID: assignee.id)
+        } catch MainsError.server("Assignment is unavailable for this Mate") {
+            // Historical requests remain linked to the source chat after a team move.
+            guard owner == pairingOwner, current == generation, viewingRunID == link.runID else { throw MainsError.changedBackend }
+            return (MateTask(summary: summary), nil)
+        }
+        guard task.assignee?.id == assignee.id, viewingRunID == link.runID else { throw MainsError.changedBackend }
+        let mate = if task.hasManagementActions, task.assignee?.isArchived == false {
+            try await loadMates(mateID: assignee.id).mates.first { $0.id == assignee.id }
+        } else { nil as Mate? }
+        guard owner == pairingOwner, current == generation, viewingRunID == link.runID else { throw MainsError.changedBackend }
+        return (task, mate?.ready == true ? assignee.id : nil)
+    }
+
     public func loadMateRoutines(_ mateID: String, offset: Int) async throws -> MateRoutines {
         let routines = try await mateInfoRead("assistants:mobileRoutines", mateID: mateID, selection: .number(Double(offset)), as: MateRoutines.self)
         guard routines.items.count <= 100, routines.nextOffset == nil || routines.nextOffset == offset + 100 else { throw MainsError.invalidReply }
@@ -875,7 +983,36 @@ public final class BackendSession {
     }
 
     public func manageMate(_ id: String, change: MateChange) async throws {
-        guard let accountID, supportsMateInfo else { throw MainsError.disconnected }
+        guard let accountID, let backendID = pairing?.descriptor.backendId, isConnected, supportsMateInfo else { throw MainsError.disconnected }
+        let owner = pairingOwner, current = generation
+        let recipientMateID: String?
+        switch change {
+        case .updateProfile(_, _, _, _, .some) where !supportsMateModelEditing:
+            throw MainsError.server("Update Mains on your computer to change the model and effort.")
+        case .assign, .runRoutine:
+            // Both commands target the Mate whose identity the backend validates.
+            recipientMateID = id
+        case .followup(let taskID, _):
+            let task = try await readMateTask(taskID, mateID: id)
+            guard let assignee = task.assignee, !assignee.id.isEmpty else {
+                throw MainsError.server("The Mate assigned to this task is unavailable.")
+            }
+            recipientMateID = assignee.id
+        default:
+            recipientMateID = nil
+        }
+        if let recipientMateID {
+            guard owner == pairingOwner, current == generation else { throw MainsError.changedBackend }
+            let directory = try await loadMates(mateID: recipientMateID)
+            guard owner == pairingOwner, current == generation else { throw MainsError.changedBackend }
+            guard let recipient = directory.mates.first(where: { $0.id == recipientMateID }), !recipient.providerId.isEmpty else {
+                throw MainsError.server("The Mate assigned to this task is unavailable.")
+            }
+            guard hasConsent(providerID: recipient.providerId) else {
+                throw MateConsentRequired(owner: owner, backendID: backendID, providerID: recipient.providerId)
+            }
+        }
+        try Task.checkCancellation()
         _ = try await writeMate("assistants:mobileManage", args: [.string(accountID), .string(id), try change.payload(), .string(UUID().uuidString)])
     }
 
@@ -889,6 +1026,20 @@ public final class BackendSession {
         let result = try await writeMate("assistants:create", args: [payload])
         guard let id = result["id"].string, !id.isEmpty else { throw MainsError.invalidReply }
         return id
+    }
+
+    func createMateTeam(name: String) async throws -> MateTeam {
+        guard let accountID, isConnected, supportsMateTeamCreation else { throw MainsError.disconnected }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.utf16.count <= 100 else { throw MainsError.server("Enter a team name of up to 100 characters.") }
+        let result = try await writeMate("assistants:createTeam", args: [.object(["accountId": .string(accountID), "name": .string(name)])])
+        return try result.decode(MateTeam.self)
+    }
+
+    func checkMateTeamCreation() async throws -> MateTeam {
+        guard let attempt = pendingMateCommand, attempt.channel == "assistants:createTeam",
+              attempt.uncertain, isConnected else { throw MainsError.disconnected }
+        return try await deliverMate(attempt).decode(MateTeam.self)
     }
 
     public func answerMateSetup(_ id: String, step: Int, answer: String) async throws {
@@ -916,7 +1067,8 @@ public final class BackendSession {
 
     @discardableResult public func checkMateCommand() async throws -> String? {
         guard let attempt = pendingMateCommand, attempt.uncertain, isConnected else { throw MainsError.disconnected }
-        return try await deliverMate(attempt)["id"].string
+        let result = try await deliverMate(attempt)
+        return attempt.channel == "assistants:create" ? result["id"].string : nil
     }
 
     private func writeMate(_ channel: String, args: [JSONValue]) async throws -> JSONValue {
@@ -933,6 +1085,12 @@ public final class BackendSession {
             let result = try await command(attempt.channel, args: attempt.args, commandID: attempt.id, owner: attempt.owner)
             guard attempt.owner == pairingOwner else { throw MainsError.changedBackend }
             if attempt.channel == "assistants:create", result["id"].string?.isEmpty != false { throw MainsError.invalidReply }
+            if attempt.channel == "assistants:createTeam" {
+                let team = try result.decode(MateTeam.self)
+                guard !team.id.isEmpty, team.id.utf16.count <= 200, !team.name.isEmpty, team.name.utf16.count <= 100 else {
+                    throw MainsError.invalidReply
+                }
+            }
             if attempt.channel == "assistants:mobileManage", !result["accepted"].bool { throw MainsError.invalidReply }
             pendingMateCommand = nil
             matesRevision += 1
@@ -1306,6 +1464,7 @@ public final class BackendSession {
 
     private func resetProjection() {
         pendingConversationAction = nil; retiredConversation = nil; conversationActionRevision = 0
+        pendingGoalChange = nil
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         voice.retire(); pendingVoiceConversation = nil; checkingVoiceConversation = false; voiceSpaceID = nil
         realtimeVoices = nil; selectedRealtimeVoice = nil; voiceSettingsReadID = nil; voiceSelectionChange = nil
@@ -1670,6 +1829,10 @@ public final class BackendSession {
         }
         #endif
         let runID = payload["runId"].string
+        if channel == "providers:mobileGoalChanged" {
+            if let runID, runID == viewingRunID { goalSummaryRevision += 1 }
+            return
+        }
 
         if ["runs:statusChanged", "runs:updated", "runs:toolApprovalRequest", "runs:toolApprovalResolved"].contains(channel) {
             workInboxRevision += 1
@@ -2198,11 +2361,14 @@ extension BackendSession {
         workInbox.updatedAt == nil && workInbox.runs.isEmpty ? WorkInboxSnapshot(saved: conversations) : workInbox
     }
 
-    /// The shell keeps this reader alive only while the sidebar or inbox is
-    /// visible. It never selects a run, loads history or writes the disk cache.
-    public func setWorkInboxVisible(_ visible: Bool) {
-        guard visible != workInboxVisible else { return }
+    /// The sidebar and inbox poll. The Mate directory shares the reader when
+    /// visible and refreshes on events without starting its own poll.
+    public func setWorkInboxVisible(_ visible: Bool, poll: Bool = true) {
+        let polling = visible && poll
+        guard visible != workInboxVisible || polling != workInboxPolling else { return }
         workInboxVisible = visible
+        workInboxPolling = polling
+        if !polling { workInboxPoll?.cancel(); workInboxPoll = nil }
         if visible { startWorkInboxWatch() } else { stopWorkInboxWatch() }
     }
 
@@ -2250,6 +2416,7 @@ extension BackendSession {
 
     private func startWorkInboxWatch() {
         guard active, workInboxVisible, isConnected, workInboxPoll == nil else { return }
+        guard workInboxPolling else { scheduleWorkInboxRefresh(); return }
         let owner = pairingOwner, current = generation
         workInboxPoll = Task { [weak self] in
             while !Task.isCancelled {

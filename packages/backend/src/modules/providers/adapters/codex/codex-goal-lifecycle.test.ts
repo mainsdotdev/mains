@@ -21,6 +21,37 @@ function harness() {
 }
 
 describe("native provider goal ownership", () => {
+  it("checks the latest goal in the thread before an explicit mobile write", async () => {
+    const h = harness();
+    const snapshot = deferred<{ goal: typeof goal }>();
+    h.send.mockImplementationOnce(() => snapshot.promise);
+    const clear = h.life.clear("run-1", "user", {
+      ownsRun: async () => true,
+      matches: (current) => current.objective === goal.objective && current.status === goal.status,
+    });
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledOnce());
+    const replacement = { ...goal, objective: "Changed on desktop" };
+    h.goals.set(replacement.threadId, replacement);
+    h.life.notification(h.server, "thread/goal/updated", { goal: replacement });
+    snapshot.resolve({ goal });
+    await expect(clear).resolves.toBe(false);
+    expect(h.goals.get(goal.threadId)).toEqual(replacement);
+    expect(h.send.mock.calls.map(([method]) => method)).toEqual(["thread/goal/get"]);
+  });
+
+  it("applies a matching goal transition and rejects a write after ownership changes", async () => {
+    const h = harness();
+    await expect(h.life.set("run-1", { status: "paused" }, {
+      ownsRun: async () => true,
+      matches: (current) => current.status === "active",
+    })).resolves.toMatchObject({ status: "paused", objective: goal.objective });
+    await expect(h.life.set("run-1", { status: "active" }, {
+      ownsRun: async () => false,
+      matches: () => true,
+    })).resolves.toBeNull();
+    expect(h.send.mock.calls.filter(([method]) => method === "thread/goal/set")).toHaveLength(1);
+  });
+
   it.each(["active", "paused", "blocked", "usageLimited", "budgetLimited", "futureProviderStatus"])("preserves the provider's %s goal across automatic continuation/fork setup", async (status) => {
     const h = harness(); h.goals.set("thread-1", { ...goal, status });
     await h.life.establish(h.server, "thread-1", true, "Follow-up", undefined, false);

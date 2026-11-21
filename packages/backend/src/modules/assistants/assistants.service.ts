@@ -9,7 +9,7 @@ import { spaceService } from "../space";
 import { providersService } from "../providers";
 import { ASSISTANT_AVATAR_COLORS, ASSISTANT_AVATAR_SHAPES, DEFAULT_ASSISTANT_AVATAR, normalizeAssistantAvatar } from "@mains/contracts/assistants";
 import { snapshotRunSettingConfig } from "@mains/contracts/run-settings";
-import type { Assistant, AssistantConversation, AssistantOverview, AssistantProfile, AssistantWelcome } from "@mains/contracts/assistants";
+import type { Assistant, AssistantConversation, AssistantModelChange, AssistantOverview, AssistantProfile, AssistantWelcome } from "@mains/contracts/assistants";
 import { assertRecordAvailable, recordKey, transitionRecord } from "../../runtime/record-lifecycle";
 
 function readAvatar(input: unknown) {
@@ -36,6 +36,35 @@ function readTeamChange(input: unknown) {
     const value = object(input);
     onlyKeys(value, ["teamId", "expectedTeamId"]);
     return { teamId: readTeamId(value.teamId), expectedTeamId: readTeamId(value.expectedTeamId) };
+}
+
+function readModelChange(input: unknown): AssistantModelChange | undefined {
+    if (input === undefined) return undefined;
+    const value = object(input);
+    onlyKeys(value, ["model", "effort", "expectedModel", "expectedEffort"]);
+    if (typeof value.effort !== "string" || typeof value.expectedEffort !== "string") throw new Error("Invalid effort");
+    return {
+        model: text(value.model, "Model", 512),
+        effort: text(value.effort, "Effort", 100, true),
+        expectedModel: text(value.expectedModel, "Saved model", 512),
+        expectedEffort: text(value.expectedEffort, "Saved effort", 100, true),
+    };
+}
+
+async function requireModel(providerId: string, model: string, effort: string) {
+    const selected = (await providersService.getModels(providerId)).find(candidate => candidate.id === model);
+    if (!selected) throw new Error("Choose an available model");
+    if (effort && !selected.supportedEffortLevels?.includes(effort)) {
+        throw new Error("This model does not support the selected effort");
+    }
+}
+
+function applyMateEffort(config: Assistant["conversationSettings"]["config"], providerId: string, effort: string) {
+    if (providerId === "codex") config.modelReasoningEffort = effort;
+    else {
+        config.effortLevel = effort;
+        config.thinkingMode = !!effort;
+    }
 }
 
 function changeMembership(assistant: Assistant, teamId: string | null) {
@@ -98,23 +127,13 @@ export const assistantsService = {
         const provider = await providersService.getById(space.providerId);
         if (!provider?.isEnabled)
             throw new Error("Enable this provider before creating an assistant");
-        const models = await providersService.getModels(space.providerId);
-        const selected = models.find(m => m.id === model);
-        if (!selected)
-            throw new Error("Choose an available model");
-        if (effort && !selected.supportedEffortLevels?.includes(effort))
-            throw new Error("This model does not support the selected effort");
+        await requireModel(space.providerId, model, effort);
         const avatar = value.avatar === undefined ? DEFAULT_ASSISTANT_AVATAR : readAvatar(value.avatar);
         const config = snapshotRunSettingConfig(space.providerId, provider.config ?? {});
         config.planMode = false;
         config.goalMode = false;
         config.ultracode = false;
-        if (space.providerId === "codex")
-            config.modelReasoningEffort = effort;
-        else {
-            config.effortLevel = effort;
-            config.thinkingMode = !!effort;
-        }
+        applyMateEffort(config, space.providerId, effort);
         assertCurrent();
         const id = randomUUID();
         // No credentials or native provider configuration enter the frozen profile.
@@ -131,12 +150,13 @@ export const assistantsService = {
         });
         return this.require(id, accountId);
     },
-    updateProfile(input: unknown): Assistant {
+    async updateProfile(input: unknown, assertCurrent: () => void = () => {}): Promise<Assistant> {
         const value = object(input);
-        onlyKeys(value, ["accountId", "id", "profile", "expectedProfile", "teamChange"]);
+        onlyKeys(value, ["accountId", "id", "profile", "expectedProfile", "teamChange", "modelChange"]);
         const accountId = text(value.accountId, "Account"), id = text(value.id, "Assistant");
         const profile = object(value.profile), expected = object(value.expectedProfile);
         const teamChange = readTeamChange(value.teamChange);
+        const modelChange = readModelChange(value.modelChange);
         onlyKeys(profile, ["name", "description", "instructions", "avatar"]);
         const updated: AssistantProfile = {
             name: text(profile.name, "Name", 100),
@@ -144,17 +164,36 @@ export const assistantsService = {
             instructions: text(profile.instructions, "Instructions", 16000),
             avatar: readAvatar(profile.avatar),
         };
+        let validatedProvider: string | undefined;
+        if (modelChange) {
+            const mate = this.requireForWork(id, accountId);
+            if (mate.model !== modelChange.model || mate.effort !== modelChange.effort) {
+                await requireModel(mate.providerId, modelChange.model, modelChange.effort);
+                validatedProvider = mate.providerId;
+            }
+        }
+        assertCurrent();
         return assistantsRepo.transaction(() => {
+            assertRecordAvailable(recordKey("assistant", id, accountId));
             const assistant = this.requireForWork(id, accountId);
             const profileChanged = !matchesProfile(assistant, updated);
             if (profileChanged && !matchesProfile(assistant, expected)) throw new Error("This profile changed. Reopen the editor to review the latest version.");
             const membershipChanged = teamChange && assistant.teamId !== teamChange.teamId;
-            if (!profileChanged && !membershipChanged) return assistant;
+            let execution: Pick<Assistant, "model" | "effort" | "conversationSettings"> | undefined;
+            if (modelChange && (assistant.model !== modelChange.model || assistant.effort !== modelChange.effort)) {
+                if (assistant.providerId !== validatedProvider || assistant.model !== modelChange.expectedModel || assistant.effort !== modelChange.expectedEffort) {
+                    throw new Error("This Mate’s model or effort changed. Reopen the editor to review the latest version.");
+                }
+                const config = { ...assistant.conversationSettings.config };
+                applyMateEffort(config, assistant.providerId, modelChange.effort);
+                execution = { model: modelChange.model, effort: modelChange.effort, conversationSettings: { model: modelChange.model, config } };
+            }
+            if (!profileChanged && !membershipChanged && !execution) return assistant;
             if (membershipChanged) {
                 if (assistant.teamId !== teamChange.expectedTeamId) throw new Error("This assistant’s team changed. Reopen the editor to review the latest version.");
                 changeMembership(assistant, teamChange.teamId);
             }
-            if (profileChanged) assistantsRepo.saveProfile(id, accountId, updated);
+            if (profileChanged || execution) assistantsRepo.saveProfile(id, accountId, profileChanged ? updated : {}, execution);
             return this.require(id, accountId);
         });
     },

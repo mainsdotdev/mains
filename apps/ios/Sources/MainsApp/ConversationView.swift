@@ -25,6 +25,12 @@ struct ConversationView: View {
         let revision: Int
         let canLoad: Bool
     }
+    private struct GoalRequest: Equatable {
+        let owner: Int
+        let status: String?
+        let revision: Int
+        let canRead: Bool
+    }
     let session: BackendSession
     let runID: String
     let openComputer: () -> Void
@@ -53,8 +59,14 @@ struct ConversationView: View {
     @State private var outputSelection: ConversationOutputSelection?
     @State private var outputsSheet = false
     @State private var loadedMate: (owner: Int, profile: MateInfoProfile)?
+    @State private var updatingArchivedMate = false
+    @State private var restoredMateNeedsRefresh = false
+    @State private var archivedMateError: String?
+    @State private var goalSummary: (owner: Int, value: MobileGoalSummary)?
+    @State private var editingGoal: GoalEditRequest?
     @State private var mateAvatarFrame = CGRect.zero
     @State private var presentedMateProfile: MateInfoProfile?
+    @State private var presentedMateTask: MateAssignmentLink?
     @State private var mateRouteAfterDismissal: (owner: Int, route: AppRoute)?
     @Namespace private var mateInfoZoom
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -74,6 +86,11 @@ struct ConversationView: View {
     #endif
     private var agents: [SessionSubagent] { run?.assistantId == nil && session.viewingRunID == runID ? session.transcript.subagents : [] }
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
+    private var goalRequest: GoalRequest {
+        GoalRequest(owner: session.ownership, status: run?.status, revision: session.goalSummaryRevision,
+                    canRead: session.isConnected && session.supportsMobileGoalSummary && session.viewingRunID == runID
+                        && run?.providerId == "codex" && run?.isReplica != true)
+    }
     private var mateID: String? { run?.assistantId ?? mateSource?.mateID }
     private var mateHeaderRequest: MateHeaderRequest {
         MateHeaderRequest(owner: session.ownership, mateID: mateID, revision: session.matesRevision,
@@ -85,6 +102,10 @@ struct ConversationView: View {
     }
     private var conversationMate: Mate? { mateProfile?.mate }
     private var archivedMate: Bool { conversationMate?.isArchived == true }
+    private var canRestoreMateHere: Bool {
+        guard let run, let conversationMate else { return false }
+        return session.supportsMateInfo && run.assistantId == conversationMate.id && run.isReplica != true
+    }
     private var showsMateHeader: Bool { (mateID != nil || mateSource != nil) && !focusedVoice && !showsConnectionPill }
     private var navigationTitle: String {
         if focusedVoice || showsConnectionPill { return "" }
@@ -163,27 +184,45 @@ struct ConversationView: View {
                     }
                 }
         }
-        .fullScreenCover(item: $presentedMateProfile, onDismiss: navigateAfterMateInfo, content: mateInfoPage)
+        .environment(\.openMateAssignment, presentMateAssignment)
+        .fullScreenCover(item: $presentedMateProfile, onDismiss: navigateAfterMatePresentation, content: mateInfoPage)
+        .sheet(item: $presentedMateTask, onDismiss: navigateAfterMatePresentation) { link in
+            MateRecordView(session: session, title: "Assignment", reloadOnChange: true, dismissWithCheckmark: true,
+                           load: { try await session.readConversationMateTask(link) }) { record in
+                MateTaskDetail(session: session, managingMateID: record.managingMateID, task: record.task) { id in
+                    if id != runID {
+                        let source = record.task.assignee.map { MateConversationSource.profile($0.id) } ?? .assignment
+                        mateRouteAfterDismissal = (session.ownership, .conversation(id, mate: source))
+                    }
+                    presentedMateTask = nil
+                }
+            }
+        }
         .onChange(of: archivedMate) { _, archived in
             if archived { presentedMateProfile = nil; modelSheet = false; optionsSheet = false }
+            else { restoredMateNeedsRefresh = false; archivedMateError = nil }
         }
     }
 
+    private func presentMateAssignment(_ link: MateAssignmentLink) {
+        guard link.runID == runID, session.viewingRunID == runID, session.isConnected,
+              presentedMateTask == nil, presentedMateProfile == nil else { return }
+        presentedMateTask = link
+    }
+
     private func presentMateInfo() {
-        guard !archivedMate, let mateProfile, presentedMateProfile == nil, session.viewingRunID == runID else { return }
+        guard !archivedMate, let mateProfile, presentedMateProfile == nil, presentedMateTask == nil,
+              session.viewingRunID == runID else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         presentedMateProfile = mateProfile
     }
 
     private func mateInfoPage(_ profile: MateInfoProfile) -> some View {
         NavigationStack {
-            MateInfoView(session: session, mateID: profile.id, initialProfile: profile, currentChatID: runID, openChat: { id, mateID in
+            MateInfoView(session: session, mateID: profile.id, initialProfile: profile, openChat: { id, mateID in
                 if id != runID {
                     mateRouteAfterDismissal = (session.ownership, .conversation(id, mate: mateID.map(MateConversationSource.profile) ?? .assignment))
                 }
-                presentedMateProfile = nil
-            }, newTask: {
-                mateRouteAfterDismissal = (session.ownership, .mate(profile.id))
                 presentedMateProfile = nil
             })
                 .toolbar {
@@ -197,7 +236,7 @@ struct ConversationView: View {
         .navigationTransition(.zoom(sourceID: profile.id, in: mateInfoZoom))
     }
 
-    private func navigateAfterMateInfo() {
+    private func navigateAfterMatePresentation() {
         guard let next = mateRouteAfterDismissal else { return }
         mateRouteAfterDismissal = nil
         guard next.owner == session.ownership, session.viewingRunID == runID else { return }
@@ -258,11 +297,24 @@ struct ConversationView: View {
         .task(id: "\(run?.providerId ?? ""):\(session.isConnected)") {
             if let run { await session.loadModels(run.providerId, force: true) }
         }
-        .task(id: mateHeaderRequest) { await loadConversationMate(mateHeaderRequest) }
+        .task(id: mateHeaderRequest) { try? await loadConversationMate(mateHeaderRequest) }
+        .task(id: goalRequest) {
+            let request = goalRequest
+            guard request.canRead else { goalSummary = nil; return }
+            do {
+                let value = try await session.readGoalSummary(runID)
+                guard !Task.isCancelled, request == goalRequest else { return }
+                goalSummary = value.map { (request.owner, $0) }
+            } catch { /* Keep the last provider-confirmed summary on a transient read error. */ }
+        }
         .onChange(of: draft.text) { _, _ in companion.focusConversation() }
         .onChange(of: focusedVoice) { _, focused in if focused { companion.close(); outputSelection = nil } }
         .onChange(of: session.ownership) { _, _ in
             companion.close(); outputSelection = nil; outputsSheet = false; presentedMateProfile = nil
+            presentedMateTask = nil; editingGoal = nil
+        }
+        .sheet(item: $editingGoal) { request in
+            GoalObjectiveEditor(session: session, runID: runID, request: request)
         }
         .sheet(isPresented: $projectSheet) {
             ConversationProjectSheet(session: session, runID: runID, owner: owner ?? -1)
@@ -274,7 +326,7 @@ struct ConversationView: View {
             Text("This permanently deletes the chat and its chat files. This can’t be undone.")
         }
         .onDisappear {
-            if selectedFile == nil && presentedMateProfile == nil { session.leaveConversation(runID) }
+            if selectedFile == nil && presentedMateProfile == nil && presentedMateTask == nil { session.leaveConversation(runID) }
         }
         .navigationDestination(item: $selectedFile) { selection in
             TurnFileDiffView(session: session, selection: selection, close: { selectedFile = nil })
@@ -296,7 +348,10 @@ struct ConversationView: View {
         .onChange(of: agents.isEmpty) { _, empty in if empty { agentsExpanded = false } }
         .sensoryFeedback(.impact(weight: .light), trigger: acceptedCount)
         .runFileLinks(session: session, runID: runID)
-        .toolbar { conversationToolbar(outputsAction: action) }
+        .toolbar {
+            standardConversationTitle
+            conversationToolbar(outputsAction: action)
+        }
         .onChange(of: twoReaders, initial: true) { _, _ in adaptCompanion(twoReaders: twoReaders) }
         .onChange(of: hasOutputs) { _, _ in adaptCompanion(twoReaders: twoReaders) }
         .environment(\.openConversationOutput, OpenConversationOutputAction { requestedRun, source in
@@ -309,11 +364,13 @@ struct ConversationView: View {
 
     private func adaptCompanion(twoReaders: Bool) { if !focusedVoice { companion.adapt(expanded: twoReaders, hasOutputs: hasOutputs) } }
 
-    private func loadConversationMate(_ request: MateHeaderRequest) async {
-        guard request.canLoad, let id = request.mateID,
-              let directory = try? await session.loadMates(mateID: id),
-              !Task.isCancelled, request == mateHeaderRequest else { return }
-        loadedMate = directory.mates.first { $0.id == id }.map { (request.owner, MateInfoProfile(mate: $0, teams: directory.teams)) }
+    private func loadConversationMate(_ request: MateHeaderRequest) async throws {
+        guard request.canLoad, let id = request.mateID else { throw MainsError.disconnected }
+        let directory = try await session.loadMates(mateID: id)
+        try Task.checkCancellation()
+        guard request == mateHeaderRequest else { throw MainsError.changedBackend }
+        guard let mate = directory.mates.first(where: { $0.id == id }) else { throw MainsError.invalidReply }
+        loadedMate = (request.owner, MateInfoProfile(mate: mate, teams: directory.teams))
     }
 
     private func performOutputsAction(_ action: ConversationCompanionState.OutputsAction) {
@@ -349,8 +406,17 @@ struct ConversationView: View {
         .background(Color(.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
         .environment(\.mateChatTint, conversationMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
+        .environment(\.solidChatNotices, true)
         .composerPickers(model: $modelSheet, options: $optionsSheet, session: session,
                          context: run.map { ComposerContext(run: $0) }, withinPane: true)
+    }
+
+    @ToolbarContentBuilder private var standardConversationTitle: some ToolbarContent {
+        if !showsConnectionPill && !showsMateHeader && !session.isDemo && !focusedVoice {
+            ToolbarItem(placement: .title) {
+                Text(navigationTitle).font(Font.headline.width(.expanded)).lineLimit(1)
+            }
+        }
     }
 
     @ToolbarContentBuilder private func conversationToolbar(outputsAction: ConversationCompanionState.OutputsAction) -> some ToolbarContent {
@@ -367,7 +433,7 @@ struct ConversationView: View {
             } else if session.isDemo && !focusedVoice {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 1) {
-                        Text(run?.displayTitle ?? "Conversation").font(.headline).lineLimit(1)
+                        Text(navigationTitle).font(.headline.width(.expanded)).lineLimit(1)
                         Text("Demo · On this iPhone").font(.caption2).foregroundStyle(.secondary)
                     }.accessibilityIdentifier("conversationDemoStatus")
                 }
@@ -428,12 +494,82 @@ struct ConversationView: View {
 
     @ViewBuilder private var composerArea: some View {
         if archivedMate {
-            Label("Restore this Mate on your computer to send messages.", systemImage: "archivebox")
-                .font(.footnote).foregroundStyle(.secondary)
-                .padding(.horizontal, 16).padding(.vertical, 12)
-                .accessibilityIdentifier("archivedMateConversationNotice")
+            archivedMateNotice
         } else {
             composerControls
+        }
+    }
+
+    private var archivedMateNotice: some View {
+        let checking = session.mateCommandUncertain && !restoredMateNeedsRefresh
+        let message = archivedMateError ?? (canRestoreMateHere
+            ? "Restore this Mate to continue chatting."
+            : "Restore this Mate on your computer to send messages.")
+        let actionTitle = if updatingArchivedMate { "Updating…" }
+            else if restoredMateNeedsRefresh { "Refresh Mate" }
+            else if checking { "Check Mate change" }
+            else { "Restore Mate" }
+        let actionDisabled = updatingArchivedMate || !session.isConnected
+            || (session.mateCommandPending && !checking && !restoredMateNeedsRefresh)
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "archivebox")
+                    .foregroundStyle(archivedMateError == nil ? .secondary : Color.orange)
+                    .padding(.top, 2)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Archived Mate").font(.subheadline.weight(.semibold).width(.expanded))
+                    Text(message).font(.footnote).foregroundStyle(Color(.secondaryLabel))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if canRestoreMateHere {
+                Button {
+                    Task { await restoreArchivedMate() }
+                } label: {
+                    Label(actionTitle, systemImage: checking || restoredMateNeedsRefresh ? "arrow.clockwise" : "arrow.uturn.backward")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .foregroundStyle(Color(.systemBackground))
+                        .background(Color(.label), in: .capsule)
+                        .opacity(actionDisabled ? 0.45 : 1)
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(ChatPressStyle())
+                .disabled(actionDisabled)
+                .accessibilityIdentifier("restoreMateFromConversation")
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 26))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("archivedMateConversationNotice")
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private func restoreArchivedMate() async {
+        let currentOwner = session.ownership
+        guard archivedMate, canRestoreMateHere, let mateID, owner == currentOwner,
+              session.viewingRunID == runID, session.isConnected, !updatingArchivedMate else { return }
+        updatingArchivedMate = true
+        archivedMateError = nil
+        defer { updatingArchivedMate = false }
+        do {
+            if !restoredMateNeedsRefresh {
+                if session.mateCommandUncertain { try await session.checkMateCommand() }
+                else { try await session.manageMate(mateID, change: .archive(false)) }
+            }
+            guard currentOwner == session.ownership, session.viewingRunID == runID, self.mateID == mateID, archivedMate else { return }
+            restoredMateNeedsRefresh = true
+            try await loadConversationMate(mateHeaderRequest)
+            restoredMateNeedsRefresh = false
+        } catch {
+            guard currentOwner == session.ownership, session.viewingRunID == runID, self.mateID == mateID, archivedMate else { return }
+            archivedMateError = error.localizedDescription
         }
     }
 
@@ -444,7 +580,8 @@ struct ConversationView: View {
                 Button { voicePresentation = .conversation } label: {
                     Label("Response needed", systemImage: "hand.raised")
                         .font(.footnote.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 40)
-                }.buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 20))
+                        .background(Color(.secondarySystemBackground), in: .capsule)
+                }.buttonStyle(ChatPressStyle())
                     .accessibilityHint("Open the conversation to answer the pending request.")
                     .accessibilityIdentifier("voiceNeedsResponse")
             }
@@ -493,9 +630,16 @@ struct ConversationView: View {
                 BridgeReadOnlyNotice(text: "Read-only conversation from another computer")
                     .padding(.horizontal, 12)
             } else if let message = run?.archivedReplyError {
-                ChatNotice(title: "Reply interrupted", message: message, symbol: "exclamationmark.circle", warning: true, horizontalInset: 12) { EmptyView() }
+                ChatNotice(title: "Reply interrupted", message: message, symbol: "exclamationmark.circle", warning: true) { EmptyView() }
                     .accessibilityIdentifier("archivedConversationNotice")
             } else if let context = composerContext {
+                if !focusedVoice, goalRequest.canRead, let goalSummary, goalSummary.owner == session.ownership {
+                    ConversationGoalBar(summary: goalSummary.value, running: run?.status == "running",
+                                        supportsControls: session.supportsMobileGoalControls, enabled: session.canChangeGoal(runID),
+                                        edit: { revision in
+                        editingGoal = GoalEditRequest(revision: revision, owner: session.ownership, summary: goalSummary.value)
+                    }, change: applyGoalChange)
+                }
                 MessageComposer(session: session, context: context, draft: draft,
                     canSend: run != nil && session.pendingConversationAction == nil && session.pendingFork == nil && session.stoppingRunID != runID && (usesQueue ||
                         session.isConnected && !uncertain && !session.sending && pending?.status != .accepted && !scroll.paging && run?.isActive != true),
@@ -506,6 +650,17 @@ struct ConversationView: View {
             }
         }
         .padding(.top, 8).padding(.bottom, 8)
+    }
+
+    private func applyGoalChange(_ change: MobileGoalChange, revision: String) {
+        let owner = session.ownership
+        Task {
+            guard owner == session.ownership else { return }
+            do { try await session.changeGoal(runID, revision: revision, change: change) }
+            catch {
+                if owner == session.ownership && !session.goalChangeNeedsCheck { session.actionError = error.localizedDescription }
+            }
+        }
     }
 
     private func prepareSend() {
@@ -624,7 +779,7 @@ struct MateConversationTitle: View {
                             if archived { ArchivedMateBadge().accessibilityHidden(true) }
                         }
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .modifier(GlassSurface(radius: 18, interactive: false))
+                        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18))
                     }
                     .contentShape(.rect)
                     .frame(width: compact ? 192 : 240)
@@ -661,6 +816,256 @@ struct MateConversationTitle: View {
             }
         } else {
             artwork
+        }
+    }
+}
+
+private struct ConversationGoalBar: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let summary: MobileGoalSummary
+    let running: Bool
+    let supportsControls: Bool
+    let enabled: Bool
+    let edit: (String) -> Void
+    let change: (MobileGoalChange, String) -> Void
+    private static let actionSize: CGFloat = 44
+    @ScaledMetric(relativeTo: .footnote) private var statusLineHeight: CGFloat = 16
+    @State private var clearRevision: String?
+
+    private var title: LocalizedStringKey {
+        switch summary.status {
+        case "active": running ? "Pursuing goal" : "Goal active"
+        case "complete": "Goal complete"
+        case "paused": "Goal paused"
+        case "blocked": "Goal blocked"
+        case "budgetLimited": "Budget reached"
+        case "usageLimited": "Usage limit reached"
+        default: "Goal"
+        }
+    }
+
+    private var tint: Color {
+        switch summary.status {
+        case "active", "complete": .green
+        case "blocked", "budgetLimited", "usageLimited": .orange
+        default: Color(.secondaryLabel)
+        }
+    }
+
+    private var usage: String {
+        var parts: [String] = []
+        if let tokens = summary.tokensUsed, tokens > 0 {
+            parts.append(String(localized: "\(tokens.formatted()) tokens"))
+        }
+        if let seconds = summary.timeUsedSeconds, seconds > 0 {
+            parts.append(Duration.seconds(seconds).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow)))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        let usage = usage
+        Group {
+            if supportsControls, let revision = summary.revision {
+                ViewThatFits(in: .horizontal) {
+                    // The centered status gets extra space above it from the 44-point controls.
+                    goalContent(bottomInset: max(0, (Self.actionSize - statusLineHeight) / 2)) {
+                        HStack(spacing: 4) {
+                            status(usage).layoutPriority(1)
+                            Spacer(minLength: 0)
+                            controls(revision)
+                        }
+                    }
+                    goalContent {
+                        VStack(alignment: .leading, spacing: 2) {
+                            status(usage)
+                            controls(revision).frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                    }
+                }
+            } else {
+                goalContent { status(usage) }
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 22))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("conversationGoalBar")
+        .padding(.horizontal, MessageComposer.horizontalInset)
+        .alert("Clear this goal?", isPresented: Binding(
+            get: { clearRevision != nil }, set: { if !$0 { clearRevision = nil } }
+        ), presenting: clearRevision) { revision in
+            Button("Clear goal", role: .destructive) { change(.clear, revision) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in Text("The conversation and its messages will be kept.") }
+    }
+
+    private func goalContent<Header: View>(bottomInset: CGFloat = 0, @ViewBuilder header: () -> Header) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            header()
+            Text(summary.objective).font(.subheadline).lineLimit(2)
+                // Fit the header first and wrap the objective at the resulting width.
+                .frame(idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.bottom, bottomInset)
+    }
+
+    private func status(_ usage: String) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                statusLabel
+                if !usage.isEmpty { usageLabel(usage) }
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                statusLabel
+                if !usage.isEmpty { usageLabel(usage) }
+            }
+        }
+        .font(.footnote)
+    }
+
+    private func controls(_ revision: String) -> some View {
+        HStack(spacing: 0) {
+            if summary.status != "complete" {
+                action("Edit goal", icon: "pencil", id: "editGoal") { edit(revision) }
+            }
+            if summary.status == "active" {
+                action("Pause goal", icon: "pause.fill", id: "pauseGoal") { change(.pause, revision) }
+            } else if summary.status == "paused" {
+                action("Resume goal", icon: "play.fill", id: "resumeGoal") { change(.resume, revision) }
+            }
+            action("Clear goal", icon: "trash", id: "clearGoal", tint: .red) { clearRevision = revision }
+        }
+        .buttonStyle(ChatPressStyle())
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
+    }
+
+    private func action(_ title: LocalizedStringKey, icon: String, id: String,
+                        tint: Color = Color(.secondaryLabel), perform: @escaping () -> Void) -> some View {
+        Button(action: perform) {
+            Image(systemName: icon)
+                .font(.subheadline.weight(.medium)).foregroundStyle(tint)
+                .frame(width: Self.actionSize, height: Self.actionSize).contentShape(.rect)
+        }
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(id)
+    }
+
+    private var statusLabel: some View {
+        Label {
+            Text(title).fontWeight(.semibold)
+        } icon: {
+            Image(systemName: summary.status == "complete" ? "checkmark.circle.fill" : "target")
+                .foregroundStyle(tint).accessibilityHidden(true)
+        }
+    }
+
+    private func usageLabel(_ usage: String) -> some View {
+        Text(usage).foregroundStyle(Color(.secondaryLabel)).accessibilityIdentifier("goalSummaryUsage")
+    }
+}
+
+private struct GoalEditRequest: Identifiable {
+    let id = UUID()
+    let revision: String
+    let owner: Int
+    let summary: MobileGoalSummary
+}
+
+private struct GoalObjectiveEditor: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let runID: String
+    let request: GoalEditRequest
+    @Environment(\.dismiss) private var dismiss
+    @State private var objective: String
+    @State private var saving = false
+    @State private var error: String?
+    @FocusState private var focused: Bool
+
+    init(session: BackendSession, runID: String, request: GoalEditRequest) {
+        self.session = session; self.runID = runID; self.request = request
+        _objective = State(initialValue: request.summary.objectiveTruncated == true ? "" : request.summary.objective)
+    }
+
+    private var trimmed: String { objective.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var allowed: Bool {
+        !saving && !trimmed.isEmpty && trimmed.unicodeScalars.count <= 2048 && session.canChangeGoal(runID)
+            && (request.summary.objectiveTruncated == true || trimmed != request.summary.objective)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextEditor(text: $objective)
+                        .frame(minHeight: 120).focused($focused)
+                        .accessibilityLabel("Goal objective").accessibilityIdentifier("goalObjectiveInput")
+                } footer: {
+                    if trimmed.unicodeScalars.count > 2048 {
+                        Text("Use up to 2,048 characters.")
+                    } else if request.summary.objectiveTruncated == true {
+                        Text("Enter a replacement for the full goal objective.")
+                    }
+                }
+                if let error { Text(error).foregroundStyle(.secondary) }
+            }
+            .expandedNavigationTitle("Edit goal")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(saving ? "Saving…" : "Save", action: save).disabled(!allowed).accessibilityIdentifier("saveGoalObjective")
+                }
+            }
+        }
+        .task { focused = true }
+        .interactiveDismissDisabled(saving)
+    }
+
+    private func save() {
+        guard allowed, request.owner == session.ownership else { return }
+        let text = trimmed
+        saving = true; error = nil
+        Task {
+            defer { saving = false }
+            do {
+                try await session.changeGoal(runID, revision: request.revision, change: .edit(text))
+                dismiss()
+            } catch {
+                self.error = session.goalChangeNeedsCheck ? "Close this editor to check whether Codex saved the goal." : error.localizedDescription
+            }
+        }
+    }
+}
+
+struct GoalChangeDeliveryNotice: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+
+    var body: some View {
+        if session.goalChangeNeedsCheck {
+            ChatNotice(title: "Goal change unconfirmed", message: "Check whether Codex applied the change.",
+                       symbol: "exclamationmark.circle", warning: true) {
+                Button("Check goal change") {
+                    let owner = session.ownership
+                    Task {
+                        guard owner == session.ownership else { return }
+                        do { try await session.checkGoalChange() }
+                        catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
+                    }
+                }
+                .disabled(!session.isConnected || !session.supportsMobileGoalControls)
+                .accessibilityIdentifier("checkGoalChange")
+            }
+            .padding(.vertical, 8).background(Color(.systemBackground))
         }
     }
 }

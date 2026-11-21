@@ -40,6 +40,19 @@ public struct BackendDescriptor: Codable, Equatable, Sendable {
     public let serverTime: String
 }
 
+public struct MobileGoalSummary: Codable, Equatable, Sendable {
+    public let objective: String
+    public let status: String
+    public let tokensUsed: Int?
+    public let timeUsedSeconds: Int?
+    public var revision: String?
+    public var objectiveTruncated: Bool?
+}
+
+public enum MobileGoalChange: Sendable {
+    case edit(String), pause, resume, clear
+}
+
 public struct PairedBackend: Codable, Equatable, Sendable {
     public let descriptor: BackendDescriptor
     public let endpoints: [URL]

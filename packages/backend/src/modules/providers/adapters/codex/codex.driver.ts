@@ -352,7 +352,10 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     ensureServer: () => ensureServer(), getRunningServer,
     resolveThread: async (runId) => runCoordinator.getSessionThread(runId) ?? (await runsRepo.findRunById(runId))?.sessionId ?? undefined,
     findRunId: (threadId) => runCoordinator.findRunIdForThread(threadId),
-    publish: (runId, goal) => emit(CHANNELS.providers.goalUpdated, { providerId: PROVIDER_IDS.codex, runId, goal }, { runId }),
+    publish: (runId, goal) => {
+      emit(CHANNELS.providers.goalUpdated, { providerId: PROVIDER_IDS.codex, runId, goal }, { runId });
+      emit(CHANNELS.providers.mobileGoalChanged, { runId }, { runId });
+    },
     warn: logWarn, error: logError, unavailable: isCodexUnavailableThreadError,
   });
   const sessionAcquisition = createCodexSessionAcquisition({

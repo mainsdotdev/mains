@@ -35,6 +35,10 @@ public struct WorkInboxGroups: Sendable {
     public var isEmpty: Bool { needsYou.isEmpty && running.isEmpty && failed.isEmpty && finished.isEmpty }
 }
 
+enum MateActivity: Equatable {
+    case working, needsYou
+}
+
 /// A bounded, memory-only projection across spaces/providers, independent of
 /// the selected conversation and its transcript window.
 public struct WorkInboxSnapshot: Sendable {
@@ -72,6 +76,20 @@ public struct WorkInboxSnapshot: Sendable {
         result.failed = Array(result.failed.prefix(20))
         result.finished = Array(result.finished.prefix(20))
         return result
+    }
+
+    func mateActivity(now: Date) -> [String: MateActivity] {
+        let waiting = Set(requests.filter { $0.expiresAt > now }.map(\.runId))
+        var activity: [String: MateActivity] = [:]
+        for run in runs where !run.isArchived && run.isReplica != true {
+            guard let mateID = run.assistantId else { continue }
+            if waiting.contains(run.id) {
+                activity[mateID] = .needsYou
+            } else if activeIDs.contains(run.id), run.isActive, activity[mateID] == nil {
+                activity[mateID] = .working
+            }
+        }
+        return activity
     }
 
     @MainActor

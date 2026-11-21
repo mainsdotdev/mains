@@ -472,6 +472,35 @@ esac
     await driver.shutdown?.();
   });
 
+  it.each([
+    {
+      events: [{ type: "assistant", error: "billing_error", message: { content: [
+        { type: "text", text: "This account needs an active subscription to use Claude Code." },
+      ] } }],
+      error: "This account needs an active subscription to use Claude Code.",
+    },
+    {
+      events: [{ type: "result", subtype: "error_during_execution", is_error: true, errors: ["This organization has no available credits."] }],
+      error: "This organization has no available credits.",
+    },
+    {
+      events: [{ type: "result", subtype: "success", is_error: true, result: "The selected model is unavailable on your plan." }],
+      error: "The selected model is unavailable on your plan.",
+    },
+    {
+      events: [{ type: "assistant", error: "authentication_failed", message: { content: [] } }],
+      error: "Claude: authentication failed — sign in again",
+    },
+  ])("reports the provider failure for isolated generation: $error", async ({ events, error }) => {
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close, async *[Symbol.asyncIterator]() {
+      yield { type: "assistant", message: { content: [{ type: "text", text: "Partial reply" }] } };
+      yield* events;
+    } }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    await expect(driver.generateText!("welcome profile", { isolated: true })).rejects.toThrow(new Error(error));
+    expect(sdk.close).toHaveBeenCalledOnce();
+  });
+
   it("uses the bundled executable for runs, the live catalogue, commands and account probes", async () => {
     const driver = createClaudeDriver({ settingSources: [] });
     expect(resolveClaudeRuntime()).toEqual({ path: bundled, source: "bundled" });
@@ -708,7 +737,10 @@ if (command === "plugin") {
     await expect(driver.generateText!("hello")).resolves.toBe("ok");
     expect(sdk.close).toHaveBeenCalledTimes(1);
     sdk.query.mockImplementationOnce(() => ({ close: sdk.close,
-      async *[Symbol.asyncIterator]() { throw new Error("query crashed"); yield; },
+      async *[Symbol.asyncIterator]() {
+        yield { type: "assistant", message: { content: [{ type: "text", text: "Partial reply" }] } };
+        throw new Error("query crashed");
+      },
     }));
     await expect(driver.generateText!("fail")).rejects.toThrow("query crashed");
     expect(sdk.close).toHaveBeenCalledTimes(2);
