@@ -385,6 +385,8 @@ export interface StartRunPayload {
   goal: string;
   /** Page being worked on; its instructions stay outside the user prompt. */
   atlasPageId?: string;
+  /** Starts a run from the Atlas image creator. */
+  atlasImage?: true;
   model?: string;
   systemPrompt?: string;
   initialContext?: StartRunContextItem[];

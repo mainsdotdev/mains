@@ -358,7 +358,7 @@ Core tables:
 **Atlas bookmarks** (`../../packages/backend/src/modules/atlas/`; `features/atlas/`)
 - Bookmarks are `atlas_items` rows, alongside Pages, documents and images; tags have stable ids in `atlas_tags`, with user/AI provenance and exclusions in `atlas_item_tags`.
 - Bookmark URL/description/note columns are shared-contract fields; OG details use `metadata.bookmark`. `bookmark_job` is durable device-local enrichment work and never syncs. The Atlas IPC lifecycle owns its worker.
-- Atlas library/bookmarks are available for every provider. `supportsAtlas` still gates Page editing/chat and image creation. New non-file kinds require explicit handling wherever callers previously assumed a non-Page was a file.
+- Atlas library, bookmarks and image creation are available from every provider's Space. `supportsAtlas` gates Page editing/chat. New non-file kinds require explicit handling wherever callers previously assumed a non-Page was a file.
 - Automatic tagging is configured in Settings › Atlas (`/settings?section=atlas`), is opt-in and uses an independently chosen provider/model. See CONTEXT.md for queue, metadata, tag and Bridge semantics.
 
 **Stats Module** (`../../packages/backend/src/modules/stats/`) — Dashboard statistics and analytics (joins `workspace_diffs` via its own repo)

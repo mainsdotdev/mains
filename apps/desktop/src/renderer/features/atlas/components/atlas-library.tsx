@@ -539,7 +539,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                 <Bookmark aria-hidden="true" className="size-4" />
                 Add bookmark
               </Button>
-            ) : type === "image" && provider.supportsAtlas ? (
+            ) : type === "image" ? (
               <Button
                 aria-label="New image"
                 variant="primary"
@@ -564,7 +564,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                 {(close) => (
                   <>
                     <DropdownMenuItem onClick={() => { close(); openAtlasBookmark({ accountId, collectionId: collectionId || undefined }); }}><Bookmark className="size-4" />New bookmark</DropdownMenuItem>
-                    {type === "all" && provider.supportsAtlas && <DropdownMenuItem
+                    {type === "all" && <DropdownMenuItem
                       onClick={() => { close(); navigate(atlasImageCreatorHref(collectionId)); }}>
                       <Picture className="size-4" />New image
                     </DropdownMenuItem>}

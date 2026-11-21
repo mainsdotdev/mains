@@ -3,7 +3,7 @@ import type { SkillInfo } from "@/lib/redux/api/providersApi";
 import { allowsImageSubmission, availableImageSkill, createImageCreatorLifecycle } from "./image-creator-lifecycle";
 
 const skill: SkillInfo = { name: "imagegen", path: "/skills/imagegen/SKILL.md", scope: "system", enabled: true, userInvokable: true };
-const eligible = { skill, prompt: "$imagegen A mountain", runsLoaded: true, settingsReady: true, loading: false };
+const eligible = { providerId: "codex" as const, skill, prompt: "$imagegen A mountain", runsLoaded: true, settingsReady: true, loading: false };
 describe("image creator submission policy", () => {
   it.each([
     ["missing skill", { skill: undefined }], ["empty instruction", { prompt: " $imagegen \n" }],

@@ -379,7 +379,7 @@ struct MateProfileEditor: View {
 
     var body: some View {
         NavigationStack {
-            MateEditorForm(session: session, mateID: mate.id, title: "Edit Profile", change: change,
+            MateEditorForm(session: session, mateID: mate.id, title: "Edit Mate", change: change,
                            avatarBackdrop: profile.avatar, dismissFocus: { focusedField = nil }) {
                 TextField("Mate name", text: $profile.name)
                     .font(.largeTitle.weight(.semibold).width(.expanded))
@@ -390,9 +390,9 @@ struct MateProfileEditor: View {
                     .accessibilityIdentifier("editMateName")
                 if let catalogue = MateRobotAssets.catalogue {
                     MateRobotPicker(catalogue: catalogue, avatar: $profile.avatar, remembered: $rememberedStyles,
-                                    stageHeight: 215, previewActive: previewActive, isSelecting: true)
+                                    stageHeight: 185, previewActive: previewActive, isSelecting: true)
                 } else {
-                    MateRobotThumbnail(preset: nil).frame(height: 160)
+                    MateRobotThumbnail(preset: nil).frame(height: 140)
                 }
                 MateTeamPicker(session: session, teams: teams, selection: $team, openEditor: {
                     focusedField = nil
@@ -431,19 +431,18 @@ struct MateProfileEditor: View {
         }
     }
 
-    private var modelOptions: some View {
-        VStack(spacing: 8) {
-            Text("Model & Effort").font(.headline.width(.expanded)).accessibilityAddTraits(.isHeader)
-            if session.supportsMateModelEditing {
-                ModelEffortPicker(providerID: provider, models: models, model: selectedModel, settings: settings,
-                                  loading: session.loadingModels.contains(provider), enabled: canSelectModel,
-                                  storedEffortOnly: true, compactWheel: true, error: session.modelErrors[provider],
-                                  canRetry: canSelectModel, retry: { Task { await session.loadModels(provider, force: true) } },
-                                  selectModel: { model in
-                                      focusedField = nil
-                                      settings = mateSettings(settings, selecting: model, provider: provider)
-                                  }, updateEffort: { settings = $0 })
-            } else {
+    @ViewBuilder private var modelOptions: some View {
+        if session.supportsMateModelEditing {
+            ModelEffortPicker(providerID: provider, models: models, model: selectedModel, settings: settings,
+                              loading: session.loadingModels.contains(provider), enabled: canSelectModel,
+                              storedEffortOnly: true, compactWheel: true, error: session.modelErrors[provider],
+                              canRetry: canSelectModel, retry: { Task { await session.loadModels(provider, force: true) } },
+                              selectModel: { model in
+                                  focusedField = nil
+                                  settings = mateSettings(settings, selecting: model, provider: provider)
+                              }, updateEffort: { settings = $0 })
+        } else {
+            VStack(spacing: 8) {
                 Text(mate.model + " · " + ComposerSettings.effortLabel(originalEffort, provider: provider))
                 Text("Update Mains on your computer to change the model and effort.")
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)

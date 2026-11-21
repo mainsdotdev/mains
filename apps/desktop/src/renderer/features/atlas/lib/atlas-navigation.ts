@@ -1,4 +1,5 @@
 import type { AtlasKind } from "@mains/contracts/atlas";
+import type { ImageProvider } from "./image-creation";
 
 export type AtlasType = "all" | AtlasKind;
 export type AtlasScope = "all" | "generated" | "uploads" | "saved" | "favorites";
@@ -30,7 +31,10 @@ export function atlasLibraryHref(type: AtlasType = "all", scope: AtlasScope = "a
   return `/atlas${params.size ? `?${params}` : ""}`;
 }
 
-export function atlasImageCreatorHref(collectionId = "", runId?: string) {
+export function atlasImageCreatorHref(collectionId = "", runId?: string, providerId?: ImageProvider) {
   const path = runId ? `/atlas/images/runs/${encodeURIComponent(runId)}` : "/atlas/images/new";
-  return collectionId ? `${path}?${new URLSearchParams({ project: collectionId })}` : path;
+  const params = new URLSearchParams();
+  if (collectionId) params.set("project", collectionId);
+  if (!runId && providerId) params.set("provider", providerId);
+  return params.size ? `${path}?${params}` : path;
 }

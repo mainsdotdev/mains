@@ -41,7 +41,7 @@ export function useWorkspaceRuns(
   /** Workspaces the user can switch to next; their run lists are fetched ahead. */
   prefetchWorkspaceIds: readonly string[] = NO_WORKSPACE_IDS,
   /** Embedded app conversations own their selection without changing workspace tabs. */
-  options: { selection?: "workspace" | "local"; retainedRunIds?: readonly string[]; operationIsCurrent?: (accountId?: string) => boolean } = {},
+  options: { selection?: "workspace" | "local"; retainedRunIds?: readonly string[]; operationIsCurrent?: (accountId?: string) => boolean; atlasImage?: true } = {},
 ) {
   const publishSelection = options.selection !== "local";
   const operationIsCurrent = options.operationIsCurrent;
@@ -367,7 +367,7 @@ export function useWorkspaceRuns(
     forkRun,
     executeReview,
     checkCanResume,
-  } = useRunOperations({ registerNewRun, loadRunDetails, onRunUpdated, operationIsCurrent });
+  } = useRunOperations({ registerNewRun, loadRunDetails, onRunUpdated, operationIsCurrent, atlasImage: options.atlasImage });
 
   const continueRun = useCallback(async (...args: Parameters<typeof continueRunOperation>) => {
     const succeeded = await continueRunOperation(...args);

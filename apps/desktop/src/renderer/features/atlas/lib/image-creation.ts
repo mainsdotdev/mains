@@ -1,5 +1,17 @@
 import type { SkillInfo } from "@/lib/redux/api/providersApi";
 import type { ContextSkillItem } from "@/features/workspace/lib/composer-context";
+import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
+
+export const IMAGE_PROVIDERS = [
+  { value: PROVIDER_IDS.codex, label: "Codex" },
+  { value: PROVIDER_IDS.cursor, label: "Cursor" },
+] as const;
+
+export type ImageProvider = (typeof IMAGE_PROVIDERS)[number]["value"];
+
+export function isImageProvider(value: unknown): value is ImageProvider {
+  return IMAGE_PROVIDERS.some((option) => option.value === value);
+}
 
 export const IMAGE_TEMPLATES = [
   { title: "Poster", prompt: "Create a poster with clear hierarchy, readable text, and imagery that fits my idea. Preserve supplied names, dates, and details exactly. Ask me about the message, required content, layout, and visual style before generating.\n\nMy idea: " },
@@ -19,12 +31,14 @@ export function isImageGenAvailable(skill?: SkillInfo): skill is SkillInfo {
   return !!skill && skill.enabled !== false && skill.userInvokable !== false;
 }
 
-export function findImageGenSkill(skills?: readonly SkillInfo[]): SkillInfo | undefined {
-  const matches = skills?.filter((skill) =>
-    [skill.name, skill.displayName].some((name) =>
-      ["imagegen", "imagegeneration"].includes((name ?? "").toLowerCase().replace(/[^a-z0-9]/g, "")),
-    ),
+export function isImageGenSkill(skill: Pick<SkillInfo, "name" | "displayName">): boolean {
+  return [skill.name, skill.displayName].some((name) =>
+    ["imagegen", "imagegeneration"].includes((name ?? "").toLowerCase().replace(/[^a-z0-9]/g, "")),
   );
+}
+
+export function findImageGenSkill(skills?: readonly SkillInfo[]): SkillInfo | undefined {
+  const matches = skills?.filter(isImageGenSkill);
   return matches?.find(isImageGenAvailable) ?? matches?.[0];
 }
 

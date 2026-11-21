@@ -1317,7 +1317,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(edit.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(edit.frame.midX, details.frame.midX)
         edit.tap()
-        let editor = app.navigationBars["Edit Profile"]
+        let editor = app.navigationBars["Edit Mate"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         editor.buttons["Cancel"].tap()
         XCTAssertTrue(editor.waitForNonExistence(timeout: 5))
@@ -1371,8 +1371,9 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(edit.waitForExistence(timeout: 5))
         edit.tap()
 
-        let editor = app.navigationBars["Edit Profile"]
+        let editor = app.navigationBars["Edit Mate"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Model & Effort"].exists)
         let name = app.textFields["editMateName"]
         XCTAssertTrue(name.exists)
         let scrollEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.025, dy: 0.58))
@@ -1381,7 +1382,7 @@ final class MainsUITests: XCTestCase {
                          withVelocity: .slow, thenHoldForDuration: 0.25)
         XCTAssertLessThan(name.frame.minY, editor.frame.maxY)
         XCTAssertGreaterThan(name.frame.maxY, editor.frame.minY)
-        attachScreenshot(app, name: "Edit Profile – protected header while scrolling")
+        attachScreenshot(app, name: "Edit Mate – protected header while scrolling")
         scrollEdge.press(forDuration: 0.05, thenDragTo: scrollEdge.withOffset(CGVector(dx: 0, dy: distanceToHeader + 100)),
                          withVelocity: .slow, thenHoldForDuration: 0.25)
         let keyboard = app.keyboards.firstMatch
@@ -1404,11 +1405,11 @@ final class MainsUITests: XCTestCase {
         selectEffort(at: 0, in: app)
         XCTAssertEqual(slider.value as? String, "Medium")
         XCTAssertTrue(save.isEnabled)
-        attachScreenshot(app, name: "Edit Profile – model and effort")
+        attachScreenshot(app, name: "Edit Mate – model and effort")
         let description = app.descendants(matching: .any).matching(identifier: "editMateDescription").firstMatch
         scrollTo(description, in: app)
         XCTAssertTrue(app.textViews["editMateInstructions"].exists)
-        attachScreenshot(app, name: "Edit Profile – description and instructions")
+        attachScreenshot(app, name: "Edit Mate – description and instructions")
         description.tap()
         description.typeText(" and signing")
         let editedDescription = try XCTUnwrap(description.value as? String).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1739,7 +1740,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(edit.waitForExistence(timeout: 5))
         scrollTo(edit, in: app)
         edit.tap()
-        XCTAssertTrue(app.navigationBars["Edit Profile"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Edit Mate"].waitForExistence(timeout: 5))
         beginTeam("Review Team")
         XCTAssertTrue(field.waitForNonExistence(timeout: 5))
         XCTAssertEqual(teams.value as? String, "Review Team")
@@ -1753,7 +1754,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(teamCommands.count, 3)
         XCTAssertEqual(teamCommands[0]["commandId"] as? String, teamCommands[1]["commandId"] as? String)
         XCTAssertFalse(beforeSave.contains { $0["channel"] as? String == "assistants:mobileManage" })
-        app.navigationBars["Edit Profile"].buttons["Save"].tap()
+        app.navigationBars["Edit Mate"].buttons["Save"].tap()
         XCTAssertTrue(mateInfoRow(containing: "Review Team", in: app).waitForExistence(timeout: 5))
 
         app.navigationBars["Mate Details"].buttons["BackButton"].tap()

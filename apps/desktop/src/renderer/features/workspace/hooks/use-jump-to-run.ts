@@ -13,13 +13,15 @@ import {
   setSelectedCollectionId,
 } from "@/lib/redux/slices/workspaceSlice";
 import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
+import { atlasImageCreatorHref } from "@/features/atlas/lib/atlas-navigation";
+import { isImageProvider } from "@/features/atlas/lib/image-creation";
 import { resolveRunSpaceTarget } from "../lib/background-runs";
 
 /** What a jump needs to know about a run: where it lives, and under which agent. */
 export type RunJumpTarget = Pick<
   ActiveRun,
   "id" | "spaceId" | "providerId" | "mode" | "workspaceId" | "collectionId" | "assistantId"
->;
+> & Partial<Pick<ActiveRun, "configSnapshot">>;
 
 /**
  * Open a run from outside the page it lives on — the background-run dock, or a
@@ -37,6 +39,10 @@ export function useJumpToRun(): (run: RunJumpTarget) => Promise<void> {
     async (run: RunJumpTarget) => {
       if (run.assistantId) {
         navigate(`/assistants?${new URLSearchParams({ assistant: run.assistantId, run: run.id })}`);
+        return;
+      }
+      if (run.mode === "work" && isImageProvider(run.providerId) && run.configSnapshot?.atlasImage === true) {
+        navigate(atlasImageCreatorHref(run.collectionId ?? "", run.id));
         return;
       }
       // The page shows one provider and one mode at a time, so landing on the

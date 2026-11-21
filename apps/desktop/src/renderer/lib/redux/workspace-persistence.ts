@@ -54,12 +54,40 @@ const workspaceMigrations = {
     next.openRunIds ??= next.activeTab && isRunTab(next.activeTab) ? [next.activeTab] : [];
     return next;
   },
+  3: (state: PersistedState): PersistedState => {
+    if (!state) return state;
+    const next = { ...state } as NonNullable<PersistedState> & {
+      draftTextByKey?: Record<string, string>;
+      composerContextKey?: string;
+    };
+    if (!next.draftTextByKey) return next;
+    const drafts = { ...next.draftTextByKey };
+    const activeKey = next.composerContextKey;
+    const keys = activeKey && drafts[activeKey]
+      ? [activeKey, ...Object.keys(drafts).filter((key) => key !== activeKey)]
+      : Object.keys(drafts);
+    for (const key of keys) {
+      let parts: unknown;
+      try { parts = JSON.parse(key); } catch { continue; }
+      if (!Array.isArray(parts) || parts.length !== 6 || parts[1] !== "atlas-image" ||
+        typeof parts[3] !== "string" || parts[4] !== "new") continue;
+      parts[3] = null;
+      const sharedKey = JSON.stringify(parts);
+      if (!drafts[sharedKey] && drafts[key]) {
+        drafts[sharedKey] = drafts[key];
+        delete drafts[key];
+        if (key === activeKey) next.composerContextKey = sharedKey;
+      }
+    }
+    next.draftTextByKey = drafts;
+    return next;
+  },
 };
 
 export const workspacePersistConfig = {
   key: "workspace",
   storage,
-  version: 2,
+  version: 3,
   migrate: createMigrate(workspaceMigrations),
   transforms: [selectedFileTransform, conversationSettingsTransform],
   whitelist: [

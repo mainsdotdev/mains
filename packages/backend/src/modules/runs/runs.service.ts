@@ -2186,7 +2186,13 @@ export const runsService = {
       }
       const mode = payload.mode === undefined ? spaceMode : payload.mode;
       if (!isModeId(mode)) throw new Error("Invalid run mode");
-      if (!providerSupportsMode(payload.providerId, mode)) {
+      const atlasImage = payload.atlasImage === true;
+      const cursor = payload.providerId === PROVIDER_IDS.cursor;
+      if (atlasImage && (mode !== "work" || assistant || payload.atlasPageId || payload.configSnapshot?.atlasPageId ||
+        (!cursor && payload.providerId !== PROVIDER_IDS.codex))) {
+        throw new Error("Atlas image creation requires a Codex or Cursor image conversation");
+      }
+      if (!providerSupportsMode(payload.providerId, mode) && !(atlasImage && cursor)) {
         throw new Error(
           `Provider "${provider.displayName}" does not support ${mode} mode`,
         );
@@ -2244,6 +2250,7 @@ export const runsService = {
           ...(assistant ? { assistantId: assistant.id } : {}),
           ...providerOutputStyle,
           ...(payload.configSnapshot ?? {}),
+          ...(atlasImage ? { atlasImage: true } : {}),
           ...conversationSettings.config,
           conversationSettings,
           ...(atlasPage ? { atlasPageId: atlasPage.id } : {}),

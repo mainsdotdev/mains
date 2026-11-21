@@ -26,6 +26,16 @@ function setup() {
   });
 }
 describe("opening project chats", () => {
+  it("opens an Atlas image conversation without switching the Cursor Space to Work", async () => {
+    const view = setup();
+    await act(async () => { await view.result.current.jump({
+      ...run, id: "image", providerId: "cursor", workspaceId: null, mode: "work",
+      collectionId: "collection", configSnapshot: { atlasImage: true },
+    }); });
+    expect(view.result.current.path + view.result.current.search).toBe("/atlas/images/runs/image?project=collection");
+    expect(mocks.switchSpace).not.toHaveBeenCalled();
+    expect(mocks.updateSpace).not.toHaveBeenCalled();
+  });
   it("opens an assistant conversation without changing the rail Space or mode", async () => {
     const view = setup();
     await act(async () => { await view.result.current.jump({ ...run, assistantId: "release-assistant", mode: "work" }); });

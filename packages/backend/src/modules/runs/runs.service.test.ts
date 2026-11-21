@@ -1202,6 +1202,33 @@ describe("runsService", () => {
       expect(await runsService.getRunsByAccount("default")).toEqual([]);
     });
 
+    it("starts and resumes a Cursor Atlas image run from a Developer Space", async () => {
+      createProvider(db, { id: "cursor" });
+      const space = createSpace(db, { providerId: "cursor", mode: "developer" });
+      const collection = createCollection(db);
+      const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRun, continueRun } as never);
+      const payload = { accountId: "default", spaceId: space.id, providerId: "cursor", mode: "work" as const,
+        collectionId: collection.id, goal: "Generate an image of a mountain" };
+
+      await expect(runsService.executeRun(payload)).rejects.toThrow("does not support work mode");
+      const { runId } = await runsService.executeRun({ ...payload, atlasImage: true });
+      await flushBackground();
+      expect(await runsService.getRunById(runId)).toMatchObject({
+        providerId: "cursor", mode: "work", spaceId: space.id, workspaceId: null,
+        collectionId: collection.id, configSnapshot: { atlasImage: true },
+      });
+      expect(startRun).toHaveBeenCalledOnce();
+      expect(startRun.mock.calls[0][0]).toMatchObject({ goal: payload.goal, mode: "work",
+        execution: { workspaceId: null }, configSnapshot: { atlasImage: true } });
+      await runsService.continueRun({ runId, accountId: "default", message: "Make it snowy" });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0]).toMatchObject({ message: "Make it snowy", mode: "work",
+        execution: startRun.mock.calls[0][0].execution, configSnapshot: { atlasImage: true } });
+      expect((await spaceService.getById(space.id))?.mode).toBe("developer");
+    });
+
     it("snapshots work mode from the space and passes the delta to the adapter", async () => {
       createSpace(db, {
         id: "sp-work",

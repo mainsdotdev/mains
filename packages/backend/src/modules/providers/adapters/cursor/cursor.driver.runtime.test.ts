@@ -157,6 +157,38 @@ describe("Cursor ACP transcript", () => {
     if (transport === "request") expect(fixture.calls).toContainEqual(expect.objectContaining({ id: 77, result: {} }));
   });
 
+  it("routes a native image with no session ID to its own prompt during concurrent Cursor runs", async () => {
+    const cwd = path.join(temporary, "image-run");
+    fs.mkdirSync(cwd);
+    const source = path.join(cwd, "image.png");
+    fs.writeFileSync(source, "generated image bytes");
+    const image = await driver.createSession({
+      runId: "image", accountId: "account-1", execution: { cwd, workspaceId: null },
+      mode: "work", configSnapshot: { atlasImage: true, mode: "ask" }, goal: "A yellow triangle",
+    });
+    const other = await acquire("other");
+    expect(image.prompt).toContain("built-in image generation tool");
+    expect(fixture.calls).toContainEqual(expect.objectContaining({ method: "session/set_mode",
+      params: { sessionId: image.sessionId, modeId: "agent" } }));
+    const events: WorkRunEvent[] = [];
+    const otherEvents: WorkRunEvent[] = [];
+    const pending: RpcMessage[] = [];
+    fixture.onPrompt = (message) => { pending.push(message); };
+    const run = (session: typeof image, destination: WorkRunEvent[]) => driver.executePrompt(
+      session.session, session.prompt, (event) => { destination.push(event); }, new AbortController().signal,
+    );
+    const first = run(image, events);
+    const second = run(other, otherEvents);
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    fixture.update(image.sessionId!, { sessionUpdate: "tool_call", toolCallId: "image-call",
+      title: "Generate Image", kind: "other", status: "pending" });
+    fixture.send({ method: "cursor/generate_image", params: { toolCallId: "image-call", filePath: source } });
+    for (const message of pending) fixture.finish(message);
+    await Promise.all([first, second]);
+    expect(events.filter((event) => event.type === "artifact" && event.kind === "image")).toHaveLength(1);
+    expect(otherEvents.filter((event) => event.type === "artifact" && event.kind === "image")).toEqual([]);
+  });
+
   it.each(["initialize", "authenticate"])("retires pending %s instead of resurrecting a server after shutdown", async (method) => {
     fixture.holdMethod = method;
     const opening = acquire();
