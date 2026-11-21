@@ -113,6 +113,26 @@ import Testing
         #expect(calls.count == 2 && calls[0].commandID == calls[1].commandID && calls[0].args == calls[1].args)
     }
 
+    @Test @MainActor func homeVoiceStartsWithSavedSettingsWithoutWaitingForConversationMetadata() async throws {
+        let (session, backend, probe, _) = try await setup()
+        defer { try? session.forget(); backend.shutdown() }
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+        let space = try #require(session.spaces.first { $0.providerId == "codex" })
+        session.selectSpace(space.id)
+        session.selectTarget(HomeTarget(workspaceID: backend.defaultWorkspaceID), spaceID: space.id)
+
+        await session.startVoice(spaceID: space.id)
+        try await eventually { session.voice.phase == .connected }
+        let create = try #require(probe.calls.firstIndex { $0.channel == "runs:createRealtimeConversation" })
+        let start = try #require(probe.calls.firstIndex { $0.channel == "runs:startRealtime" })
+        #expect(create < start)
+        #expect(!probe.calls.prefix(start).contains { $0.channel == "runs:getById" && $0.args == [.string(probe.runID)] })
+        let createPayload = try #require(probe.calls[create].args.first)
+        let startPayload = try #require(probe.calls[start].args.first)
+        #expect(createPayload["conversationSettings"] != .null)
+        #expect(startPayload["conversationSettings"] == .null)
+    }
+
     @Test @MainActor func stopRecoveryKeepsTheOriginalCommandAndPairingRetirementReleasesAllMedia() async throws {
         let (session, backend, probe, media) = try await setup()
         defer { backend.shutdown() }

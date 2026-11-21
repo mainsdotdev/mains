@@ -115,10 +115,22 @@ struct ConversationView: View {
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
     private var composerContext: ComposerContext? {
         if let run { return ComposerContext(run: run) }
+        #if MAINS_GPT_LIVE
+        if ownsVoice, let space = session.spaces.first(where: { $0.id == session.voiceSpaceID }) {
+            return ComposerContext(space: space, runID: runID)
+        }
+        #endif
         // The command can be acknowledged before getById/history arrives. Keep
         // the same composer mounted throughout that metadata hand-off.
         if pending?.status == .accepted, let space = session.selectedSpace { return ComposerContext(space: space, runID: runID) }
         return nil
+    }
+    private var disablesComposer: Bool {
+        if let pending = session.pendingConversationAction, pending.runID == runID, pending.action.retiresConversation { return true }
+        #if MAINS_GPT_LIVE
+        if ownsVoice { return false }
+        #endif
+        return run == nil
     }
     private var uncertain: Bool { session.pendingMessage?.status == .uncertain }
     private var showsConnectionPill: Bool { session.pairing != nil && !session.isConnected }
@@ -646,7 +658,7 @@ struct ConversationView: View {
                     active: run?.isActive == true, canSendDuringRun: run?.supportsSteering == true, sendLabel: sendLabel,
                     stopping: session.stoppingRunID == runID, stop: { Task { await stop() } },
                     model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend)
-                    .disabled(run == nil || session.pendingConversationAction.map { $0.runID == runID && $0.action.retiresConversation } == true)
+                    .disabled(disablesComposer)
             }
         }
         .padding(.top, 8).padding(.bottom, 8)

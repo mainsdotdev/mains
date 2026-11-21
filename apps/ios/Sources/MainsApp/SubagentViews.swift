@@ -26,9 +26,10 @@ struct SubagentDock: View {
                 SubagentGlyph()
                 Text("\(agents.count) \(agents.count == 1 ? "agent" : "agents")")
             }.font(.subheadline.weight(.medium)).foregroundStyle(.primary).padding(.horizontal, 16).frame(height: 44)
-                .background(Color(.secondarySystemBackground), in: .capsule)
+                .contentShape(.capsule)
         }
-        .buttonStyle(ChatPressStyle()).accessibilityIdentifier("subagentDock")
+        .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 22))
+        .accessibilityIdentifier("subagentDock")
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         .frame(maxWidth: .infinity).padding(.vertical, 2)
         .overlay(alignment: .bottom) {
@@ -42,8 +43,8 @@ struct SubagentDock: View {
                     }.padding(14)
                 }
                 .scrollBounceBehavior(.basedOnSize).frame(height: cardHeight)
-                .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 22))
-                .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(.primary.opacity(0.08)) }
+                .clipShape(.rect(cornerRadius: 22))
+                .modifier(GlassSurface(radius: 22, interactive: false))
                 .padding(.horizontal, 24).padding(.bottom, 56)
                 .transition(reduceMotion ? .opacity : .scale(scale: 0.94, anchor: .bottom).combined(with: .opacity))
                 .accessibilityIdentifier("subagentList")
@@ -95,8 +96,11 @@ struct SubagentSummaryRow: View {
                 SubagentGlyph()
                 Text(text).lineLimit(1)
                 Image(systemName: "chevron.right").font(.caption2)
-            }.font(.subheadline).foregroundStyle(.secondary).frame(minHeight: 30).contentShape(Rectangle())
-        }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("subagentSummary")
+            }.font(.subheadline).foregroundStyle(.secondary)
+                .padding(.horizontal, 12).frame(minHeight: 36).contentShape(.capsule)
+        }
+        .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 18))
+        .accessibilityIdentifier("subagentSummary")
     }
 }
 
@@ -154,8 +158,6 @@ struct SubagentDetailSheet: View {
             // away from a tool or report while further child activity arrives.
             .defaultScrollAnchor(.top)
             .defaultScrollAnchor(flow == nil ? .center : .top, for: .alignment)
-            .background(Color(.systemBackground))
-            .navigationHeaderFade()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

@@ -326,21 +326,31 @@ public final class BackendSession {
         }
     }
 
-    public func canStartVoice(runID: String? = nil, spaceID: String? = nil) -> Bool {
+    enum VoiceStartAvailability {
+        case unavailable, workspaceRequired, ready
+    }
+
+    func voiceStartAvailability(runID: String? = nil, spaceID: String? = nil) -> VoiceStartAvailability {
         guard isConnected, !isDemo, voice.makeMedia != nil, !voice.ownsCall, pendingVoiceConversation == nil,
-              pendingFork == nil, pendingConversationAction == nil, pendingMessage == nil, voiceSelectionChange == nil, !sending, stoppingRunID == nil else { return false }
-        if let runID, let run = conversations.first(where: { $0.id == runID }) {
-            return run.providerId == "codex" && !run.isActive && !run.isArchived && run.isReplica != true &&
-                run.archivedReplyError == nil && settingsChanges[runID] == nil &&
-                !decisionDeliveries.contains { $0.value.attempt?.runID == runID }
+              pendingFork == nil, pendingConversationAction == nil, pendingMessage == nil, voiceSelectionChange == nil, !sending, stoppingRunID == nil else { return .unavailable }
+        if let runID {
+            guard let run = conversations.first(where: { $0.id == runID }),
+                  run.providerId == "codex", !run.isActive, !run.isArchived, run.isReplica != true,
+                  run.archivedReplyError == nil, settingsChanges[runID] == nil,
+                  !decisionDeliveries.contains(where: { $0.value.attempt?.runID == runID }) else { return .unavailable }
+            return .ready
         }
-        guard runID == nil, let space = spaces.first(where: { $0.id == spaceID }), space.providerId == "codex", !changingMode else { return false }
+        guard let space = spaces.first(where: { $0.id == spaceID }), space.providerId == "codex", !changingMode else { return .unavailable }
         if space.mode == "developer" {
             guard let workspaceID = homeTargets[space.id]?.workspaceID,
                   workspaces.contains(where: { $0.id == workspaceID && $0.isReplica != true }),
-                  gitStates.first(where: { $0.workspaceId == workspaceID })?.pathExists != false else { return false }
+                  gitStates.first(where: { $0.workspaceId == workspaceID })?.pathExists != false else { return .workspaceRequired }
         }
-        return true
+        return .ready
+    }
+
+    public func canStartVoice(runID: String? = nil, spaceID: String? = nil) -> Bool {
+        voiceStartAvailability(runID: runID, spaceID: spaceID) == .ready
     }
 
     /// Creates an idle conversation only when the user explicitly starts voice.
@@ -374,13 +384,13 @@ public final class BackendSession {
             }
             guard let id, self.pairingOwner == owner, self.generation == current,
                   self.transport === candidate, self.isConnected, self.hasConsent(providerID: "codex") else { throw MainsError.changedBackend }
-            let settings = existingSettings ?? self.settings(forRunID: id)
             return RealtimeVoiceSignaling(runID: id, start: { [weak self] sdp, connectionID in
                 guard let self, self.pairingOwner == owner, self.generation == current,
                       self.transport === candidate, self.hasConsent(providerID: "codex") else { throw MainsError.changedBackend }
                 var payload: [String: JSONValue] = ["runId": .string(id), "accountId": .string(accountID),
                     "connectionId": .string(connectionID), "sdp": .string(sdp)]
-                if let settings { payload["conversationSettings"] = try .encode(settings) }
+                // A newly created conversation already has these settings on the host.
+                if let existingSettings { payload["conversationSettings"] = try .encode(existingSettings) }
                 // An SDP offer belongs to this one live peer. Never replay it
                 // on a replacement transport after the microphone has retired.
                 _ = try await candidate.invoke("runs:startRealtime", args: [.object(payload)], commandId: startID, timeout: 30)
@@ -403,7 +413,9 @@ public final class BackendSession {
         guard let pending = pendingVoiceConversation, pending.uncertain, !checkingVoiceConversation else { throw MainsError.invalidReply }
         checkingVoiceConversation = true
         defer { if pending.owner == pairingOwner { checkingVoiceConversation = false } }
-        return try await resolveVoiceConversation(pending)
+        let id = try await resolveVoiceConversation(pending)
+        _ = try? await readQueuedRun(id)
+        return id
     }
 
     private func resolveVoiceConversation(_ pending: PendingVoiceConversation) async throws -> String {
@@ -412,7 +424,6 @@ public final class BackendSession {
             let result = try await command("runs:createRealtimeConversation", args: [pending.payload], commandID: pending.commandID, owner: pending.owner)
             guard let id = result["runId"].string, !id.isEmpty, id.utf8.count <= 800 else { throw MainsError.invalidReply }
             if pairingOwner == pending.owner { pendingVoiceConversation = nil }
-            _ = try? await readQueuedRun(id)
             return id
         } catch {
             if pairingOwner == pending.owner {

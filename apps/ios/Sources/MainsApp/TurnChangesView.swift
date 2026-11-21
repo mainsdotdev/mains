@@ -18,6 +18,7 @@ struct TurnChangesCard: View {
     var body: some View {
         if let changes = turn.changes {
             let count = changes.fileCount ?? changes.files.count
+            let hasMoreFiles = count > changes.files.count
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: "doc.badge.plus").foregroundStyle(.secondary)
@@ -63,8 +64,14 @@ struct TurnChangesCard: View {
                     }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("expandTurnChanges-\(turn.id)")
                         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
                 }
-                if count > changes.files.count { notice("The full file list is available on desktop.") }
-                if changes.truncated { notice("Only part of this turn’s diff was stored.") }
+                if hasMoreFiles || changes.truncated {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if hasMoreFiles { notice("The full file list is available on desktop.") }
+                        if changes.truncated { notice("Only part of this turn’s diff was stored.") }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                }
             }
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 16))
             .clipShape(.rect(cornerRadius: 16))
@@ -76,7 +83,7 @@ struct TurnChangesCard: View {
             .filter { !$0.isEmpty }.joined(separator: " · ")
     }
     private func notice(_ text: String) -> some View {
-        Text(text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.bottom, 12)
+        Text(text).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
 }
 

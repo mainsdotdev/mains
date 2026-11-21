@@ -85,6 +85,20 @@ import Testing
         #expect(backend.stops.count == 2 && Set(backend.stops).count == 1 && !voice.ownsCall)
     }
 
+    @Test @MainActor func nativeCloseBeforeFailedStartReplySurfacesAnError() async {
+        let voice = RealtimeVoiceController(), media = VoiceMediaProbe(), backend = VoiceSignalingProbe()
+        voice.makeMedia = { media }
+        await voice.start(label: "Project") {
+            RealtimeVoiceSignaling(runID: "voice-run", start: { sdp, id in
+                backend.starts.append((sdp, id))
+                voice.receive(backend.event("closed", extra: ["reason": .string("start_failed")]))
+                throw MainsError.server("Native startup failed")
+            }, stop: { id in backend.stops.append(id) })
+        }
+        #expect(voice.phase == .error && voice.error != nil && media.closes == 1)
+        #expect(backend.stops.isEmpty)
+    }
+
     @Test @MainActor func failedClosureReleasesMicBlocksReplacementAndRetriesTheOriginalIdentity() async throws {
         let voice = RealtimeVoiceController(), media = VoiceMediaProbe(), backend = VoiceSignalingProbe()
         voice.makeMedia = { media }

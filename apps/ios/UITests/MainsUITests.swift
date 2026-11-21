@@ -1972,8 +1972,43 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
+    func testWorkInboxShowsSavedActivityAndOpensSettingsWhenDisconnected() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test")
+        var inbox = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/inbox")!)
+        inbox.httpMethod = "POST"
+        _ = try await URLSession.shared.data(for: inbox)
+        app.buttons["openWorkInbox"].tap()
+        let savedRun = app.buttons["inboxRun-inbox-failed"]
+        XCTAssertTrue(savedRun.waitForExistence(timeout: 10))
+
+        var offline = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/offline")!)
+        offline.httpMethod = "POST"
+        offline.httpBody = Data(#"{"durationMs":12000}"#.utf8)
+        _ = try await URLSession.shared.data(for: offline)
+
+        let title = app.staticTexts["Computer disconnected"]
+        let settings = app.buttons["Connection settings"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Showing saved activity. Connect for updates."].exists)
+        XCTAssertTrue(settings.isHittable)
+        XCTAssertEqual(title.frame.midX, app.frame.midX, accuracy: 2)
+        XCTAssertEqual(settings.frame.midX, title.frame.midX, accuracy: 2)
+        XCTAssertTrue(savedRun.exists)
+        attachScreenshot(app, name: "Activity disconnected with saved work")
+        settings.tap()
+        XCTAssertTrue(app.staticTexts["settingsConnectionStatus"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons["BackButton"].tap()
+        XCTAssertTrue(title.waitForNonExistence(timeout: 24))
+        XCTAssertTrue(savedRun.exists)
+        app.navigationBars.buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
     #if MAINS_GPT_LIVE
-    func testVoiceDefaultsToFocusAndSwitchesToConversationWithoutEndingOrUnmuting() throws {
+    func testVoiceDefaultsToFocusAndSwitchesToConversationWithoutEndingOrMuting() throws {
         continueAfterFailure = false
         let app = makeApplication()
         app.launchArguments = ["--voice-preview"]
@@ -2057,6 +2092,33 @@ final class MainsUITests: XCTestCase {
         app.buttons["declineDataSharing"].tap()
         XCTAssertTrue(mic.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["endVoice"].exists)
+        forgetFixture(app)
+    }
+
+    func testMissingWorkspaceExplainsVoiceStartAndOpensPicker() throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["sidebarMode-developer"].tap()
+        app.buttons["closeSidebar"].tap()
+
+        let startVoice = app.buttons["startVoice"]
+        let notice = app.staticTexts["Workspace required"]
+        XCTAssertTrue(app.buttons["chooseTarget"].label.contains("Choose a workspace"))
+        XCTAssertTrue(startVoice.waitForExistence(timeout: 5))
+        XCTAssertTrue(startVoice.isEnabled)
+        startVoice.tap()
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["allowDataSharing"].exists)
+        XCTAssertFalse(app.buttons["endVoice"].exists)
+
+        app.buttons["chooseRequiredWorkspace"].tap()
+        _ = targetWheel("docs", in: app)
+        confirmTarget(in: app)
+        XCTAssertTrue(notice.waitForNonExistence(timeout: 5))
+        startVoice.tap()
+        XCTAssertTrue(app.staticTexts["Your microphone audio during the call"].waitForExistence(timeout: 5))
+        app.buttons["declineDataSharing"].tap()
         forgetFixture(app)
     }
 

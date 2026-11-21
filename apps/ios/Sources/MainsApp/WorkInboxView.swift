@@ -27,10 +27,7 @@ struct WorkInboxView: View {
                                 description: Text(live ? "Requests and running work appear here. Finished work stays for 24 hours." : "Connect to your computer to see what needs you."))
                                 .accessibilityIdentifier("workInboxEmpty")
                         } else {
-                            EmptyStateView(artwork: .offline, title: "Computer disconnected",
-                                description: Text("Connect to your computer to check requests and see recent activity.")) {
-                                Button("Connection settings", action: openSettings)
-                            }
+                            disconnectedState(message: "Connect to your computer to check requests and see recent activity.")
                         }
                     }
                 } else {
@@ -50,18 +47,18 @@ struct WorkInboxView: View {
         let finishedByDay = Dictionary(grouping: groups.finished) { calendar.startOfDay(for: $0.run.updatedAt) }
         return List {
             Section { PageTitle("Activity").listRow }
-            if !session.isConnected || session.workInboxError != nil {
+            if !session.isConnected {
+                Section {
+                    disconnectedState(message: "Showing saved activity. Connect for updates.")
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+            } else if let error = session.workInboxError {
                 Section {
                     VStack(alignment: groups.isEmpty ? .center : .leading, spacing: 4) {
-                        if !session.isConnected {
-                            Label("Saved activity. Connect to check requests and update your work.", systemImage: "wifi.slash")
-                                .font(.footnote).foregroundStyle(.secondary)
-                            Button("Connection settings", action: openSettings)
-                                .font(.footnote.weight(.medium))
-                        } else if let error = session.workInboxError {
-                            Text(error).font(.footnote).foregroundStyle(.secondary)
-                            Button("Try again") { Task { await session.refreshWorkInbox() } }.font(.footnote.weight(.medium))
-                        }
+                        Text(error).font(.footnote).foregroundStyle(.secondary)
+                        Button("Try again") { Task { await session.refreshWorkInbox() } }.font(.footnote.weight(.medium))
                     }
                 }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
@@ -84,6 +81,17 @@ struct WorkInboxView: View {
         .contentMargins(.top, 8, for: .scrollContent)
         .listSectionSpacing(.compact)
         .environment(\.defaultMinListRowHeight, 44)
+    }
+
+    private func disconnectedState(message: LocalizedStringKey) -> some View {
+        EmptyStateView(artwork: .offline, title: "Computer disconnected", description: Text(message)) {
+            Button(action: openSettings) {
+                Text("Connection settings")
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .controlSize(.large)
+        }
     }
 
     private var limitNotice: some View {

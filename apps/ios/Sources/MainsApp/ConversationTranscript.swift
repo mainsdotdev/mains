@@ -239,15 +239,10 @@ struct ConversationTranscript: View {
         }
         .overlay(alignment: .bottom) {
             if scroll.showsJump(hasNewer: page?.hasNewer == true) {
-                Button {
+                RoundControl(symbol: "arrow.down", label: "Jump to latest", size: 40) {
                     navigate("latest")
-                } label: {
-                    Image(systemName: "arrow.down").font(.system(size: 22, weight: .regular))
-                        .frame(width: 40, height: 40)
-                        .background(Color(.secondarySystemBackground), in: .circle)
                 }
-                .buttonStyle(ChatPressStyle())
-                .accessibilityLabel("Jump to latest").accessibilityIdentifier("jumpToLatest")
+                .accessibilityIdentifier("jumpToLatest")
                 .padding(.bottom, 8).disabled(session.historyLoading || page?.hasNewer == true && !session.isConnected)
             }
         }

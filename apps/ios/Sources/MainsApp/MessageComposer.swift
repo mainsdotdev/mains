@@ -19,12 +19,20 @@ struct MessageComposer: View {
     let model: () -> Void
     let options: () -> Void
     let send: () -> Void
+    var onVoiceWorkspaceRequired: (() -> Void)? = nil
     var voiceCreated: ((String) -> Void)? = nil
     var focusChanged: ((Bool) -> Void)? = nil
     #if MAINS_GPT_LIVE
     @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
-    @State private var voiceConsent: ConsentContext?
+    @State private var voiceConsent: VoiceConsentRequest?
+    @State private var approvedVoiceConsentOwner: Int?
     @State private var voiceStartOwner: Int?
+
+    private struct VoiceConsentRequest: Identifiable {
+        let context: ConsentContext
+        let owner: Int
+        var id: String { context.id }
+    }
     #endif
     @State private var focused = false
     @State private var file = false
@@ -53,7 +61,10 @@ struct MessageComposer: View {
     private var ownsVoice: Bool {
         session.voice.ownsCall && (session.voice.runID == context.runID && context.runID != nil || context.runID == nil && voiceStartOwner == session.ownership)
     }
-    private var voiceCanStart: Bool { AppFeatures.gptLiveEnabled && session.canStartVoice(runID: context.runID, spaceID: context.spaceID) }
+    private var voiceStartAvailability: BackendSession.VoiceStartAvailability {
+        guard AppFeatures.gptLiveEnabled, !context.saving(session) else { return .unavailable }
+        return session.voiceStartAvailability(runID: context.runID, spaceID: context.spaceID)
+    }
     #endif
     private var effort: String? {
         guard let selectedModel else { return nil }
@@ -86,6 +97,12 @@ struct MessageComposer: View {
                     .accessibilityIdentifier("voiceComposerOrb")
                     .frame(maxWidth: .infinity).padding(.bottom, 4)
             }
+            if ownsVoice && session.voice.phase == .connecting {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small).accessibilityHidden(true)
+                    Text("Connecting voice…")
+                }.font(.footnote).foregroundStyle(.secondary)
+            }
             if ownsVoice && voicePresentation == .focus { focusComposer }
             else { standardComposer }
             #else
@@ -117,11 +134,14 @@ struct MessageComposer: View {
         .onChange(of: session.voice.runID) { _, id in
             if let id, context.runID == nil, voiceStartOwner == session.ownership, session.selectedSpaceID == context.spaceID { voiceCreated?(id) }
         }
-        .sheet(item: $voiceConsent) { consent in
-            ConsentView(context: consent) {
-                guard consent.backendID == session.pairing?.descriptor.backendId else { return }
-                session.grantConsent(providerID: "codex", backendID: consent.backendID)
-                beginVoice()
+        .onChange(of: session.ownership) { _, _ in
+            approvedVoiceConsentOwner = nil; voiceConsent = nil
+        }
+        .sheet(item: $voiceConsent, onDismiss: resumeVoiceAfterConsent) { request in
+            ConsentView(context: request.context) {
+                guard request.owner == session.ownership else { return }
+                session.grantConsent(providerID: "codex", backendID: request.context.backendID)
+                approvedVoiceConsentOwner = request.owner
             }
         }
     #endif
@@ -272,7 +292,7 @@ struct MessageComposer: View {
                     .frame(width: 36, height: 36).foregroundStyle(.white)
                     .background(Provider.accent(context.providerId), in: .circle)
                     .frame(width: 44, height: 44).contentShape(.circle)
-            }.buttonStyle(ChatPressStyle()).disabled(!voiceCanStart || context.saving(session))
+            }.buttonStyle(ChatPressStyle()).disabled(voiceStartAvailability == .unavailable)
                 .accessibilityLabel("Start GPT Live").accessibilityIdentifier("startVoice")
         } else {
             sendMessageButton
@@ -373,15 +393,32 @@ struct MessageComposer: View {
             })
     }
     #if MAINS_GPT_LIVE
+    private func validateVoiceStart() -> Bool {
+        let availability = voiceStartAvailability
+        if availability == .workspaceRequired { onVoiceWorkspaceRequired?() }
+        return availability == .ready
+    }
     private func prepareVoice() {
-        guard voiceCanStart, let backendID = session.pairing?.descriptor.backendId else { return }
+        guard validateVoiceStart(), let backendID = session.pairing?.descriptor.backendId else { return }
         if session.hasConsent(providerID: "codex") { beginVoice() }
-        else { voiceConsent = ConsentContext(backendID: backendID, providerID: "codex", isVoice: true) }
+        else {
+            voiceConsent = VoiceConsentRequest(context: ConsentContext(backendID: backendID, providerID: "codex", isVoice: true),
+                                               owner: session.ownership)
+        }
+    }
+    private func resumeVoiceAfterConsent() {
+        let owner = approvedVoiceConsentOwner
+        approvedVoiceConsentOwner = nil
+        guard owner == session.ownership else { return }
+        beginVoice()
     }
     private func beginVoice() {
-        guard voiceCanStart else { return }
-        focused = false; voiceStartOwner = session.ownership
-        Task { await session.startVoice(runID: context.runID, spaceID: context.spaceID) }
+        let owner = session.ownership
+        Task {
+            guard owner == session.ownership, validateVoiceStart() else { return }
+            focused = false; voiceStartOwner = owner
+            await session.startVoice(runID: context.runID, spaceID: context.spaceID)
+        }
     }
     #endif
     private var remainingBytes: Int {

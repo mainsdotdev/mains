@@ -53,7 +53,7 @@ struct ChatMessage: View {
                 } else if let task = row.voiceTask {
                     Button { openVoiceConversation(task.id) } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: "arrow.triangle.branch")
+                            Image(systemName: "bubble.left")
                             Text(task.title).font(.subheadline.weight(.medium).width(.expanded)).lineLimit(2)
                             Spacer(minLength: 8)
                             Image(systemName: "arrow.up.right").font(.caption)

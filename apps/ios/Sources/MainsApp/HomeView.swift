@@ -157,6 +157,7 @@ private struct HomeComposerArea: View {
     @Binding var consent: ConsentContext?
     let onCreated: (String) -> Void
     @Bindable private var draft: ConversationDraft
+    @State private var workspaceRequired = false
     private var target: HomeTarget { session.homeTargets[space.id] ?? HomeTarget() }
     private var workspace: Workspace? { session.workspaces.first { $0.id == target.workspaceID && $0.isReplica != true } }
     private var workspaceIcon: String? { session.projects.first { $0.id == workspace?.projectId }?.icon }
@@ -218,6 +219,11 @@ private struct HomeComposerArea: View {
                         }
                     }.disabled(!session.isConnected || session.sending).accessibilityIdentifier("checkDelivery")
                 }
+            } else if workspaceRequired && !targetReady {
+                ChatNotice(title: "Workspace required", message: workspaceRequiredMessage, symbol: "exclamationmark.circle", warning: true) {
+                    Button("Choose a workspace") { targetPicker = true }.accessibilityIdentifier("chooseRequiredWorkspace")
+                    Button("Dismiss") { workspaceRequired = false }
+                }
             } else if let failure = draft.failure {
                 ChatNotice(title: draft.failureTitle, message: failure, symbol: "exclamationmark.circle", warning: true) {
                     if !targetReady { Button("Choose a workspace") { targetPicker = true }.accessibilityIdentifier("chooseRequiredWorkspace") }
@@ -244,11 +250,13 @@ private struct HomeComposerArea: View {
             .composerPickerSource(.target)
             .disabled(!ready).padding(.horizontal, 16).accessibilityIdentifier("chooseTarget")
             MessageComposer(session: session, context: ComposerContext(space: space), draft: draft, canSend: ready,
-                         model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend, voiceCreated: onCreated)
+                         model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend,
+                         onVoiceWorkspaceRequired: showWorkspaceRequired, voiceCreated: onCreated)
         }.padding(.bottom, 8)
         .onChange(of: targetReady) { _, ready in
-            if ready, draft.failureTitle == "Workspace required" { draft.dismissFailure() }
+            if ready { workspaceRequired = false }
         }
+        .onChange(of: session.ownership) { _, _ in workspaceRequired = false }
         .sheet(item: $consent) { context in
             ConsentView(context: context) {
                 guard context.backendID == session.pairing?.descriptor.backendId, context.providerID == space.providerId else { return }
@@ -284,7 +292,13 @@ private struct HomeComposerArea: View {
     }
     private func validateTarget() -> Bool {
         guard !targetReady else { return true }
-        draft.showFailure(workspace == nil ? "Choose a workspace before sending a message in Code mode." : "This workspace’s folder is unavailable on your computer. Choose another workspace or restore the folder.", title: "Workspace required")
+        showWorkspaceRequired()
         return false
+    }
+    private func showWorkspaceRequired() {
+        workspaceRequired = true
+    }
+    private var workspaceRequiredMessage: String {
+        workspace == nil ? "Choose a workspace before starting a conversation in Code mode." : "This workspace’s folder is unavailable on your computer. Choose another workspace or restore the folder."
     }
 }

@@ -141,7 +141,13 @@ public final class RealtimeVoiceController {
         guard let call = attempt, event["connectionId"].string == call.id,
               event["runId"].string == call.signaling?.runID else { return }
         let type = event["type"].string
-        if type == "closed" { complete(call); return }
+        if type == "closed" {
+            if !call.ending, event["reason"].string == "start_failed" {
+                error = "Codex could not start GPT Live. Try again."
+            }
+            complete(call)
+            return
+        }
         guard current(call) else { return }
         switch type {
         case "started": call.serverReady = true; connected(call)
