@@ -15,6 +15,7 @@ import { AssistantChat } from "./assistant-chat";
 import { AVATAR_COLORS } from "./assistant-avatar";
 import type { AssistantAvatarState } from "../lib/assistant-avatar-activity";
 import type { StreamingEvent } from "@/features/workspace/hooks/use-streaming-events";
+import { voiceChatPresence } from "@/features/workspace/lib/voice-chat-presence";
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(), respond: vi.fn(), refetch: vi.fn(), load: vi.fn(),
@@ -53,9 +54,13 @@ vi.mock("@/features/workspace/components/tools/async-question-dialog", () => ({
   useAsyncQuestionDialog: () => mocks.question ? { dialog: {} } : null,
 }));
 vi.mock("@/features/workspace/components/workspace-events", () => ({ WorkspaceEvents: () => <div>Existing transcript</div> }));
-vi.mock("@/features/workspace/components/workspace-input", () => ({ WorkspaceInput: ({ goal, onGoalChange, onSubmit, disabled, sendDisabled, workspacePath, mode }: {
-  goal: string; onGoalChange(text: string): void; onSubmit(): void; disabled: boolean; sendDisabled: boolean; workspacePath?: string; mode: string;
-}) => <div><Textarea aria-label="Message" value={goal} onChange={event => onGoalChange(event.target.value)} disabled={disabled} /><button disabled={disabled || sendDisabled} onClick={onSubmit}>Send</button><output data-testid="composer-workspace">{workspacePath ?? ""}</output><output data-testid="composer-mode">{mode}</output></div> }));
+vi.mock("@/features/workspace/components/workspace-input", () => ({ WorkspaceInput: ({ goal, onGoalChange, onSubmit, disabled, sendDisabled, allowVoice, workspacePath, mode }: {
+  goal: string; onGoalChange(text: string): void; onSubmit(): void; disabled: boolean; sendDisabled: boolean; allowVoice: boolean; workspacePath?: string; mode: string;
+}) => <div data-testid="mate-composer" data-allow-voice={allowVoice}>
+  <Textarea aria-label="Message" value={goal} onChange={event => onGoalChange(event.target.value)} disabled={disabled} />
+  <button disabled={disabled || sendDisabled} onClick={onSubmit}>Send</button>
+  <output data-testid="composer-workspace">{workspacePath ?? ""}</output><output data-testid="composer-mode">{mode}</output>
+</div> }));
 vi.mock("./assistant-welcome-card", () => ({ AssistantWelcomeCard: ({ onAnswer }: { onAnswer(answer: string | null): Promise<void> }) => <div><button onClick={() => void onAnswer("Review the project")}>Start welcome</button><button onClick={() => void onAnswer(null)}>Skip welcome</button></div> }));
 
 const assistant = { id: "assistant", accountId: "account", name: "Release", providerId: "codex", model: "model", effort: "high", conversationSettings: { config: {} }, avatar: { shape: "sphere", color: "blue" } } as Assistant;
@@ -87,6 +92,36 @@ it("shows an archived Mate's history without a composer or an app send handler",
   expect(screen.getByText("Existing transcript")).toBeTruthy();
   expect(screen.queryByRole("textbox", { name: "Message" })).toBeNull();
   expect(mocks.registerAppConversation).not.toHaveBeenCalled();
+});
+
+describe("Mate voice eligibility", () => {
+  const run = { id: "existing", assistantId: assistant.id, providerId: "codex", status: "succeeded", mode: "work", createdAt: new Date() };
+
+  it("enables voice and registers the transcript for an existing Codex Mate chat", () => {
+    mocks.run = run;
+    const view = setup({ selectedRunId: run.id });
+    expect(screen.getByTestId("mate-composer").dataset.allowVoice).toBe("true");
+    expect(voiceChatPresence.getSnapshot().has(run.id)).toBe(true);
+    view.unmount();
+    expect(voiceChatPresence.getSnapshot().has(run.id)).toBe(false);
+  });
+
+  it.each([
+    ["another provider", { providerId: "claude_code" }],
+    ["a Bridge replica", { isReplica: true }],
+    ["an archived chat", { isArchived: true }],
+    ["a different Mate's chat", { assistantId: "other-mate" }],
+  ])("keeps the microphone unavailable for %s", (_label, overrides) => {
+    mocks.run = { ...run, ...overrides };
+    setup({ selectedRunId: run.id });
+    expect(screen.getByTestId("mate-composer").dataset.allowVoice).toBe("false");
+    expect(voiceChatPresence.getSnapshot().has(run.id)).toBe(false);
+  });
+
+  it("requires a saved chat before starting Mate voice", () => {
+    setup();
+    expect(screen.getByTestId("mate-composer").dataset.allowVoice).toBe("false");
+  });
 });
 
 describe("assistant avatar activity", () => {

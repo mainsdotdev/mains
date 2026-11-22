@@ -980,7 +980,7 @@ export function WorkspaceInput({
       : isRunning && canSendDuringRun ? runQueue?.queue?.mode === "steer" && !contextAssistants.length ? "Steer active turn" : "Queue message"
       : sendLabel,
     hasMessage, preparing: voiceStarting,
-    startDisabled: ((!activeRun || isNewRunTabActive) && !onCreateVoiceConversation) || !settingsReady || isLoading ||
+    startDisabled: disabled || suspended || ((!activeRun || isNewRunTabActive) && !onCreateVoiceConversation) || !settingsReady || isLoading ||
       !!runQueue?.queue?.messages.length || !!providerSignedOut || cliUnsupported || !!authErrorMessage,
   });
   const reportActionError = (error: unknown) => toast.error(error instanceof Error ? error.message : String(error));
@@ -1136,7 +1136,7 @@ export function WorkspaceInput({
           className={compactFloating ? "pl-8 pr-3" : undefined}
         />
         {/* The compact row reserves each control's actual width, including speed labels. */}
-        <div className={assistantComposer ? "relative grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-end gap-x-2 px-2 py-2" : compactFloating
+        <div className={assistantComposer ? "relative grid grid-cols-[2rem_minmax(0,1fr)_minmax(2rem,auto)] items-end gap-x-2 px-2 py-2" : compactFloating
           ? "relative grid grid-cols-[2rem_minmax(0,1fr)_auto] items-end gap-x-1 px-3 py-2"
           : "relative"}>
           <div ref={assistantEditorRef} className={assistantComposer

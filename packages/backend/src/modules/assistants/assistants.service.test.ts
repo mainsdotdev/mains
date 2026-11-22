@@ -90,7 +90,7 @@ afterEach(async () => {
 });
 
 describe("Mate voice conversations", () => {
-    it("starts voice with the Mate profile and keeps delegated work in the same Mate", async () => {
+    it.each(["desktop", "iOS"])("starts voice with the Mate profile and keeps delegated work in the same Mate on %s", async (client) => {
         db.update(providers).set({ config: JSON.stringify({ sandboxMode: "read-only" }) }).where(eq(providers.id, "codex")).run();
         const mate = await makeAssistant("Kitchen Mate");
         assistantsService.saveMemory({ accountId: mate.accountId, teamId, assistantId: mate.id,
@@ -105,8 +105,9 @@ describe("Mate voice conversations", () => {
         });
         vi.mocked(createWorkAdapter).mockReturnValue({ ...createWorkRunAdapter(driver.driver), startRealtime, stopRealtime });
 
+        const owner = client === "iOS" ? { deviceId: "iphone" } : undefined;
         try {
-            await runsService.startRealtime({ ...payload, conversationSettings: { model: "other-model", config: { sandboxMode: "danger-full-access" } } }, { deviceId: "iphone" });
+            await runsService.startRealtime({ ...payload, conversationSettings: { model: "other-model", config: { sandboxMode: "danger-full-access" } } }, owner);
             const request = startRealtime.mock.calls[0][0];
             expect(request).toMatchObject({ model: mate.model, mode: "work",
                 configSnapshot: { assistantId: mate.id, modelReasoningEffort: "high", sandboxMode: "read-only" } });
@@ -122,7 +123,7 @@ describe("Mate voice conversations", () => {
             expect(driver.calls.createSession.find(call => call.runId === runId)).toMatchObject({ model: mate.model,
                 configSnapshot: { assistantId: mate.id, sandboxMode: "read-only" } });
         } finally {
-            await runsService.stopRealtime(payload, "iphone");
+            await runsService.stopRealtime(payload, owner?.deviceId);
         }
         assistantsService.archive(mate.id, mate.accountId, true);
         await expect(runsService.startRealtime(payload)).rejects.toThrow("Assistant is unavailable");

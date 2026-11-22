@@ -202,8 +202,8 @@ const idleComposer = {
 };
 
 describe("single primary composer button", () => {
-  it.each(["new", "existing"])("switches the %s chat between microphone and Send for text or attachments, without an extra voice button", (kind) => {
-    const props = nativeToolbarProps();
+  it.each(["new", "existing", "Mate"])("switches the %s chat between microphone and Send for text or attachments, without an extra voice button", (kind) => {
+    const props = { ...nativeToolbarProps(), assistantComposer: kind === "Mate" };
     const onStart = vi.fn();
     const onSubmit = vi.fn();
     const primaryAction = (text: string, attachments = 0) => {
@@ -238,8 +238,8 @@ describe("single primary composer button", () => {
     expect(screen.queryByRole("button", { name: /mute microphone/i })).toBeNull();
   });
 
-  it("puts mute immediately before the call's Stop and changes its icon when muted", () => {
-    const props = nativeToolbarProps();
+  it.each([false, true])("puts mute immediately before Stop and changes its icon when muted (assistant=%s)", (assistantComposer) => {
+    const props = { ...nativeToolbarProps(), assistantComposer };
     const onMute = vi.fn();
     const controls = (muted: boolean) => {
       const value = composerControls({ ...idleComposer, state: { phase: "connected", runId: "chat", muted }, hasMessage: true });
@@ -254,7 +254,8 @@ describe("single primary composer button", () => {
     const unmutedIcon = mute.querySelector("svg")?.innerHTML;
     expect(mute.querySelector("rect")).not.toBeNull();
     expect(mute.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(Array.from(end.parentElement!.closest(".shrink-0")!.querySelectorAll("button"))).toEqual([mute, end]);
+    const group = end.parentElement!.closest(assistantComposer ? ".col-start-3" : ".shrink-0")!;
+    expect(Array.from(group.querySelectorAll("button"))).toEqual([mute, end]);
     fireEvent.click(mute);
     expect(onMute).toHaveBeenCalledOnce();
     fireEvent.click(end);

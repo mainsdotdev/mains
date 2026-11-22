@@ -8,6 +8,7 @@ import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setComposerContextKey, setContextItemsForKey, setDraftText } from "@/lib/redux/slices/workspaceSlice";
 import { useRunHistory } from "@/features/workspace/hooks/use-run-history";
 import { useStreamingEvents } from "@/features/workspace/hooks/use-streaming-events";
+import { useVoiceChatPresence } from "@/features/workspace/hooks/use-voice-chat-presence";
 import { useToolApproval } from "@/features/workspace/hooks/use-tool-approval";
 import { useComposerContext } from "@/features/workspace/hooks/use-composer-context";
 import { PluginLogoProvider } from "@/features/workspace/hooks/use-plugin-logos";
@@ -67,6 +68,9 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
   const { currentData: run, refetch: refreshRun, error: runError } = useGetRunByIdQuery(chatRunId ?? "", { skip: !chatRunId });
   const { currentData: workspace } = useGetWorkspaceQuery(run?.workspaceId ?? "", { skip: !run?.workspaceId });
   const belongs = !chatRunId || run?.assistantId === assistant.id;
+  const voiceRunId = chatRunId && belongs && !archived && run?.providerId === "codex" && !run.isArchived && !run.isReplica
+    ? chatRunId : null;
+  useVoiceChatPresence(voiceRunId);
   const [cache] = useState(createRunCache);
   const { runEvents, runTurns, load, history } = useRunHistory(cache, belongs ? chatRunId : null);
   const persistedEvents = chatRunId ? runEvents[chatRunId] ?? EMPTY_EVENTS : EMPTY_EVENTS;
@@ -180,7 +184,7 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
     isLoading={preparing || sending.isLoading} disabled={!!pending || !belongs} sendDisabled={!!pending} activeRun={visibleRun}
     canResume={!!chatRunId} providerId={assistant.providerId} mode={run?.mode ?? "work"} selectedModel={assistant.model}
     onModelChange={keepProfile} settingsConfig={assistant.conversationSettings.config} onSettingsConfigChange={keepProfile}
-    allowVoice={false} showGoalButton={false}
+    allowVoice={!!voiceRunId} showGoalButton={false}
     workspacePath={chatRunId ? workspace?.rootPath : undefined} uploadedFiles={files} onUploadedFilesChange={setFiles}
     placeholder={`Message ${assistant.name}…`} inputLabel={`Message ${assistant.name}`} isNewRunTabActive={!chatRunId}
     layout={chatRunId || waitingWelcome ? "default" : "centered"} />;
