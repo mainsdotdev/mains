@@ -49,6 +49,7 @@ const page = vi.hoisted(() => ({
   realTabs: false,
   isMobile: false,
   workspaceLoading: false,
+  workspaceView: {} as { activeTab?: string; workspaceViewKey?: string; workspaceViews?: Record<string, { activeTab: string }> },
 }));
 const browser = vi.hoisted(() => ({
   isExpanded: false,
@@ -61,7 +62,8 @@ const mcp = vi.hoisted(() => ({ panel: null as null | Record<string, unknown> })
 vi.mock("@/hooks/use-mcp-app-panel", () => ({ useMcpAppPanel: () => mcp.panel }));
 vi.mock("../hooks/use-workspace-data", () => ({ useWorkspaceData: () => ({ currentWorkspace: page.state.currentWorkspace ?? null, loading: page.workspaceLoading }) }));
 vi.mock("@/features/bridge/components/replica-workspace-view", () => ({
-  ReplicaWorkspaceView: () => createElement("div", { "data-testid": "replica-view" }, "Read-only"),
+  ReplicaWorkspaceView: ({ initialRun }: { initialRun?: { id: string } }) =>
+    createElement("div", { "data-testid": "replica-view", "data-run": initialRun?.id }, "Read-only"),
 }));
 
 vi.mock("@/hooks/use-browser-panel", () => ({
@@ -78,6 +80,7 @@ vi.mock("@/hooks/use-browser-panel", () => ({
 
 vi.mock("@/hooks/use-active-space", () => ({
   useActiveSpace: () => ({
+    activeSpaceId: "space-codex",
     activeSpace: { id: "space-codex", providerId: "codex", mode: "developer" },
   }),
 }));
@@ -145,7 +148,7 @@ vi.mock("@/lib/redux/hooks", () => ({
   useAppDispatch: () => page.dispatch,
   useAppSelector: (selector: (state: unknown) => unknown) =>
     selector({
-      workspace: { selectedCollectionId: null },
+      workspace: { selectedCollectionId: null, workspaceViews: {}, ...page.workspaceView },
       backends: { activeBackendId: null },
       appSettings: { onboardingCompleted: true },
     }),
@@ -217,16 +220,19 @@ afterEach(() => {
   page.realTabs = false;
   page.isMobile = false;
   page.workspaceLoading = false;
+  page.workspaceView = {};
   vi.unstubAllGlobals();
 });
 
 describe("WorkspaceProviderPage while changing spaces", () => {
-  const route = () => render(createElement(MemoryRouter, { initialEntries: ["/code/runs/run-1"] },
+  const linkedRun = () => createElement(MemoryRouter, { initialEntries: ["/code/runs/run-1"] },
     createElement(MainHeaderProvider, null, createElement(Routes, null,
       createElement(Route, { path: "/code/runs/:runId", element: createElement(WorkspaceProviderPage, { providerId: "codex", variant: "codex" }) }),
+      createElement(Route, { path: "/code", element: createElement("div", { "data-testid": "mode-home" }) }),
       createElement(Route, { path: "/assistants", element: createElement(AssistantLocation) }),
     )),
-  ));
+  );
+  const route = () => render(linkedRun());
 
   it("redirects an old assistant Code link before mounting the workspace composer", async () => {
     page.state = { runs: [{ id: "run-1", assistantId: "testflight", mode: "developer", workspaceId: "mains" }] };
@@ -239,11 +245,34 @@ describe("WorkspaceProviderPage while changing spaces", () => {
   });
 
   it("opens a synced conversation without mounting an interactive composer", async () => {
-    page.state = { runs: [{ id: "run-1", isReplica: true, ownerBackendId: "source" }], currentWorkspace: null };
+    page.state = { runs: [{ id: "run-1", mode: "developer", providerId: "codex", isReplica: true, ownerBackendId: "source" }], currentWorkspace: null };
     route();
     await waitFor(() => expect(screen.getByTestId("replica-view")).toBeTruthy());
     expect(screen.queryByTestId("pinned-input")).toBeNull();
     expect(screen.queryByTestId("centered-input")).toBeNull();
+  });
+
+  it("leaves a Code replica link when switching to Work", async () => {
+    page.state = { runs: [{ id: "run-1", mode: "developer", providerId: "codex", isReplica: true }] };
+    const view = route();
+    await screen.findByTestId("replica-view");
+    page.mode = "work";
+    view.rerender(linkedRun());
+    await screen.findByTestId("mode-home");
+    expect(screen.queryByTestId("replica-view")).toBeNull();
+  });
+
+  it("restores only the saved Work conversation when a Code replica is currently selected", async () => {
+    page.mode = "work";
+    const codeRun = { id: "code-replica", mode: "developer", providerId: "codex", isReplica: true };
+    const workRun = { id: "work-replica", mode: "work", providerId: "codex", isReplica: true };
+    page.state = { runs: [codeRun, workRun] };
+    page.workspaceView = { activeTab: codeRun.id,
+      workspaceViewKey: JSON.stringify(["local", "space-codex", "codex", "developer", "remote-workspace"]),
+      workspaceViews: { [JSON.stringify(["local", "space-codex", "codex", "work", null])]: { activeTab: workRun.id } },
+    };
+    renderPage();
+    expect((await screen.findByTestId("replica-view")).getAttribute("data-run")).toBe(workRun.id);
   });
 
   it("keeps source remote control interactive even with a previously selected replica workspace", () => {

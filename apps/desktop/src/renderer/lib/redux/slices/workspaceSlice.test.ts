@@ -151,6 +151,15 @@ describe("workspaceSlice — saved workspace views", () => {
   const activate = (key: string, workspaceId: string) =>
     activateWorkspaceView({ key, workspaceId, providerId: "codex" });
 
+  it("keeps the last owned workspace when visiting a Bridge workspace", () => {
+    let state = reducer(undefined, activate("space/local", "local"));
+    state = reducer(state, activateWorkspaceView({
+      key: "space/replica", workspaceId: "replica", providerId: "codex", rememberWorkspace: false,
+    }));
+    expect(state.activeWorkspaceId).toBe("replica");
+    expect(state.activeWorkspaceIdByProvider.codex).toBe("local");
+  });
+
   it("remembers explicitly open chats per workspace, deduplicates selection and preserves closed-chat drafts", () => {
     let state = reducer(undefined, activate("space/ws-a", "ws-a"));
     state = reducer(state, setActiveTab("run-a"));

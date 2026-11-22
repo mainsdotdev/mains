@@ -1,4 +1,4 @@
-import { BRIDGE_MAX_CLOCK_SKEW_MS, type BridgeEnvelope, type BridgeLogRecord, type BridgePushResult, type BridgeStream } from "@mains/contracts/bridge-protocol";
+import { BRIDGE_MAX_CLOCK_SKEW_MS, isBridgeRetiredRunDelete, type BridgeEnvelope, type BridgeLogRecord, type BridgePushResult, type BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_FRAME_BYTES } from "@mains/contracts/bridge-wire";
 import type { BridgeBlobIdentity } from "@mains/contracts/bridge-blobs";
 import { installBlobReferences } from "./blob-gc";
@@ -102,7 +102,8 @@ export function createHubStore(storage: DurableObjectStorage) {
       return takeWrite(backendId, limit);
     },
     push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[], budget?: { limitBytes: number; blobBytes: number; retainedBlobBytes?: number; writesPerMinute: number; canUpload?: boolean;
-      hasBlobs?: (blobs: BridgeBlobIdentity[]) => boolean; periodStart?: number }, replay?: { horizon: number; head: { seq: number; hash: string } }) {
+      hasBlobs?: (blobs: BridgeBlobIdentity[]) => boolean; periodStart?: number }, replay?: { horizon: number; head: { seq: number; hash: string } },
+      allowRetiredRunDelete?: (envelope: BridgeEnvelope) => boolean) {
       return storage.transactionSync(() => {
         const changed: BridgeLogRecord[] = [];
         let streamSeq: number | undefined;
@@ -118,9 +119,12 @@ export function createHubStore(storage: DurableObjectStorage) {
           const deadAck = (deleted: BridgeEnvelope): BridgePushResult => ({ deleted, publicationId: auth.publicationId });
           const published = first<{ signature: string; seq: number }>("SELECT signature,seq FROM publications WHERE publication_id=?", auth.publicationId);
           if (published && published.signature !== auth.signature) throw new Error("Bridge publication identifier was reused");
-          if (h.stream !== stream || h.origin !== backendId || h.owner && h.owner !== backendId) return { error: "notOwner" };
+          const retiredRunDelete = isBridgeRetiredRunDelete(h);
+          if (h.stream !== stream || h.origin !== backendId ||
+              retiredRunDelete && !allowRetiredRunDelete?.(envelope) || h.owner && h.owner !== backendId && !retiredRunDelete)
+            return { error: "notOwner" };
           const owner = first<{ owner: string }>("SELECT owner FROM row_owners WHERE row_key=?", h.rowKey);
-          if (owner && owner.owner !== backendId) return { error: "notOwner" };
+          if (owner && owner.owner !== (retiredRunDelete ? h.owner : backendId)) return { error: "notOwner" };
           const previous = h.op === "upsert" ? first<LogRow>("SELECT seq,envelope FROM latest WHERE stream=? AND register_key=?", stream, h.registerKey) : undefined;
           const previousEnvelope: BridgeEnvelope | undefined = previous && JSON.parse(previous.envelope);
           // Both keys derive from the same table and pk, so a register belongs to one row:
@@ -134,7 +138,7 @@ export function createHubStore(storage: DurableObjectStorage) {
             if (run.tombstone) return deadAck(JSON.parse(run.tombstone));
           } else if (h.runId) {
             const run = first<{ owner: string; root_key: string }>("SELECT owner,root_key FROM runs WHERE run_id=?", h.runId);
-            if (!h.owner || run && (run.owner !== backendId || run.root_key !== h.rowKey) ||
+            if (!h.owner || retiredRunDelete && !run || run && (run.owner !== (retiredRunDelete ? h.owner : backendId) || run.root_key !== h.rowKey) ||
                 first("SELECT 1 FROM runs WHERE root_key=? AND run_id<>?", h.rowKey, h.runId)) return { error: "notOwner" };
           }
           const deleted = first<LogRow>("SELECT seq,envelope FROM deleted WHERE row_key=?", h.rowKey);
@@ -162,7 +166,8 @@ export function createHubStore(storage: DurableObjectStorage) {
           }
           // Backend ids never contain ':', so this bucket cannot collide with the upsert one.
           if (h.op === "delete" && !takeWrite(`${backendId}:delete`, BRIDGE_DELETES_PER_MINUTE, pendingRates)) return { error: "rateLimited" };
-          if (stream === "account" && h.runId) sql.exec("INSERT OR IGNORE INTO runs(run_id,owner,root_key) VALUES(?,?,?)", h.runId, backendId, h.rowKey);
+          if (stream === "account" && h.runId && !retiredRunDelete)
+            sql.exec("INSERT OR IGNORE INTO runs(run_id,owner,root_key) VALUES(?,?,?)", h.runId, backendId, h.rowKey);
           if (h.owner) sql.exec("INSERT OR IGNORE INTO row_owners(row_key,owner) VALUES(?,?)", h.rowKey, h.owner);
           const seq = (streamSeq ?? first<{ seq: number }>("SELECT seq FROM streams WHERE stream=?", stream)?.seq ?? 0) + 1;
           streamSeq = seq;

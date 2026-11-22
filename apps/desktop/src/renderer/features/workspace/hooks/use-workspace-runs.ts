@@ -113,7 +113,7 @@ export function useWorkspaceRuns(
           if (result.status !== "fulfilled" || !result.value.success || !result.value.data) return [];
           const run = result.value.data;
           if (run.assistantId) { dispatch(detachAssistantRun({ backendId, runId: run.id })); return []; }
-          return !run.isArchived && run.workspaceId === workspaceId &&
+          return !run.isReplica && !run.isArchived && run.workspaceId === workspaceId &&
             (!providerId || run.providerId === providerId) && (!mode || run.mode === mode) ? [run] : [];
         });
         setRuns((previous) => [...previous, ...restored.filter((run) => !previous.some((item) => item.id === run.id))]);
@@ -180,7 +180,7 @@ export function useWorkspaceRuns(
           providerId,
           mode,
         });
-        if (result.success && result.data) filteredRuns = result.data.filter((run: Run) => !run.assistantId);
+        if (result.success && result.data) filteredRuns = result.data.filter((run: Run) => !run.assistantId && !run.isReplica);
       } catch (err) {
         console.error("Failed to load workspace runs:", err);
       }
@@ -292,7 +292,7 @@ export function useWorkspaceRuns(
         const result = await appApi.runs.getById(runId);
         if (!current || revisions.get(runId) !== revision || !result.success || !result.data) return;
         const run = result.data;
-        if (run.assistantId || run.isArchived || (routeRunId ? run.accountId !== routedAccountId : run.workspaceId !== workspaceId) ||
+        if (run.assistantId || run.isReplica || run.isArchived || (routeRunId ? run.accountId !== routedAccountId : run.workspaceId !== workspaceId) ||
             (providerId && run.providerId !== providerId) || (mode && run.mode !== mode)) return;
         setRuns((previous) => previous.some((item) => item.id === run.id)
           ? previous.map((item) => item.id === run.id ? run : item)
@@ -321,7 +321,7 @@ export function useWorkspaceRuns(
         .getByWorkspace(id, { limit: 50, providerId, mode })
         .then((result) => {
           if (result.success && result.data && !runLists.has(id)) {
-            runLists.set(id, result.data.filter((run: Run) => !run.assistantId));
+            runLists.set(id, result.data.filter((run: Run) => !run.assistantId && !run.isReplica));
           }
         })
         .catch(() => {});
@@ -421,7 +421,7 @@ export function useWorkspaceRuns(
     (runId: string) => {
       const revision = selectionRevisionRef.current;
       const known = runs.find(run => run.id === runId);
-      if (known?.assistantId) return;
+      if (known?.assistantId || known?.isReplica) return;
       const wasPending = runs.some(
         (run) =>
           run.id === runId &&
@@ -438,7 +438,7 @@ export function useWorkspaceRuns(
           if (!request.current() || revision !== selectionRevisionRef.current || !result.success || !result.data) return;
           const run = result.data;
           if (run.assistantId) { dispatch(detachAssistantRun({ backendId, runId: run.id })); return; }
-          if (run.isArchived ||
+          if (run.isReplica || run.isArchived ||
             (providerId && run.providerId !== providerId) ||
             (mode && run.mode !== mode) ||
             (workspaceId && run.workspaceId !== workspaceId)) return;

@@ -22,6 +22,8 @@ export function registerBridgeIpc(): void {
   ipcMain.handle(CHANNELS.bridge.takeRecoveryCode, handle(() => bridgeService.takeRecoveryCode()));
   ipcMain.handle(CHANNELS.bridge.regenerateRecoveryCode, handle(() => bridgeService.regenerateRecoveryCode()));
   ipcMain.handle(CHANNELS.bridge.getStatus, handle(() => bridgeService.getStatus()));
+  ipcMain.handle(CHANNELS.bridge.storageOverview, handle(() => bridgeService.storageOverview()));
+  ipcMain.handle(CHANNELS.bridge.deleteStorageRun, handle((runId: string) => bridgeService.deleteStorageRun(id(runId, "run id"))));
   ipcMain.handle(CHANNELS.bridge.syncNow, handle(() => bridgeService.syncNow()));
   ipcMain.handle(CHANNELS.bridge.getProjectScopes, handle(() => bridgeService.getProjectScopes()));
   ipcMain.handle(CHANNELS.bridge.setProjectLocalOnly, handle((projectId: string, localOnly: boolean) => {

@@ -1,5 +1,5 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-import type { BridgeEnvelope, BridgeRpcRequest, BridgeRpcResponse, BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
+import { isBridgeRetiredRunDelete, type BridgeEnvelope, type BridgeRpcRequest, type BridgeRpcResponse, type BridgeServerMessage, type BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_FRAME_BYTES, parseBridgeRpcRequest } from "@mains/contracts/bridge-wire";
 import { authenticate, bridgeDevelopmentEnabled, createBridgeSocketAuth, type BridgeIdentity, type DevAuthEnv } from "./auth";
 import { handleSignIn } from "./sign-in";
@@ -22,10 +22,12 @@ import { verifyBridgePublication } from "./signatures";
 import { createHubMembership, type MembershipAppend } from "./membership";
 import { bridgeBetaEmail } from "./beta-admin";
 import { BridgeMailLimitError, deliverBridgeMail } from "./auth-mail";
-import { bridgeMember, bridgeWriterKeyAt, validateBridgeFence, validateBridgeMembershipEntry } from "@mains/contracts/bridge-membership";
+import { bridgeMember, bridgeOwnerRetiredAt, bridgeWriterKeyAt, validateBridgeFence, validateBridgeMembershipEntry } from "@mains/contracts/bridge-membership";
+import { bridgeStorageInventory } from "./storage-inventory";
 
 interface Env extends DevAuthEnv, BlobEnv, QuotaEnv, SqlUsageEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
 interface Session extends BridgeIdentity { streams: BridgeStream[] }
+const storageManagementEnabled = (env: Env) => env.BRIDGE_ENV === "production" || env.BRIDGE_ENV === "staging" || bridgeDevelopmentEnabled(env);
 /** How soon the hub checks that D1 caught up with a removal, and retries while D1 is unavailable. */
 const REVOCATION_CHECK_MS = 5_000, REVOCATION_RETRY_MS = 60_000;
 export default {
@@ -96,6 +98,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       const identity = await authenticate(request, env, rotated);
       if (!identity) return new Response("Unauthorized", { status: 401 });
       return Response.json(await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).getQuota(identity), { headers: { "Cache-Control": "no-store" } });
+    }
+    if (url.pathname === "/v1/storage" && request.method === "GET" && storageManagementEnabled(env)) {
+      const identity = await authenticate(request, env, rotated);
+      if (!identity) return new Response("Unauthorized", { status: 401 });
+      const result = await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).storageInventory(identity);
+      return Response.json(result.value, { status: result.status, headers: { "Cache-Control": "no-store" } });
     }
     if (url.pathname !== "/v1/log") return new Response("Not found", { status: 404 });
     // This development auth is deliberately unavailable without explicit local configuration.
@@ -251,7 +259,19 @@ export class AccountHub extends DurableObject<Env> {
       // have no new writes (and therefore no existing maintenance alarm).
       const deadlines = [this.store.nextExpiry(), this.quota.nextExpiry()].filter((value): value is number => value !== null);
       await this.schedule(hubMaintenanceDeadline(deadlines));
-      return quota;
+      return storageManagementEnabled(this.env) ? { ...quota, storageManagement: true } : quota;
+    }));
+  }
+  storageInventory(identity: BridgeIdentity) {
+    return this.usage.run("quota", () => this.ctx.blockConcurrencyWhile(async () => {
+      const state = storageManagementEnabled(this.env) ? await this.membership.state() : null;
+      if (!state || bridgeMember(state, identity.backendId)?.signingPublicKey !== identity.signingPublicKey)
+        return { status: 403, value: { error: "Bridge account access was revoked" } };
+      if (!this.store.takeWrite(`${identity.backendId}:storage`, 20))
+        return { status: 429, value: { error: "Refresh storage again in a minute" } };
+      const inventory = bridgeStorageInventory(this.usage.storage.sql);
+      return { status: 200, value: { ...inventory, items: inventory.items.map(item => item.ownerBackendId ?
+        { ...item, ownerRetired: bridgeOwnerRetiredAt(state, item.ownerBackendId, state.seq) } : item) } };
     }));
   }
   async reserveBlobs(identity: BridgeIdentity, entries: BlobReservation[], expires: number) {
@@ -352,7 +372,14 @@ export class AccountHub extends DurableObject<Env> {
               try {
                 if (socket.readyState !== WebSocket.OPEN || !await this.socketAuth.active(session)) return null;
                 const replay = await this.replayHorizon();
-                if (message.records.every((record) => record.header.op === "delete")) return this.store.push(session.backendId, message.stream, message.records, undefined, replay);
+                if (message.records.every((record) => record.header.op === "delete")) {
+                  const state = storageManagementEnabled(this.env) && message.records.some(record => isBridgeRetiredRunDelete(record.header))
+                    ? await this.membership.state() : null;
+                  const allowed = state && bridgeMember(state, session.backendId)?.signingPublicKey === session.signingPublicKey;
+                  return this.store.push(session.backendId, message.stream, message.records, undefined, replay,
+                    allowed ? ({ header, auth }) => !!auth && bridgeOwnerRetiredAt(state, header.owner!, state.seq) &&
+                      bridgeOwnerRetiredAt(state, header.owner!, auth.membership.seq) : undefined);
+                }
                 const quota = await this.quota.status(session.accountId);
                 period = subscriptionWriteBudgetPeriod(quota.subscription);
                 return this.store.push(session.backendId, message.stream, message.records, { ...quota, blobBytes: quota.blobBytes + quota.reservedBytes, canUpload: quota.subscription!.canUpload,

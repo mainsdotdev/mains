@@ -40,9 +40,28 @@ export interface BridgeQuota {
   plan: string; limitBytes: number; usedBytes: number; recordBytes: number; blobBytes: number; reservedBytes: number;
   /** Stored ciphertext already released from the user's quota, awaiting physical collection. */
   retainedBlobBytes?: number;
+  storageManagement?: boolean;
   fileLimitBytes: number; writesPerMinute: number;
   subscription?: import("./bridge-subscription").BridgeSubscription;
   plans?: import("./bridge-subscription").BridgePlan[];
+}
+export interface BridgeStorageItem {
+  id: string;
+  kind: "run" | "account";
+  recordBytes: number;
+  blobBytes: number;
+  reclaimableBlobBytes: number;
+  ownerBackendId?: string;
+  ownerRetired?: boolean;
+}
+/** A hub returns opaque identifiers. The approved backend adds local display metadata. */
+export interface BridgeStorageInventory {
+  items: BridgeStorageItem[];
+  hasMore: boolean;
+}
+export interface BridgeStorageOverview {
+  items: (BridgeStorageItem & { title: string; canDelete: boolean; ownerLabel?: string })[];
+  hasMore: boolean;
 }
 export interface BridgeProjectScope {
   id: string; name: string; localOnly: boolean; workspaces: number; runs: number;

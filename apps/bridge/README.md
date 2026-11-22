@@ -825,6 +825,15 @@ Entering/recovering from a quota refusal refreshes the sample;
 repeated refusals and failed samples remain throttled. A failed usage request
 does not interrupt replication. The hub still enforces every upload/write.
 
+The **Manage storage** view shows the 100 largest conversations and
+account files from current encrypted records. Released bytes are estimated
+per item: shared blobs still count while another current item references them.
+The approved backend supplies titles from its local data. A current member can
+sign a permanent delete for the exact root of a conversation owned by a removed
+device. The hub binds that authorization to verified membership and the existing
+run owner and root. Updated replicas verify the same historical membership before
+applying the tombstone. Older replicas set it aside for verification after upgrade.
+
 ### Fair-use write budget (monitoring only)
 
 Each account DO counts newly accepted upsert records per monthly period in

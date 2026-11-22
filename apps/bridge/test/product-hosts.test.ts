@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { AtlasPage, AtlasItem } from "@mains/contracts/atlas";
 import type { BridgeAuthStatus } from "@mains/contracts/bridge-auth";
-import type { BridgeProjectScope, BridgeStatus } from "@mains/contracts/bridge";
+import type { BridgeProjectScope, BridgeStatus, BridgeStorageOverview } from "@mains/contracts/bridge";
 import { startLocalBackends, waitFor } from "./local-backends";
 import { signIn, approve } from "./auth-helpers";
 
@@ -16,6 +16,44 @@ const get = (host: Host, id: string) => host.client.call<AtlasPage | null>(CHANN
 const received = (host: Host, id: string) => waitFor(() => get(host, id), (value) => !!value, "Page on other backend");
 
 describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("B8 through two independent backend processes", () => {
+  it.each(["staging", "production"] as const)("estimates shared bytes and lets an approved device delete a removed device's conversation in %s", async environment => {
+    const fixture = await startLocalBackends({ auth: true, environment }), { a, b } = fixture;
+    try {
+      await signIn(fixture, a); await signIn(fixture, b); await approve(fixture);
+      const unique = Buffer.alloc(32_768, 35), shared = Buffer.alloc(16_384, 23);
+      const create = async (title: string, files: Buffer[]) => {
+        const runId = randomUUID();
+        await b.client.call(CHANNELS.runs.create, { id: runId, accountId: "default", providerId: "codex", mode: "work", title, status: "succeeded" });
+        const dir = join(b.dir, "runs", runId, "work");
+        await mkdir(dir, { recursive: true });
+        for (const [i, bytes] of files.entries()) {
+          const fileName = `fixture-${i}.pdf`, path = join(dir, fileName);
+          await writeFile(path, bytes);
+          await b.client.call(CHANNELS.runArtifacts.add, { runId, kind: "document", path, metadata: { path, fileName, docType: "pdf" } });
+        }
+        return runId;
+      };
+      const keep = await create("Shared conversation", [shared]);
+      const remove = await create("Retired conversation", [unique, shared]);
+      await b.client.call(CHANNELS.bridge.syncNow);
+      await a.client.call(CHANNELS.bridge.syncNow);
+      const usage = () => a.client.call<BridgeStorageOverview>(CHANNELS.bridge.storageOverview);
+      const gone = (overview: BridgeStorageOverview) => overview.items.find(item => item.id === remove);
+      expect(gone(await usage())).toMatchObject({ title: "Retired conversation", canDelete: false, blobBytes: unique.length + shared.length + 80,
+        reclaimableBlobBytes: unique.length + 40 });
+      expect(await a.client.invoke(CHANNELS.bridge.deleteStorageRun, remove)).toMatchObject({ success: false });
+
+      await a.client.call(CHANNELS.bridge.revokeBackend, b.backendId);
+      expect(gone(await usage())).toMatchObject({ ownerRetired: true, canDelete: true });
+      await a.client.call(CHANNELS.bridge.deleteStorageRun, remove);
+      expect(gone(await usage())).toBeUndefined();
+      expect((await usage()).items.find(item => item.id === keep))
+        .toMatchObject({ title: "Shared conversation", blobBytes: shared.length + 40, reclaimableBlobBytes: shared.length + 40 });
+      expect(await a.client.call(CHANNELS.runs.getById, remove)).toBeNull();
+      expect((await a.client.call<BridgeStatus>(CHANNELS.bridge.getStatus)).quota)
+        .toMatchObject({ storageManagement: true, blobBytes: shared.length + 40, retainedBlobBytes: unique.length + 40 });
+    } finally { await fixture.dispose(); }
+  }, 120_000);
   it.each([false, true])("restores its own signed account objects after re-enrollment with a new random key (remove=%s)", async (remove) => {
     const fixture = await startLocalBackends({ auth: true }), { a, b } = fixture;
     try {

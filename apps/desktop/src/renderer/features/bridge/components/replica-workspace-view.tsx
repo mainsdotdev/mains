@@ -8,8 +8,8 @@ import {
   type RefObject,
 } from "react";
 import { useParams } from "react-router-dom";
-import type { BridgeStatus } from "@mains/contracts/bridge";
-import { TabStrip, Text } from "@/components/ui";
+import type { ModeId } from "@mains/contracts/modes";
+import { Select, Text } from "@/components/ui";
 import { Chat } from "@/components/ui/icons";
 import { chatLabel } from "@/components/layout/sidebar/chat-item";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
@@ -29,14 +29,10 @@ import {
 import { setRightPaneContextKey } from "@/lib/redux/slices/appSettingsSlice";
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import { useActiveSpace } from "@/hooks/use-active-space";
-import { useBrowserPanel } from "@/hooks/use-browser-panel";
 import { useSetMainHeader } from "@/hooks/use-main-header";
 import { useWorkspaceRouteTopRounding } from "@/hooks/use-workspace-route-top-rounding";
 import { ReplicaViewContext } from "@/hooks/use-replica-view";
 import { WorkspaceEvents } from "@/features/workspace/components/workspace-events";
-import { BaseTab } from "@/features/workspace/components/base-tab";
-import { ConversationTab } from "@/features/workspace/components/conversation-tab";
-import { TabIcon } from "@/features/workspace/components/run-tab";
 import {
   TodoSummaryBar,
   parseStructuralPlanSnapshot,
@@ -60,85 +56,17 @@ const EMPTY_TURNS: RunTurn[] = [];
 const runVariant = (run: Pick<Run, "providerId">, fallback: ProviderVariant) =>
   getProviderVariantById(run.providerId)?.variant ?? fallback;
 
-/** Same tab strip as an owned chat: provider icon, live spinner and title. */
-function ReplicaTabs({
-  runs,
-  activeRunId,
-  status,
-  fallbackVariant,
-  onSelect,
-  singleConversation = false,
-}: {
-  runs: Run[];
-  activeRunId: string | undefined;
-  status: BridgeStatus | undefined;
-  fallbackVariant: ProviderVariant;
-  onSelect(id: string): void;
-  singleConversation?: boolean;
-}) {
-  // An expanded browser owns the surface, so the chat tab drops its selected
-  // fill the same way Chat and Work do. Clicking it returns to the chat.
-  const { isExpanded, toggleExpanded } = useBrowserPanel();
-  if (singleConversation) {
-    const current = runs.find((row) => row.id === activeRunId);
-    const owner = current ? bridgeBackend(status, current.ownerBackendId) : undefined;
-    return <TabStrip activeKey={activeRunId} role="tablist" aria-label="Chat tabs"
-      className="relative z-(--z-panel-toggle) h-(--shell-header-height)">
-      <ConversationTab isFirst title={current ? chatLabel(current) : "New chat"} run={current}
-      variant={current ? runVariant(current, fallbackVariant) : fallbackVariant} isActive={!!current}
-      live={current && owner ? isReplicaLive(current, owner) : false}
-      onSelect={() => { if (current) onSelect(current.id); }} />
-    </TabStrip>;
-  }
-  return (
-    <TabStrip
-      activeKey={activeRunId}
-      role="tablist"
-      aria-label="Chat tabs"
-      className="relative z-(--z-panel-toggle) hidden h-(--shell-header-height) min-w-0 items-end md:flex"
-    >
-      {runs.map((row, index) => {
-        const owner = bridgeBackend(status, row.ownerBackendId),
-          title = chatLabel(row);
-        const selected = !isExpanded && row.id === activeRunId;
-        return (
-          <BaseTab
-            key={row.id}
-            isFirst={index === 0}
-            isActive={selected}
-            role="tab"
-            ariaLabel={title}
-            label={title}
-            tooltip={`${title} · Read-only on ${owner.label}`}
-            onClick={() => {
-              if (row.id !== activeRunId) onSelect(row.id);
-              if (isExpanded) toggleExpanded();
-            }}
-            icon={
-              <TabIcon
-                run={row}
-                variant={runVariant(row, fallbackVariant)}
-                isActive={selected}
-                live={isReplicaLive(row, owner)}
-              />
-            }
-          />
-        );
-      })}
-    </TabStrip>
-  );
-}
-
-/** Mirrors the owned chat page (header, painted panel, transcript column, composer slot)
- * without mounting composers, terminals, panels or provider controllers. */
+/** Read-only transcript and workspace conversation picker in the shared chat layout. */
 export function ReplicaWorkspaceView({
   initialRun,
   workspace,
+  mode,
   providerId,
   variant,
 }: {
   initialRun?: Run | null;
   workspace: Workspace | null;
+  mode: ModeId;
   providerId: string;
   variant: ProviderVariant;
 }) {
@@ -146,41 +74,45 @@ export function ReplicaWorkspaceView({
   const backendId = useAppSelector(
     (state) => state.backends.activeBackendId ?? "local",
   );
-  const activeTab = useAppSelector((state) => state.workspace.activeTab);
-  const useProjectChats = useAppSelector((state) => state.appSettings.developerSidebarView === "chats");
   const pendingRunId = useAppSelector((state) => state.workspace.pendingRunId);
   const { activeSpaceId } = useActiveSpace();
   const routeTopRounding = useWorkspaceRouteTopRounding();
-  const { isExpanded: browserExpanded } = useBrowserPanel();
   const { runId: routeRunId } = useParams<{ runId?: string }>();
-  const { currentData: workspaceRuns = EMPTY_RUNS, isLoading: loadingList } =
+  const workspaceId = mode === "developer" ? workspace?.id : undefined;
+  const viewKey = workspaceViewKey({ backendId, spaceId: activeSpaceId, providerId, mode, workspaceId });
+  const savedTab = useAppSelector(({ workspace }) => workspace.workspaceViewKey === viewKey
+    ? workspace.activeTab
+    : workspace.workspaceViews[viewKey]?.activeTab);
+  const { currentData: listedRuns = EMPTY_RUNS, isLoading: loadingList } =
     useGetRunsByWorkspaceQuery(
       {
-        workspaceId: workspace?.id ?? "",
+        workspaceId: workspaceId ?? "",
         providerId,
-        mode: "developer",
+        mode,
         limit: 100,
       },
-      { skip: !workspace },
+      { skip: !workspaceId || !!routeRunId },
     );
+  const workspaceRuns = useMemo(() => listedRuns.filter((run) =>
+    run.isReplica && run.mode === mode && run.providerId === providerId && run.ownerBackendId === workspace?.ownerBackendId),
+  [listedRuns, mode, providerId, workspace?.ownerBackendId]);
   const requested =
     routeRunId ??
     (workspaceRuns.some((run) => run.id === pendingRunId)
       ? pendingRunId
       : null) ??
-    (workspaceRuns.some((run) => run.id === activeTab) ? activeTab : null) ??
+    (workspaceRuns.some((run) => run.id === savedTab) ? savedTab : null) ??
     initialRun?.id ??
     workspaceRuns[0]?.id;
   const { currentData: freshRun } = useGetRunByIdQuery(requested ?? "", {
     skip: !requested,
   });
   const run =
-    freshRun ??
+    (freshRun?.isReplica && freshRun.mode === mode && freshRun.providerId === providerId ? freshRun : undefined) ??
     (initialRun?.id === requested
       ? initialRun
       : workspaceRuns.find((row) => row.id === requested));
   const activeRunId = run?.id;
-  const singleConversation = useProjectChats && (run?.mode ?? "developer") === "developer";
   const { status, run: hydration } = useBridgeRun(activeRunId, true);
   const owner = bridgeBackend(
     status,
@@ -190,23 +122,16 @@ export function ReplicaWorkspaceView({
   const transcript = useRunHistory(cache, activeRunId ?? null);
   const load = transcript.load;
   const end = useRef<HTMLDivElement>(null);
-  const viewKey = workspaceViewKey({
-    backendId,
-    spaceId: activeSpaceId,
-    providerId,
-    mode: run?.mode ?? "developer",
-    workspaceId: workspace?.id,
-    collectionId: run?.collectionId ?? null,
-  });
   useLayoutEffect(() => {
     dispatch(
       activateWorkspaceView({
         key: viewKey,
-        workspaceId: workspace?.id ?? null,
+        workspaceId: workspaceId ?? null,
         providerId,
+        rememberWorkspace: false,
       }),
     );
-  }, [dispatch, viewKey, workspace?.id, providerId]);
+  }, [dispatch, viewKey, workspaceId, providerId]);
   useLayoutEffect(() => {
     if (!activeRunId) return;
     dispatch(setActiveTab(activeRunId));
@@ -225,35 +150,7 @@ export function ReplicaWorkspaceView({
   }, [load, activeRunId]);
   useRunEventRefetch(activeRunId, refresh, 250);
   const runVariantName = run ? runVariant(run, variant) : variant;
-  const tabs = useMemo(
-    () => (workspace && !routeRunId ? workspaceRuns : run ? [run] : EMPTY_RUNS),
-    [workspace, routeRunId, workspaceRuns, run],
-  );
-  const selectTab = useCallback(
-    (id: string) => {
-      dispatch(setActiveTab(id));
-    },
-    [dispatch],
-  );
-  const header = useMemo(
-    () =>
-      tabs.length ? (
-        <ReplicaTabs
-          runs={tabs}
-          activeRunId={activeRunId}
-          status={status}
-          fallbackVariant={variant}
-          onSelect={selectTab}
-          singleConversation={singleConversation}
-        />
-      ) : null,
-    [tabs, activeRunId, status, variant, selectTab, singleConversation],
-  );
-  useSetMainHeader(
-    header,
-    !!header && !browserExpanded && (singleConversation || tabs[0]?.id === activeRunId),
-    loadingList,
-  );
+  useSetMainHeader(null);
   const visibleRun = run
     ? {
         ...run,
@@ -339,6 +236,18 @@ export function ReplicaWorkspaceView({
           {visibleRun && (
             <div className="content-inset">
               <div className={CONTENT_COLUMN_GUTTER}>
+                {workspaceRuns.length > 1 && activeRunId && (
+                  <div className="max-w-xs pb-2">
+                    <Select
+                      aria-label="Workspace conversations"
+                      value={activeRunId}
+                      options={workspaceRuns.map((row) => ({ value: row.id, label: chatLabel(row) }))}
+                      onChange={(id) => dispatch(setActiveTab(id))}
+                      searchable
+                      size="sm"
+                    />
+                  </div>
+                )}
                 {isReplicaLive(visibleRun, owner) && (
                   <TodoSummaryBar
                     events={transcript.runEvents[visibleRun.id] ?? []}

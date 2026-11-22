@@ -265,6 +265,8 @@ export const CHANNELS = {
     regenerateRecoveryCode: "bridge:regenerateRecoveryCode",
     deviceApprovalRequested: "bridge:deviceApprovalRequested",
     getStatus: "bridge:getStatus",
+    storageOverview: "bridge:storageOverview",
+    deleteStorageRun: "bridge:deleteStorageRun",
     syncNow: "bridge:syncNow",
     getProjectScopes: "bridge:getProjectScopes",
     setProjectLocalOnly: "bridge:setProjectLocalOnly",

@@ -42,6 +42,7 @@ import { ResizeHandle } from "@/components/layout/resize-handle";
 import { useAppSelector, useAppDispatch } from "@/lib/redux/hooks";
 import { setSidebarCollapsed, setSidebarWidth } from "@/lib/redux/slices/appSettingsSlice";
 import { setLayoutWidthVar } from "@/hooks/use-layout-width-vars";
+import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
 import {
   LAYOUT_PANEL_ANIM_MS,
   SIDEBAR_WIDTH_VAR,
@@ -273,6 +274,9 @@ export default function Sidebar({ collapsed }: SidebarProps) {
 
   const handleModeChange = (mode: ModeId) => {
     if (!activeSpace || mode === activeSpace.mode) return;
+    if (isHomeRoute && location.pathname !== WORKSPACE_BASE_PATH) {
+      navigate(WORKSPACE_BASE_PATH, { replace: true });
+    }
     void updateSpace({ id: activeSpace.id, payload: { mode } });
   };
 

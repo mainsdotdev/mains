@@ -1,11 +1,11 @@
 import { createBridgeSyncLifecycle } from "./bridge.sync-lifecycle";
 import { createBridgeRunWatches } from "./bridge.run-watch-lifecycle";
 import { createHash } from "node:crypto";
-import type { BridgeStatus, BridgeBackendInfo, BridgeQuota } from "@mains/contracts/bridge";
+import type { BridgeStatus, BridgeBackendInfo, BridgeQuota, BridgeStorageInventory, BridgeStorageOverview } from "@mains/contracts/bridge";
 import type { BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
 import type { SQLiteInstance } from "../../db/types";
 import { createBridgeEngine } from "./bridge.engine";
-import { createBridgeSealingCodec } from "./bridge.crypto";
+import { bridgeRecordKeys, createBridgeSealingCodec } from "./bridge.crypto";
 import { deriveBridgeKeys } from "./bridge.keys";
 import { createBridgeWebSocketTransport } from "./bridge.websocket";
 import type { AppliedChange } from "./bridge.applier";
@@ -14,10 +14,11 @@ import { createBridgeBlobs } from "./bridge.blobs";
 import { createBridgeBlobRecords, type BridgeFileTable } from "./bridge.blob-records";
 import { refreshClaudeSessionMirrors } from "./bridge.session-mirror";
 import { createBridgeSigningCodec } from "./bridge.signing";
-import { BRIDGE_MEMBERSHIP_HEARTBEAT_MS, bridgeMember } from "@mains/contracts/bridge-membership";
+import { BRIDGE_MEMBERSHIP_HEARTBEAT_MS, bridgeMember, bridgeOwnerRetiredAt } from "@mains/contracts/bridge-membership";
 import { bridgeAccountKeyCommitment } from "./bridge.keys";
 import { bridgeMembershipConflict, createBridgeMembershipView, deviceSigner, signBridgeMembershipEntry } from "./bridge.membership";
 import { bridgeHttp } from "./bridge.login";
+import { scopeSql } from "./bridge.capture";
 
 export interface BridgeReplicatorOptions {
   onApproval?: (request: import("@mains/contracts/bridge-auth").BridgeApprovalRequest) => void;
@@ -149,7 +150,8 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     } catch { /* A concurrent change or an unreachable hub leaves this to the next day or another member. */ }
   }
   const signedCodec = createBridgeSigningCodec(createBridgeSealingCodec(config.accountKey), config, membership);
-  const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(config.accountKey).recordKey,
+  const recordKey = deriveBridgeKeys(config.accountKey).recordKey;
+  const engine = createBridgeEngine({ sqlite, backendId, recordKey,
     codec: signedCodec, transport, blobs: files,
     async prepareIncoming(envelopes) {
       // Records bind their writer's head: catch up before a page that binds a newer one, and stop on
@@ -302,6 +304,39 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   }
   const api = {
     syncNow,
+    async storageOverview(): Promise<BridgeStorageOverview> {
+      const token = options.token ? await options.token() : config.token;
+      const overview = await bridgeHttp<BridgeStorageInventory>(config.url.replace(/^ws/, "http"), "/v1/storage", token);
+      const state = await refreshMembership();
+      const runs = sqlite.prepare(`SELECT title,owner_backend_id,(${scopeSql("runs", "runs")}) in_scope FROM runs WHERE id=?`);
+      const labels = new Map(api.getStatus().backends.map(peer => [peer.backendId, peer.label]));
+      const fileTitles = new Map<string, string>();
+      for (const [table, query] of [
+        ["atlas_items", "SELECT id,coalesce(file_name,title) title FROM atlas_items WHERE storage_key IS NOT NULL"],
+        ["collection_sources", "SELECT id,name title FROM collection_sources WHERE storage_key IS NOT NULL"],
+      ] as const) {
+        for (const row of sqlite.prepare(query).all() as { id: string; title: string }[])
+          fileTitles.set(bridgeRecordKeys(recordKey, table, row.id).rowKey, row.title);
+      }
+      return { hasMore: overview.hasMore, items: overview.items.map(item => {
+        const run = item.kind === "run" ? runs.get(item.id) as { title: string | null; owner_backend_id: string; in_scope: number } | undefined : undefined;
+        const owner = item.ownerBackendId;
+        const canDelete = !!run && !!owner && run.owner_backend_id === owner &&
+          (owner === backendId ? !!run.in_scope : item.ownerRetired === true && bridgeOwnerRetiredAt(state, owner, state.seq));
+        return { ...item, title: run?.title?.trim() || fileTitles.get(item.id) || (item.kind === "run" ? "Conversation" : "Synced file"),
+          canDelete, ownerLabel: owner ? labels.get(owner) : undefined };
+      }) };
+    },
+    async deleteRetiredRun(runId: string, owner: string) {
+      const state = await refreshMembership();
+      if (owner === backendId || !bridgeOwnerRetiredAt(state, owner, state.seq)) throw new Error("This conversation's device still has Bridge access");
+      if (!sqlite.prepare("SELECT 1 FROM runs WHERE id=? AND owner_backend_id=?").get(runId, owner))
+        throw new Error("This device no longer has that conversation");
+      await engine.deleteRetiredRun(runId, owner);
+      await refreshQuota(true);
+      notify();
+      api.wake();
+    },
     pause: lifecycle.pause,
     resume() { if (lifecycle.stopped) return; lifecycle.resume(); pullAllRequested = true; api.wake(); },
     async preserveAccountFiles() { await files?.preserveAccountFiles(); },

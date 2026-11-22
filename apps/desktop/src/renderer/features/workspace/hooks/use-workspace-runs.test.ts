@@ -127,6 +127,18 @@ describe("working chats created from voice", () => {
     expect(mocks.getHistory).not.toHaveBeenCalledWith(expect.objectContaining({ runId: assistantChat.id }));
     view.unmount();
   });
+  it("keeps Bridge chats out of local tabs when loading, restoring, or receiving updates", async () => {
+    const replica = { ...runA, id: "bridge-chat", isReplica: true };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [replica, runA] });
+    mocks.getById.mockResolvedValue({ success: true, data: replica });
+    const view = renderHook(() => useWorkspaceRuns("ws-a", "codex", "developer", undefined, [],
+      { retainedRunIds: [replica.id] }));
+    await waitFor(() => expect(mocks.getById).toHaveBeenCalledWith(replica.id));
+    await act(async () => { for (const listener of runUpdates) listener({ runId: replica.id }); });
+    expect(view.result.current.runs.map(run => run.id)).toEqual([runA.id]);
+    expect(mocks.getHistory).not.toHaveBeenCalledWith(expect.objectContaining({ runId: replica.id }));
+    view.unmount();
+  });
   it("closes a saved assistant tab without archiving its chat or restoring its transcript into the workspace", async () => {
     const assistantChat = { ...runA, id: "saved-assistant", assistantId: "testflight" };
     mocks.getByWorkspace.mockResolvedValue({ success: true, data: [runA] });

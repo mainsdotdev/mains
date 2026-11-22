@@ -5,8 +5,8 @@ import { CHANNELS } from "@mains/contracts/channels";
 import type { SQLiteInstance } from "../../db/types";
 import { emit } from "../../ipc-kit/event-bus";
 import { installBridgeCapture } from "./bridge.capture";
-import { bridgePassThroughCodec, type BridgeCodec } from "./bridge.crypto";
-import { applyDeletedAck, isRejectedRecord, UNVERIFIED_REASON, type AppliedChange } from "./bridge.applier";
+import { bridgePassThroughCodec, bridgeRecordKeys, type BridgeCodec } from "./bridge.crypto";
+import { applyBridgeBatch, applyDeletedAck, isRejectedRecord, UNVERIFIED_REASON, verifyEnvelope, type AppliedChange } from "./bridge.applier";
 import { definition, getClock } from "./bridge.sql";
 import { bestClock, outboxInScope, prepareRecord, readRow, type BridgeRecoveryContext, type BridgeStore, type OutboxEntry, type PreparedRecord } from "./bridge.store";
 import type { BridgeTransport } from "./bridge.transport";
@@ -248,6 +248,25 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     return prepared.length - attachmentCount;
   }
   return {
+    deleteRetiredRun(runId: string, owner: string) {
+      return serial(async () => {
+        const rowKey = bridgeRecordKeys(store.recordKey, "runs", runId).rowKey;
+        const envelope = store.codec.seal({ v: 1, stream: "account", op: "delete", rowKey, runId, origin: backendId, owner,
+          hlc: { physicalMs: Date.now(), counter: 0 } }, { table: "runs", pk: runId });
+        const [result, ...extra] = await transport.push("account", [envelope]);
+        if (!result || extra.length || "error" in result || result.publicationId !== envelope.auth?.publicationId)
+          throw new Error("Bridge could not confirm deletion. Refresh storage and try again.");
+        const tombstone = "deleted" in result ? result.deleted : envelope;
+        await options.prepareIncoming?.([tombstone]);
+        const { header, body } = verifyEnvelope(store, tombstone);
+        if (header.op !== "delete" || body.table !== "runs" || body.pk !== runId || header.stream !== "account" || header.owner !== owner)
+          throw new Error("Bridge returned a deletion for a different conversation");
+        // Apply the verified result without moving the stream cursor over other account writes.
+        announce(applyBridgeBatch(store, "account", [{ seq: 0, envelope: tombstone }]));
+        if (readRow(store, "runs", runId)) throw new Error("The conversation was deleted in Bridge. Sync to finish updating this device.");
+        options.onDeleteAcknowledged?.();
+      });
+    },
     bootstrap(pageSize = 100) { return serial(() => receiving.bootstrap(pageSize)); },
     backfill(limit = 100) { return serial(async () => receiving.backfill(limit)); },
     push(stream: BridgeStream = "account", limit = 100, deletesOnly = false) { return serial(() => push(stream, limit, deletesOnly)); },

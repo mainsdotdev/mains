@@ -127,6 +127,10 @@ export async function validateBridgeFence(signatures: unknown, fence: BridgeAcco
 
 export const currentBridgeMembers = (state: BridgeMembershipState) => state.keys.filter((entry) => entry.until === null);
 export const bridgeMember = (state: BridgeMembershipState, backendId: string) => currentBridgeMembers(state).find((entry) => entry.backendId === backendId);
+export function bridgeOwnerRetiredAt(state: BridgeMembershipState, backendId: string, seq: number): boolean {
+  const keys = state.keys.filter(key => key.backendId === backendId && key.from <= seq);
+  return seq <= state.seq && keys.length > 0 && keys.every(key => key.until !== null && key.until <= seq);
+}
 /** The interval in which `signingPublicKey` was `backendId`'s key at `seq`, if it was. */
 export function bridgeWriterKey(state: BridgeMembershipState, backendId: string, signingPublicKey: string, seq: number): BridgeMemberKey | undefined {
   return seq <= state.seq ? state.keys.find((entry) => entry.backendId === backendId && entry.signingPublicKey === signingPublicKey &&
