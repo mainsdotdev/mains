@@ -15,6 +15,14 @@ export interface DeletedUiContext {
 }
 
 const pendingBrowserForgets = new Set<string>();
+type ForgottenRunListener = (backendId: string, runId: string) => void;
+const forgottenRunListeners = new Set<ForgottenRunListener>();
+
+/** Notify mounted views that retain their own run lists and transcripts. */
+export function onRunUiStateForgotten(listener: ForgottenRunListener): () => void {
+  forgottenRunListeners.add(listener);
+  return () => forgottenRunListeners.delete(listener);
+}
 
 /** Called only after the backend confirms permanent deletion. */
 export function forgetDeletedUiContext(
@@ -32,6 +40,7 @@ export function forgetDeletedUiContext(
     dispatch(forgetRunUiState({ backendId: target.backendId, runId: target.id }));
     dispatch(forgetRunRightPane({ backendId: target.backendId, runId: target.id }));
     clearTransientUploads(runOwnerKey(target.backendId, target.id));
+    for (const listener of forgottenRunListeners) listener(target.backendId, target.id);
   } else {
     dispatch(forgetWorkspaceUiState({ backendId: target.backendId, workspaceId: target.id }));
     dispatch(forgetWorkspaceRightPanes({ backendId: target.backendId, workspaceId: target.id }));

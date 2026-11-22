@@ -2,6 +2,7 @@
 
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { forgetDeletedUiContext } from "@/lib/redux/ui-state-cleanup";
 import type { Run } from "../types";
 import type { StreamingEvent } from "./use-streaming-events";
 import type { RealtimeVoiceState } from "../lib/realtime-voice-controller";
@@ -267,6 +268,55 @@ describe("working chats created from voice", () => {
     await act(async () => { resolveOld({ success: true, data: { ...worker, title: "Original task" } }); });
     expect(view.result.current.runs[0].title).toBe("Updated task");
     view.unmount();
+  });
+});
+
+describe("workspace tabs after permanent deletion", () => {
+  it("drops the open chat and its transcript immediately and keeps it out when switching back", async () => {
+    const otherRun = { ...runA, id: "other-run" };
+    mocks.getByWorkspace.mockImplementation(async (workspaceId) => ({
+      success: true, data: workspaceId === runA.workspaceId ? [runA, otherRun] : [runB],
+    }));
+    const view = renderHook(({ workspaceId }) => useWorkspaceRuns(workspaceId, "codex", "developer"),
+      { initialProps: { workspaceId: "ws-a" } });
+    await waitFor(() => expect(view.result.current.currentEvents[0]?.content).toBe(runA.goal));
+
+    act(() => forgetDeletedUiContext(mocks.dispatch, { backendId: "another-backend", kind: "run", id: runA.id }));
+    expect(view.result.current.activeRunId).toBe(runA.id);
+
+    act(() => forgetDeletedUiContext(mocks.dispatch, { backendId: "local", kind: "run", id: runA.id }));
+    expect(view.result.current.runs).toEqual([otherRun]);
+    expect(view.result.current.activeRunId).toBeNull();
+    expect(view.result.current.runEvents[runA.id]).toBeUndefined();
+    expect(view.result.current.isRunDetailsLoaded(runA.id)).toBe(false);
+
+    view.rerender({ workspaceId: "ws-b" });
+    await waitFor(() => expect(view.result.current.runs).toEqual([runB]));
+    view.rerender({ workspaceId: "ws-a" });
+    expect(view.result.current.runs).toEqual([otherRun]);
+    await act(async () => {});
+    expect(view.result.current.runs).toEqual([otherRun]);
+    expect(view.result.current.activeRunId).toBe(otherRun.id);
+  });
+
+  it("filters a deleted chat out of a delayed prefetch and a later workspace load", async () => {
+    let resolvePrefetch!: (value: { success: true; data: Run[] }) => void;
+    mocks.getByWorkspace
+      .mockResolvedValueOnce({ success: true, data: [runA] })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolvePrefetch = resolve; }))
+      .mockResolvedValue({ success: true, data: [runB] });
+    const view = renderHook(({ workspaceId }) => useWorkspaceRuns(workspaceId, "codex", "developer", undefined, prefetchWorkspaceIds),
+      { initialProps: { workspaceId: "ws-a" } });
+    await waitFor(() => expect(view.result.current.runs).toEqual([runA]));
+    expect(resolvePrefetch).toBeDefined();
+    act(() => forgetDeletedUiContext(mocks.dispatch, { backendId: "local", kind: "run", id: runB.id }));
+    await act(async () => resolvePrefetch({ success: true, data: [runB] }));
+
+    view.rerender({ workspaceId: "ws-b" });
+    expect(view.result.current.runs).toEqual([]);
+    await act(async () => {});
+    expect(view.result.current.runs).toEqual([]);
+    expect(mocks.getHistory).not.toHaveBeenCalledWith(expect.objectContaining({ runId: runB.id }));
   });
 });
 

@@ -15,6 +15,7 @@ import workspaceReducer, { activateWorkspaceView, setActiveTab, setDraftText } f
 import { selectSessionRunId } from "@/features/workspace/components/session-panel/select-session-run";
 import appSettingsReducer, { setBrowserPanelOpen, setRightPaneContextKey } from "../slices/appSettingsSlice";
 import backendsReducer from "../slices/backendsSlice";
+import { onRunUiStateForgotten } from "../ui-state-cleanup";
 
 function createStore() {
   return configureStore({
@@ -183,15 +184,23 @@ describe("permanent deletion UI cleanup", () => {
     store.dispatch(setRightPaneContextKey({ ownerKey: owner, browserExpansionKey: owner }));
     store.dispatch(setBrowserPanelOpen(true));
 
-    await expect(store.dispatch(runsApi.endpoints.deleteRun.initiate("run-a")).unwrap()).rejects.toBeTruthy();
-    expect(store.getState().workspace.draftTextByKey[owner]).toBe("unfinished");
-    expect(store.getState().appSettings.browserPanelOpen).toBe(true);
+    const onForgotten = vi.fn();
+    const unsubscribe = onRunUiStateForgotten(onForgotten);
+    try {
+      await expect(store.dispatch(runsApi.endpoints.deleteRun.initiate("run-a")).unwrap()).rejects.toBeTruthy();
+      expect(store.getState().workspace.draftTextByKey[owner]).toBe("unfinished");
+      expect(store.getState().appSettings.browserPanelOpen).toBe(true);
+      expect(onForgotten).not.toHaveBeenCalled();
 
-    shouldFail = false;
-    await store.dispatch(runsApi.endpoints.deleteRun.initiate("run-a")).unwrap();
-    expect(store.getState().workspace.draftTextByKey[owner]).toBeUndefined();
-    expect(store.getState().appSettings.activeRightPaneContextKey).toBe("default");
-    expect(store.getState().appSettings.browserPanelOpen).toBe(false);
+      shouldFail = false;
+      await store.dispatch(runsApi.endpoints.deleteRun.initiate("run-a")).unwrap();
+      expect(store.getState().workspace.draftTextByKey[owner]).toBeUndefined();
+      expect(store.getState().appSettings.activeRightPaneContextKey).toBe("default");
+      expect(store.getState().appSettings.browserPanelOpen).toBe(false);
+      expect(onForgotten).toHaveBeenCalledExactlyOnceWith("local", "run-a");
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("clears a deleted workspace's view and unsent draft", async () => {
