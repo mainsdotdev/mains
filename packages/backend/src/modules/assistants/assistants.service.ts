@@ -11,6 +11,7 @@ import { ASSISTANT_AVATAR_COLORS, ASSISTANT_AVATAR_SHAPES, DEFAULT_ASSISTANT_AVA
 import { snapshotRunSettingConfig } from "@mains/contracts/run-settings";
 import type { Assistant, AssistantConversation, AssistantModelChange, AssistantOverview, AssistantProfile, AssistantWelcome } from "@mains/contracts/assistants";
 import { assertRecordAvailable, recordKey, transitionRecord } from "../../runtime/record-lifecycle";
+import { hasAssistantVoiceConnection } from "../runs/run-lifecycle";
 
 function readAvatar(input: unknown) {
     const value = object(input);
@@ -71,6 +72,7 @@ function changeMembership(assistant: Assistant, teamId: string | null) {
     const { id, accountId } = assistant;
     if (teamId && !assistantsRepo.team(teamId, accountId)) throw new Error("Team not found");
     if (assistant.teamId === teamId) return;
+    if (hasAssistantVoiceConnection(id)) throw new Error("End this Mate’s voice chat before changing teams");
     if (assistantsRepo.hasPendingRun(id)) throw new Error("Stop this assistant’s running conversations before changing teams");
     if (assistantsRepo.hasPendingTeamWork(id)) throw new Error("Finish or cancel this assistant’s assignments and pending deliveries before changing teams");
     const welcome = assistantsRepo.welcome(id);
@@ -206,6 +208,7 @@ export const assistantsService = {
         id = assistant.id;
         accountId = assistant.accountId;
         assertRecordAvailable(recordKey("assistant", id, accountId));
+        if (archived && hasAssistantVoiceConnection(id)) throw new Error("End this Mate’s voice chat before archiving");
         if (archived && assistantsRepo.assignments(accountId).some(t => t.toAssistantId === id && ["queued", "running", "blocked", "uncertain"].includes(t.status)))
             throw new Error("Finish or cancel this assistant's assignments before archiving");
         if (archived && assistantsRepo.hasPendingRun(id))

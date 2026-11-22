@@ -898,6 +898,7 @@ export type WorkRunRealtimeRequest = Omit<WorkRunContinueRequest,
 > & Pick<import("@mains/contracts/realtime").RunRealtimeStartPayload, "connectionId" | "sdp"> & {
   voiceTools?: import("./voice-task-tools").VoiceTaskTools;
   voiceInstructions?: string;
+  voiceInitialInstructions?: string;
 };
 
 export interface RealtimeAdapterControls {

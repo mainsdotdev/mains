@@ -13,6 +13,23 @@ export interface RunSessionResult {
 
 const startingResponses = new Set<string>();
 
+export const realtimeConnections = new Map<string, {
+  connectionId: string;
+  assistantId: string | null;
+  cancelRequested: boolean;
+  prepared: Promise<void>;
+  dispose?: () => void;
+  deviceId?: string;
+  releaseOwner?: () => void;
+}>();
+
+export function hasAssistantVoiceConnection(assistantId: string): boolean {
+  for (const connection of realtimeConnections.values()) {
+    if (connection.assistantId === assistantId) return true;
+  }
+  return false;
+}
+
 export function startingRunResponseIds(): IterableIterator<string> { return startingResponses.values(); }
 
 export function isRunResponseStarting(runId: string): boolean {

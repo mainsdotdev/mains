@@ -33,6 +33,8 @@ import { createCodexRequestBroker } from "../providers/adapters/codex/codex-requ
 import { pulseService } from "../pulse";
 import { pullRequestsService } from "../pullRequests";
 import { dispatchMainsTool, toClaudeTools } from "../providers/adapters/mains-tools.registry";
+import type { WorkRunRealtimeRequest } from "../../../shared/adapter.types";
+import type { RunRealtimeEvent } from "@mains/contracts/realtime";
 let cleanup: () => void, restore: () => void, root: string;
 let driver: ReturnType<typeof createFakeDriver>;
 let teamId: string;
@@ -85,6 +87,46 @@ afterEach(async () => {
     cleanup();
     rmSync(root, { recursive: true, force: true });
     vi.restoreAllMocks();
+});
+
+describe("Mate voice conversations", () => {
+    it("starts voice with the Mate profile and keeps delegated work in the same Mate", async () => {
+        db.update(providers).set({ config: JSON.stringify({ sandboxMode: "read-only" }) }).where(eq(providers.id, "codex")).run();
+        const mate = await makeAssistant("Kitchen Mate");
+        assistantsService.saveMemory({ accountId: mate.accountId, teamId, assistantId: mate.id,
+            title: "Kitchen preference", content: "Use metric measurements", pinned: true });
+        db.update(spaces).set({ mode: "chat", systemPrompt: "Unrelated new Space instructions" }).where(eq(spaces.id, mate.spaceId)).run();
+        const run = createRun(db, { assistantId: mate.id, spaceId: mate.spaceId, providerId: "codex",
+            mode: "work", status: "succeeded", sessionId: "native-thread" });
+        const payload = { runId: run.id, accountId: mate.accountId, connectionId: "mate-voice", sdp: "v=0\r\n" };
+        const startRealtime = vi.fn(async (_request: WorkRunRealtimeRequest, _publish: (event: RunRealtimeEvent) => void) => {});
+        const stopRealtime = vi.fn(async () => {
+            startRealtime.mock.calls[0][1]({ ...payload, type: "closed", reason: "ended" });
+        });
+        vi.mocked(createWorkAdapter).mockReturnValue({ ...createWorkRunAdapter(driver.driver), startRealtime, stopRealtime });
+
+        try {
+            await runsService.startRealtime({ ...payload, conversationSettings: { model: "other-model", config: { sandboxMode: "danger-full-access" } } }, { deviceId: "iphone" });
+            const request = startRealtime.mock.calls[0][0];
+            expect(request).toMatchObject({ model: mate.model, mode: "work",
+                configSnapshot: { assistantId: mate.id, modelReasoningEffort: "high", sandboxMode: "read-only" } });
+            expect(request.voiceInitialInstructions).toContain("Own Kitchen Mate.");
+            expect(request.extraInstructions).toContain("Original Space instructions");
+            expect(request.extraInstructions).toContain("Use metric measurements");
+            expect(() => assistantsService.archive(mate.id, mate.accountId, true)).toThrow("End this Mate’s voice chat");
+            expect(() => assistantsService.changeTeam({ id: mate.id, accountId: mate.accountId, teamId: null })).toThrow("End this Mate’s voice chat");
+
+            const { runId } = await request.voiceTools!.start({ taskKey: "recipe", title: "Recipe", prompt: "Write a recipe in metric units" }) as { runId: string };
+            await settled(runId);
+            expect(await runsService.getRunById(runId)).toMatchObject({ assistantId: mate.id, mode: "work", spaceId: mate.spaceId });
+            expect(driver.calls.createSession.find(call => call.runId === runId)).toMatchObject({ model: mate.model,
+                configSnapshot: { assistantId: mate.id, sandboxMode: "read-only" } });
+        } finally {
+            await runsService.stopRealtime(payload, "iphone");
+        }
+        assistantsService.archive(mate.id, mate.accountId, true);
+        await expect(runsService.startRealtime(payload)).rejects.toThrow("Assistant is unavailable");
+    });
 });
 
 describe("Mate pull request reviews", () => {

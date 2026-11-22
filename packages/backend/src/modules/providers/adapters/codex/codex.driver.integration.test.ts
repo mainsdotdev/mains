@@ -660,6 +660,7 @@ describe("codex.driver / app-server protocol", () => {
       configSnapshot: { sandboxMode: "read-only", modelReasoningEffort: "ultra", serviceTier: "fast" },
       extraInstructions: "Stay within this conversation's permissions.",
       voiceTools, voiceInstructions: "Delegate lengthy work to separate chats with mains_voice tools.",
+      voiceInitialInstructions: "You are Kitchen Mate. Use metric measurements.",
     }, (event) => { events.push(event as unknown as Record<string, unknown>); }, {
       onTurnStarted, onCompleted,
       onEvent: async (event) => { events.push(event as unknown as Record<string, unknown>); },
@@ -684,7 +685,7 @@ describe("codex.driver / app-server protocol", () => {
     expect(log.find((message) => message.method === "thread/realtime/start")?.params).toMatchObject({
       voice: "maple",
       realtimeStartInstructions: "Delegate lengthy work to separate chats with mains_voice tools.",
-      initialItems: [{ role: "developer" }],
+      initialItems: [{ role: "developer" }, { role: "developer", text: "You are Kitchen Mate. Use metric measurements." }],
     });
     const bridgeScript = (log.find((message) => message.method === "thread/resume")!.params as any).config["mcp_servers.mains_voice"].args[0];
     expect(fs.existsSync(bridgeScript)).toBe(true);

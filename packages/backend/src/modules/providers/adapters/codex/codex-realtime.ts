@@ -234,7 +234,10 @@ export function createCodexRealtime(options: {
         ...(request.voiceInstructions ? {
           realtimeStartInstructions: request.voiceInstructions,
           realtimeEndInstructions: "The voice call has ended. Voice coordination tools are unavailable. Leave separately delegated working chats running; resume ordinary written conversation when the user sends a message.",
-          initialItems: [{ role: "developer", text: "You are the voice coordinator. For work requests, ask the backing Codex agent to use the mains_voice task tools and return promptly. Working chats run independently. Speak naturally in the user's language. Report only verified results." }],
+          initialItems: [
+            { role: "developer", text: "You are the voice coordinator. For work requests, ask the backing Codex agent to use the mains_voice task tools and return promptly. Working chats run independently. Speak naturally in the user's language. Report only verified results." },
+            ...(request.voiceInitialInstructions ? [{ role: "developer" as const, text: request.voiceInitialInstructions }] : []),
+          ],
         } : {}),
       });
       finishPreparation();

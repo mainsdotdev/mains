@@ -20,7 +20,7 @@ import type {
   VoiceTaskLink,
 } from "@mains/contracts/realtime";
 import { insertRunInputArtifact } from "./run-input-artifact";
-import { assertRunCanContinue, canSteerRun, claimRunResponse, isRunResponseStarting, startingRunResponseIds } from "./run-lifecycle";
+import { assertRunCanContinue, canSteerRun, claimRunResponse, isRunResponseStarting, realtimeConnections, startingRunResponseIds } from "./run-lifecycle";
 import { answerAsyncQuestions, assertAsyncQuestionCanReply, assertAsyncQuestionDecisionCurrent, dismissAsyncQuestions } from "./run-async-questions";
 import type { AnswerAsyncQuestionsPayload, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import { providerTurnLineageMetadata } from "../../../shared/provider-turn-lineage";
@@ -689,18 +689,6 @@ async function syncCodexRunSession(
 // Single-item reads return null for absence; mutations on a missing
 // target throw (see CONTEXT.md "absence rule").
 // ─────────────────────────────────────────────────────────────
-const realtimeConnections = new Map<
-  string,
-  {
-    connectionId: string;
-    cancelRequested: boolean;
-    prepared: Promise<void>;
-    dispose?: () => void;
-    deviceId?: string;
-    releaseOwner?: () => void;
-  }
->();
-
 function assertRunCanRetire(runId: string): void {
   if (isRunResponseStarting(runId) || runSessionRegistry.get(runId) || realtimeConnections.has(runId)) {
     throw new Error("Stop active responses and voice chat before archiving or deleting this run.");
@@ -792,7 +780,6 @@ export const runsService = {
     }
     const run = await runsRepo.findRunById(payload.runId);
     if (!run) throw new Error("Run not found");
-    if (run.assistantId) throw new Error("Assistant voice conversations are not available in V1");
     if (run.accountId !== payload.accountId)
       throw new Error("Run does not belong to this account");
     if (run.isArchived)
@@ -809,10 +796,13 @@ export const runsService = {
       throw new Error("Voice chat is already active for this conversation.");
     if (owner?.signal?.aborted) throw new Error("The voice connection was closed.");
     assertRecordAvailable(recordKey("run", run.id));
+    const assistant = run.assistantId ? assistantsService.requireForWork(run.assistantId, run.accountId) : null;
+    if (assistant) assertRecordAvailable(recordKey("assistant", assistant.id, run.accountId));
     let prepared!: () => void;
     const connection: NonNullable<ReturnType<typeof realtimeConnections.get>> =
       {
         connectionId: payload.connectionId,
+        assistantId: assistant?.id ?? null,
         deviceId: owner?.deviceId,
         cancelRequested: false,
         prepared: new Promise<void>((resolve) => {
@@ -866,18 +856,19 @@ export const runsService = {
         latestKnownModel(turns, run.model),
         runSessionRegistry.get(run.id)
           ? undefined
-          : payload.conversationSettings,
+          : assistant?.conversationSettings ?? payload.conversationSettings,
       );
       const configSnapshot = normalizeAdditionalDirectories(
         composeConfigSnapshot(run.mode, run.providerId, {
           ...(run.configSnapshot ?? {}),
+          ...(assistant ? { assistantId: assistant.id } : {}),
           ...settings.config,
           conversationSettings: settings,
         }),
         run.providerId,
       );
       const toolPolicy = composeToolPolicy(run.mode, run.toolPolicySnapshot);
-      const space = run.assistantId ? assistantsService.require(run.assistantId, run.accountId).spaceSnapshot : await findSpaceForRun(run.spaceId);
+      const space = assistant?.spaceSnapshot ?? await findSpaceForRun(run.spaceId);
       const projectInstructions = await buildCollectionSourceInstructions({
         runId: run.id,
         accountId: run.accountId,
@@ -909,7 +900,9 @@ export const runsService = {
                 rootTurnId: nativeRootTurnId ?? nativeTurnId,
               }
             : undefined;
-          const target = await resolveRunMode(run.spaceId ?? undefined);
+          const target = assistant
+            ? { spaceId: assistant.spaceId, space: assistant.spaceSnapshot, mode: run.mode }
+            : await resolveRunMode(run.spaceId ?? undefined);
           if (
             !target.space ||
             target.space.accountId !== run.accountId ||
@@ -922,8 +915,10 @@ export const runsService = {
           }
           const { runId } = await runsService.executeRun({
             accountId: run.accountId,
+            assistantId: assistant?.id,
             providerId: run.providerId,
             spaceId: target.spaceId ?? undefined,
+            mode: assistant ? run.mode : undefined,
             workspaceId: run.workspaceId ?? undefined,
             collectionId: run.collectionId ?? undefined,
             goal: args.prompt,
@@ -1193,8 +1188,13 @@ export const runsService = {
           toolPolicy,
           voiceTools: coordinator.tools,
           voiceInstructions: `${VOICE_COORDINATOR_INSTRUCTIONS}\nPreviously linked working chats (use ListVoiceTasks for all): ${JSON.stringify(links.slice(-16).map(({ id, taskKey, title }) => ({ runId: id, taskKey, title })))}`,
+          // Realtime initial items have a tighter startup limit than the backing thread.
+          voiceInitialInstructions: assistant
+            ? `You are ${JSON.stringify(assistant.name)}, a persistent Mains assistant. Ask the backing agent when you need more profile details or saved memories.\n${Array.from(assistant.instructions).slice(0, 1700).join("")}`
+            : undefined,
           extraInstructions: joinInstructions(
             composeExtraInstructions(run.mode, space?.systemPrompt),
+            assistant ? assistantsService.context(assistant.id, run.accountId, run.goal ?? "") : null,
             projectInstructions,
             resolveAtlasPageContext(
               run.accountId,
