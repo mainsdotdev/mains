@@ -33,6 +33,8 @@ export class RecoveryHub extends DurableObject {
     const usage = sql.exec("SELECT * FROM quota_usage WHERE id=1").one();
     if (chunks.b !== usage.blob_bytes || chunks.r !== usage.reserved_bytes) throw new Error("Restored blob usage mismatch");
     if (sql.exec("SELECT 1 FROM blob_objects o WHERE o.refs<>(SELECT count(*) FROM blob_links l WHERE l.blob_id=o.blob_id) LIMIT 1").toArray().length) throw new Error("Restored blob references mismatch");
+    const retained = sql.exec("SELECT coalesce(sum(bytes),0) n FROM blob_quota_refs WHERE refs=0").one().n;
+    if (retained !== sql.exec("SELECT retained_bytes FROM blob_quota_state WHERE id=1").one().retained_bytes) throw new Error("Restored retained blob usage mismatch");
     return { tables: snapshot.tables.length, rows: snapshot.tables.reduce((sum, table) => sum + Number(this.ctx.storage.sql.exec(`SELECT count(*) AS n FROM "${table}"`).one().n), 0) };
   }
   pull(stream: string, after: number) { return createHubStore(this.ctx.storage).pull(stream as any, after, 200); }

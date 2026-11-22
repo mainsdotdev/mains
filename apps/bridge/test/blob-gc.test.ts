@@ -73,7 +73,7 @@ async function elapseGrace(account: string) {
 async function exists(keys: string[]) { return Promise.all(keys.map(async (key) => !!await (await hub.bucket()).head(key))); }
 
 describe("R2 collection through the real local Worker/DO/R2 runtime", () => {
-  it("reclaims deleted files from physical R2 and quota after grace, preserving every live/shared register", async () => {
+  it("releases quota on delete ACK and collects physical bytes after grace, preserving shared files", async () => {
     const account = randomUUID(), a = await client(account), shared = blob(), removed = blob(2048);
     const kept = await upload(account, shared), gone = await upload(account, removed);
     const bucket = await hub.bucket(), archive = await hub.archiveBucket();
@@ -82,6 +82,9 @@ describe("R2 collection through the real local Worker/DO/R2 runtime", () => {
     await a.push([first, second, file]);
     expect(await usage(account)).toMatchObject({ blobBytes: shared.size + removed.size + 80, reservedBytes: 0 });
     await a.push([deletion(first), deletion(file)]);
+    expect(await usage(account)).toMatchObject({ blobBytes: shared.size + 40, retainedBlobBytes: removed.size + 40, reservedBytes: 0 });
+    expect(await exists([...kept.keys, ...gone.keys])).toEqual([true, true]);
+    expect(await a.push([file])).toMatchObject({ results: [{ deleted: expect.objectContaining({ header: expect.objectContaining({ op: "delete" }) }) }] });
     await a.compact();
     const grace = await hub.quotaSql(account, "SELECT refs,delete_after FROM blob_objects ORDER BY refs") as { refs: number; delete_after: number | null }[];
     expect(grace[0]).toMatchObject({ refs: 0 });
@@ -96,7 +99,7 @@ describe("R2 collection through the real local Worker/DO/R2 runtime", () => {
     expect(copies).toHaveLength(1);
     expect(Buffer.from(await (await archive.get(copies[0].key))!.arrayBuffer())).toEqual(encrypted);
     expect((await archive.list({ include: ["customMetadata"] })).objects.some((entry) => entry.customMetadata?.sourceKey === kept.keys[0])).toBe(false);
-    expect(await usage(account)).toMatchObject({ blobBytes: shared.size + 40, reservedBytes: 0 });
+    expect(await usage(account)).toMatchObject({ blobBytes: shared.size + 40, retainedBlobBytes: 0, reservedBytes: 0 });
     const after = await usage(account);
     expect(after.usedBytes).toBe(after.recordBytes + shared.size + 40);
     expect((await fetch(read.chunks[0].url)).status).toBe(404);
@@ -121,12 +124,37 @@ describe("R2 collection through the real local Worker/DO/R2 runtime", () => {
     for (const child of children) await a.push([child]);
     const row = record("mirror", [mirrorBlob]);
     const mirror: BridgeEnvelope = { ...row, header: { ...row.header, stream: "run:two", runId: "two", owner: "A", retention: "30d-idle" } };
-    await a.push([mirror]); await a.push([deletion(roots[0])]); await a.compact(); await elapseGrace(account); await a.compact();
+    await a.push([mirror]); await a.push([deletion(roots[0])]);
+    expect(await usage(account)).toMatchObject({ blobBytes: shared.size + mirrorBlob.size + 80, retainedBlobBytes: 0 });
+    await a.compact(); await elapseGrace(account); await a.compact();
     expect(await exists(file.keys)).toEqual([true]);
     await hub.quotaSql(account, `UPDATE stream_activity SET last_activity=${Date.now() - BRIDGE_IDLE_RETENTION_MS - 1000} WHERE stream='run:two'`);
     await a.compact(); await elapseGrace(account); await a.compact();
     expect(await exists(mirrorFile.keys)).toEqual([false]); expect(await exists(file.keys)).toEqual([true]);
     expect(await usage(account)).toMatchObject({ blobBytes: shared.size + 40 });
+  });
+
+  it("opens storage when a run is deleted, keeps its files readable and recharges a surviving copy once", async () => {
+    const account = randomUUID(), a = await client(account), ref = blob();
+    const stored = await upload(account, ref);
+    const root = record("root");
+    root.header.owner = "A"; root.header.runId = "run";
+    const child = record("child", [ref]);
+    child.header = { ...child.header, owner: "A", runId: "run", stream: "run:run" };
+    await a.push([root]); await a.push([child]);
+    expect(await usage(account)).toMatchObject({ blobBytes: ref.size + 40, retainedBlobBytes: 0 });
+    await a.push([deletion(root)]);
+    expect(await usage(account)).toMatchObject({ blobBytes: 0, retainedBlobBytes: ref.size + 40 });
+    expect(await exists(stored.keys)).toEqual([true]);
+    expect(await a.push([child])).toMatchObject({ results: [{ deleted: expect.objectContaining({ header: expect.objectContaining({ runId: "run" }) }) }] });
+    await hub.evict(account);
+    expect(await usage(account)).toMatchObject({ blobBytes: 0, retainedBlobBytes: ref.size + 40 });
+    const retry = await client(account);
+    const copy = record("saved", [ref]), other = record("also-saved", [ref]);
+    await retry.push([copy, other]);
+    expect(await usage(account)).toMatchObject({ blobBytes: ref.size + 40, retainedBlobBytes: 0 });
+    await retry.push([deletion(copy)]);
+    expect(await usage(account)).toMatchObject({ blobBytes: ref.size + 40, retainedBlobBytes: 0 });
   });
 
   it("retains superseded log blobs until compaction, then reclaims them while keeping the latest version", async () => {

@@ -782,12 +782,14 @@ usage and outstanding reservations are never cached by this policy helper.
 
 Storage counts current encrypted registers, permanent tombstones, a conservative
 256-byte charge per signed-publication replay receipt (kept until the replay
-horizon passes it), stored R2
-chunks and unexpired upload reservations. Retried/duplicate chunks count once.
+horizon passes it), charged R2 chunks and unexpired upload reservations.
+Retried/duplicate chunks count once, including blobs shared across registers.
 Expired reservations reconcile R2 before releasing space, including a crash
-between a PUT and its receipt. Stored chunks remain charged until physically
-deleted by blob collection. Record replacements and deletes reclaim their superseded
-logical register bytes. Reads and tombstones remain available at quota/rate
+between a PUT and its receipt. Unpublished uploads stay charged. When a known
+blob loses its last current register, the same transaction releases its quota
+charge. The log holds the physical bytes for safe replication, after which the
+existing collection grace applies. Publishing the blob again recharges it.
+Reads and tombstones remain available at quota/rate
 limits. Failed writes stay in the local outbox and retry after capacity returns.
 
 Because tombstones are permanent and bypass quota and subscription checks, they
@@ -817,8 +819,9 @@ and quota checks do not rescan the ciphertext or chunk inventory. Row/run
 deletes remove their superseded current registers immediately while preserving
 the permanent tombstones and log/cursor rules. Reservation expiry uses an index.
 
-Backends sample usage after changes at most once per minute and reuse the cached
-sample while idle. Entering/recovering from a quota refusal refreshes the sample;
+Backends ordinarily sample usage once per minute and reuse the cached sample
+while idle. A synced deletion refreshes it at the end of the sync cycle.
+Entering/recovering from a quota refusal refreshes the sample;
 repeated refusals and failed samples remain throttled. A failed usage request
 does not interrupt replication. The hub still enforces every upload/write.
 

@@ -1,4 +1,3 @@
-import { BRIDGE_BLOB_MAX_BYTES } from "@mains/contracts/bridge-blobs";
 import type { BridgeQuota } from "@mains/contracts/bridge";
 import type { BridgeIdentity, DevAuthEnv } from "./auth";
 import { identityIsActive } from "./auth";
@@ -18,7 +17,8 @@ export interface QuotaEnv extends DevAuthEnv {
 }
 /** Quota decisions and receipts use the account gate. Immutable PUT I/O runs
  * outside it, pinned by a durable intent until completion or restart recovery. */
-export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, recordBytes: () => number, subscriptions = createBridgeSubscriptions(env), limits = createBridgeLimits(env)) {
+export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, recordBytes: () => number, subscriptions = createBridgeSubscriptions(env),
+  limits = createBridgeLimits(env), retainedBlobBytes = () => 0) {
   const sql = storage.sql;
   sql.exec(`CREATE TABLE IF NOT EXISTS quota_chunks(key TEXT PRIMARY KEY,bytes INTEGER NOT NULL,stored INTEGER NOT NULL,expires_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS quota_state(id INTEGER PRIMARY KEY,initialized INTEGER NOT NULL);`);
@@ -49,7 +49,8 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
   });
   function readUsage(): QuotaUsage {
     const blobs = sql.exec<{ blobBytes: number; reservedBytes: number }>("SELECT blob_bytes AS blobBytes,reserved_bytes AS reservedBytes FROM quota_usage WHERE id=1").one();
-    return { ...blobs, recordBytes: recordBytes() };
+    const retained = retainedBlobBytes();
+    return { blobBytes: blobs.blobBytes - retained, reservedBytes: blobs.reservedBytes, recordBytes: recordBytes(), retainedBlobBytes: retained };
   }
   const api = {
     invalidateLimits: limits.invalidate,

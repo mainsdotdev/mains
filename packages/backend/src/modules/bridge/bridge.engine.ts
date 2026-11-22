@@ -26,6 +26,7 @@ export interface BridgeEngineOptions {
   schemaVersion?: number;
   recover?: (context: BridgeRecoveryContext) => void;
   onApplied?: (changes: AppliedChange[]) => void;
+  onDeleteAcknowledged?: () => void;
   blobs?: BridgeBlobRecords;
   /** Enrollment stages existing UUID data before the first pull; untouched seeds still pull first. */
   stageLocalBeforePull?: boolean;
@@ -178,6 +179,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     // to the hub, then reject their Page pointer as deleted. Recover before any
     // accepted child is marked synced; otherwise its offline content disappears.
     let deletionRefused = false;
+    let deleteAcknowledged = false;
     for (let i = 0; i < results.length; i++) {
       const result = results[i], { entry } = prepared[i];
       if (!("deleted" in result)) continue;
@@ -190,6 +192,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       }
       // Attachment metadata has no outbox entry of its own; its reference is ACKed separately.
       if (i >= attachmentCount) clearAcknowledgedGeneration(store, entry);
+      if (entry.op === "delete") deleteAcknowledged = true;
     }
     let rejection: string | undefined, hubMs: number | undefined, stale = false;
     const failedAttachments = new Set(prepared.slice(0, attachmentCount).flatMap((sent, index) => "error" in results[index] ? [sent.entry.pk] : []));
@@ -227,9 +230,11 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       }
       if (entry.table_name === "run_attachment_refs" && failedAttachments.has((JSON.parse(entry.pk) as string[])[1])) continue;
       acknowledgePublication(store, sent, result.seq, i < attachmentCount);
+      if (entry.op === "delete") deleteAcknowledged = true;
       if (i < attachmentCount) continue;
       if (options.blobs) await options.blobs.acknowledged(sent.clock);
     }
+    if (deleteAcknowledged) options.onDeleteAcknowledged?.();
     if (stale && !resigned && options.membershipStale && !rejection && !preparationError) {
       await options.membershipStale();
       return push(stream, limit, deletesOnly, rebased, true);

@@ -164,7 +164,12 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     },
     // The hub refused records bound below its replay horizon: bind the newest head and sign again once.
     async membershipStale() { await refreshMembership(); },
-    onApplied: (changes) => { quotaDirty = true; options.onApplied?.(changes); },
+    onDeleteAcknowledged() { quotaDirty = true; nextQuotaRefreshAt = 0; },
+    onApplied: (changes) => {
+      quotaDirty = true;
+      if (changes.some(change => change.op === "delete")) nextQuotaRefreshAt = 0;
+      options.onApplied?.(changes);
+    },
     stageLocalBeforePull: options.stageLocalBeforePull || !!binding?.enrollment_staging });
   sqlite.prepare("UPDATE bridge_config SET account_fingerprint=? WHERE id=1").run(fingerprint);
 

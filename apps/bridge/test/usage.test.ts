@@ -23,7 +23,7 @@ export class UsageProbe extends DurableObject {
       transactionSync: (fn) => this.ctx.storage.transactionSync(fn),
     };
     this.store = createHubStore(storage);
-    this.quota = createBlobQuota(storage, this.env, () => this.store.recordBytes());
+    this.quota = createBlobQuota(storage, this.env, this.store.recordBytes, undefined, undefined, this.store.retainedBlobBytes);
   }
   async fetch(request) {
     this.cursors = [];

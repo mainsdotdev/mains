@@ -38,6 +38,8 @@ export interface BridgeStatus {
 }
 export interface BridgeQuota {
   plan: string; limitBytes: number; usedBytes: number; recordBytes: number; blobBytes: number; reservedBytes: number;
+  /** Stored ciphertext already released from the user's quota, awaiting physical collection. */
+  retainedBlobBytes?: number;
   fileLimitBytes: number; writesPerMinute: number;
   subscription?: import("./bridge-subscription").BridgeSubscription;
   plans?: import("./bridge-subscription").BridgePlan[];

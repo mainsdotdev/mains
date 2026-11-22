@@ -130,10 +130,10 @@ chunk into the separate private `BLOB_ARCHIVE` bucket under
 `deleted/YYYY-MM-DD/<opaque-live-key>/<etag>`. Source key/ETag metadata permit
 recovery without filenames or plaintext hashes. One bounded chunk is buffered
 before copying so a cross-bucket stream cannot deadlock the DO concurrency gate.
-An archive failure leaves the original and its quota receipt intact. Retries
-reuse an existing matching copy; quota falls only after live deletion succeeds.
-Referenced/live files are not archived or deleted. Archive bytes are outside the
-user's active quota, but still consume the operator's R2 storage.
+An archive failure leaves the original and its physical receipt intact. Retries
+reuse an existing matching copy. The quota charge for a published blob ends when
+the last current register releases it. Unpublished uploads stay charged through
+physical collection. Retained and archived bytes still consume operator R2 storage.
 
 Apply a **35-day expiration** only to the archive's `deleted/` prefix, leaving at
 least the 30-day DO recovery window plus margin. Do not attach expiration or a

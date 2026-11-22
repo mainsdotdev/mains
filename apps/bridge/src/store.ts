@@ -2,6 +2,7 @@ import { BRIDGE_MAX_CLOCK_SKEW_MS, type BridgeEnvelope, type BridgeLogRecord, ty
 import { BRIDGE_MAX_FRAME_BYTES } from "@mains/contracts/bridge-wire";
 import type { BridgeBlobIdentity } from "@mains/contracts/bridge-blobs";
 import { installBlobReferences } from "./blob-gc";
+import { createBlobQuotaLedger } from "./blob-quota-ledger";
 import { createHubCompaction } from "./compaction";
 
 type LogRow = { seq: number; envelope: string };
@@ -69,6 +70,7 @@ export function createHubStore(storage: DurableObjectStorage) {
       END;`);
   });
   installBlobReferences(storage);
+  const blobQuota = createBlobQuotaLedger(storage);
   const compaction = createHubCompaction(storage);
 
   function saveWriteRate(backendId: string, rate: WriteRate) {
@@ -92,17 +94,20 @@ export function createHubStore(storage: DurableObjectStorage) {
   }
 
   const api = {
+    retainedBlobBytes: blobQuota.retainedBytes,
     recordBytes(): number {
       return first<{ bytes: number }>("SELECT bytes FROM record_usage WHERE id=1")!.bytes;
     },
     takeWrite(backendId: string, limit: number): boolean {
       return takeWrite(backendId, limit);
     },
-    push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[], budget?: { limitBytes: number; blobBytes: number; writesPerMinute: number; canUpload?: boolean;
+    push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[], budget?: { limitBytes: number; blobBytes: number; retainedBlobBytes?: number; writesPerMinute: number; canUpload?: boolean;
       hasBlobs?: (blobs: BridgeBlobIdentity[]) => boolean; periodStart?: number }, replay?: { horizon: number; head: { seq: number; hash: string } }) {
       return storage.transactionSync(() => {
         const changed: BridgeLogRecord[] = [];
         let streamSeq: number | undefined;
+        let retainedBlobBytes = budget?.retainedBlobBytes ?? 0;
+        const physicalAndReservedBlobBytes = (budget?.blobBytes ?? 0) + retainedBlobBytes;
         const pendingRates = new Map<string, WriteRate>();
         const runActivity = new Map<BridgeStream, { first: number; latest: number }>();
         const results = envelopes.map((envelope): BridgePushResult => {
@@ -149,8 +154,11 @@ export function createHubStore(storage: DurableObjectStorage) {
           const encoded = JSON.stringify(envelope);
           if (h.op === "upsert" && budget) {
             const delta = new TextEncoder().encode(encoded).length - (previous ? new TextEncoder().encode(previous.envelope).length : 0) + BRIDGE_PUBLICATION_RECEIPT_BYTES;
-            if (delta > 0 && api.recordBytes() + budget.blobBytes + delta > budget.limitBytes) return { error: "quotaExceeded" };
+            const retainedAfter = blobQuota.projectedRetainedBytes(retainedBlobBytes, previousEnvelope?.header.blobs, h.blobs);
+            if (delta + retainedBlobBytes - retainedAfter > 0 &&
+                api.recordBytes() + physicalAndReservedBlobBytes - retainedAfter + delta > budget.limitBytes) return { error: "quotaExceeded" };
             if (!takeWrite(backendId, budget.writesPerMinute, pendingRates)) return { error: "rateLimited" };
+            retainedBlobBytes = retainedAfter;
           }
           // Backend ids never contain ':', so this bucket cannot collide with the upsert one.
           if (h.op === "delete" && !takeWrite(`${backendId}:delete`, BRIDGE_DELETES_PER_MINUTE, pendingRates)) return { error: "rateLimited" };
@@ -177,6 +185,7 @@ export function createHubStore(storage: DurableObjectStorage) {
             // registers/reused attachments and all children of a deleted run.
             sql.exec("DELETE FROM latest WHERE json_extract(envelope,'$.header.rowKey')=?", h.rowKey);
             sql.exec("DELETE FROM latest WHERE stream IN(SELECT 'run:'||run_id FROM runs WHERE root_key=?)", h.rowKey);
+            if (budget) retainedBlobBytes = blobQuota.retainedBytes();
           } else sql.exec("INSERT INTO latest(stream,register_key,seq,envelope) VALUES(?,?,?,?) ON CONFLICT(stream,register_key) DO UPDATE SET seq=excluded.seq,envelope=excluded.envelope", stream, h.registerKey, seq, encoded);
           changed.push({ seq, envelope });
           return ack(seq);

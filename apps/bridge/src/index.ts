@@ -171,7 +171,7 @@ export class AccountHub extends DurableObject<Env> {
     const domain = this.usage.run("initialize", () => {
       const store = createHubStore(this.usage.storage), subscriptions = createBridgeSubscriptions(env);
       const limits = createBridgeLimits(env, { onCache: (hit) => this.usage.limitsCache(hit) });
-      return { store, subscriptions, quota: createBlobQuota(this.usage.storage, env, () => store.recordBytes(), subscriptions, limits),
+      return { store, subscriptions, quota: createBlobQuota(this.usage.storage, env, store.recordBytes, subscriptions, limits, store.retainedBlobBytes),
         backup: createHubBackup(this.usage.storage), membership: createHubMembership(this.usage.storage) };
     });
     this.store = domain.store; this.subscriptions = domain.subscriptions; this.quota = domain.quota; this.backup = domain.backup; this.membership = domain.membership;

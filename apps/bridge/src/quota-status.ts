@@ -3,7 +3,7 @@ import { BRIDGE_BLOB_MAX_BYTES } from "@mains/contracts/bridge-blobs";
 import type { createBridgeSubscriptions } from "./subscriptions";
 import type { createBridgeLimits } from "./limits";
 
-export type QuotaUsage = Pick<BridgeQuota, "blobBytes" | "reservedBytes" | "recordBytes">;
+export type QuotaUsage = Pick<BridgeQuota, "blobBytes" | "reservedBytes" | "recordBytes" | "retainedBlobBytes">;
 
 export async function readBridgeQuota(accountId: string, subscriptions: ReturnType<typeof createBridgeSubscriptions>,
   limits: ReturnType<typeof createBridgeLimits>, readUsage: () => QuotaUsage | Promise<QuotaUsage>): Promise<BridgeQuota> {
