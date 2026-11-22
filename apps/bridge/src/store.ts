@@ -5,6 +5,7 @@ import { installBlobReferences } from "./blob-gc";
 import { createHubCompaction } from "./compaction";
 
 type LogRow = { seq: number; envelope: string };
+type WriteRate = { window: number; count: number };
 /** Tombstones are permanent and stay available outside quota and subscription, so they get
  * their own per-backend budget: generous for bulk cleanup, but no longer unlimited. */
 export const BRIDGE_DELETES_PER_MINUTE = 600;
@@ -21,7 +22,6 @@ export function createHubStore(storage: DurableObjectStorage) {
   const sql = storage.sql;
   sql.exec(`CREATE TABLE IF NOT EXISTS streams(stream TEXT PRIMARY KEY, seq INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS log(stream TEXT NOT NULL, seq INTEGER NOT NULL, row_key TEXT NOT NULL, register_key TEXT, op TEXT NOT NULL, envelope TEXT NOT NULL, PRIMARY KEY(stream,seq));
-    CREATE INDEX IF NOT EXISTS log_row ON log(row_key);
     CREATE TABLE IF NOT EXISTS latest(stream TEXT NOT NULL, register_key TEXT NOT NULL, seq INTEGER NOT NULL, envelope TEXT NOT NULL, PRIMARY KEY(stream,register_key));
     CREATE TABLE IF NOT EXISTS deleted(row_key TEXT PRIMARY KEY, stream TEXT NOT NULL, seq INTEGER NOT NULL, envelope TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS row_owners(row_key TEXT PRIMARY KEY, owner TEXT NOT NULL);
@@ -36,6 +36,8 @@ export function createHubStore(storage: DurableObjectStorage) {
     CREATE INDEX IF NOT EXISTS publications_membership ON publications(membership_seq);`);
   const first = <T>(query: string, ...args: (string | number | null)[]): T | undefined => sql.exec(query, ...args).toArray()[0] as T | undefined;
   storage.transactionSync(() => {
+    // Old hubs retain this index even though log readers use stream/sequence indexes.
+    sql.exec("DROP INDEX IF EXISTS log_row");
     sql.exec(`CREATE INDEX IF NOT EXISTS latest_row_key ON latest(json_extract(envelope,'$.header.rowKey'));
       CREATE TABLE IF NOT EXISTS record_usage(id INTEGER PRIMARY KEY CHECK(id=1),bytes INTEGER NOT NULL CHECK(bytes>=0));`);
     if (!first("SELECT 1 FROM record_usage WHERE id=1")) {
@@ -68,21 +70,41 @@ export function createHubStore(storage: DurableObjectStorage) {
   });
   installBlobReferences(storage);
   const compaction = createHubCompaction(storage);
+
+  function saveWriteRate(backendId: string, rate: WriteRate) {
+    sql.exec(`INSERT INTO write_rate VALUES(?,?,?)
+      ON CONFLICT(backend_id) DO UPDATE SET window=excluded.window,count=excluded.count`, backendId, rate.window, rate.count);
+  }
+
+  function takeWrite(backendId: string, limit: number, pending?: Map<string, WriteRate>): boolean {
+    const window = Math.floor(Date.now() / 60_000);
+    const previous = pending?.get(backendId) ?? first<WriteRate>("SELECT window,count FROM write_rate WHERE backend_id=?", backendId);
+    if (previous?.window === window && previous.count >= limit) return false;
+    const rate = { window, count: previous?.window === window ? previous.count + 1 : 1 };
+    if (pending) pending.set(backendId, rate);
+    else saveWriteRate(backendId, rate);
+    return true;
+  }
+
+  function saveRunActivity(stream: BridgeStream, at: number) {
+    sql.exec(`INSERT INTO stream_activity VALUES(?,?) ON CONFLICT(stream) DO UPDATE SET last_activity=excluded.last_activity
+      WHERE stream_activity.last_activity IS NOT excluded.last_activity`, stream, at);
+  }
+
   const api = {
     recordBytes(): number {
       return first<{ bytes: number }>("SELECT bytes FROM record_usage WHERE id=1")!.bytes;
     },
     takeWrite(backendId: string, limit: number): boolean {
-      const window = Math.floor(Date.now() / 60_000);
-      const rate = first<{ window: number; count: number }>("SELECT window,count FROM write_rate WHERE backend_id=?", backendId);
-      if (rate?.window === window && rate.count >= limit) return false;
-      sql.exec("INSERT INTO write_rate VALUES(?,?,1) ON CONFLICT(backend_id) DO UPDATE SET window=excluded.window,count=CASE WHEN write_rate.window=excluded.window THEN count+1 ELSE 1 END", backendId, window);
-      return true;
+      return takeWrite(backendId, limit);
     },
     push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[], budget?: { limitBytes: number; blobBytes: number; writesPerMinute: number; canUpload?: boolean;
       hasBlobs?: (blobs: BridgeBlobIdentity[]) => boolean; periodStart?: number }, replay?: { horizon: number; head: { seq: number; hash: string } }) {
       return storage.transactionSync(() => {
         const changed: BridgeLogRecord[] = [];
+        let streamSeq: number | undefined;
+        const pendingRates = new Map<string, WriteRate>();
+        const runActivity = new Map<BridgeStream, { first: number; latest: number }>();
         const results = envelopes.map((envelope): BridgePushResult => {
           const h = envelope.header;
           // Signature verification has already succeeded for the entire batch at the RPC boundary.
@@ -128,16 +150,25 @@ export function createHubStore(storage: DurableObjectStorage) {
           if (h.op === "upsert" && budget) {
             const delta = new TextEncoder().encode(encoded).length - (previous ? new TextEncoder().encode(previous.envelope).length : 0) + BRIDGE_PUBLICATION_RECEIPT_BYTES;
             if (delta > 0 && api.recordBytes() + budget.blobBytes + delta > budget.limitBytes) return { error: "quotaExceeded" };
-            if (!api.takeWrite(backendId, budget.writesPerMinute)) return { error: "rateLimited" };
+            if (!takeWrite(backendId, budget.writesPerMinute, pendingRates)) return { error: "rateLimited" };
           }
           // Backend ids never contain ':', so this bucket cannot collide with the upsert one.
-          if (h.op === "delete" && !api.takeWrite(`${backendId}:delete`, BRIDGE_DELETES_PER_MINUTE)) return { error: "rateLimited" };
+          if (h.op === "delete" && !takeWrite(`${backendId}:delete`, BRIDGE_DELETES_PER_MINUTE, pendingRates)) return { error: "rateLimited" };
           if (stream === "account" && h.runId) sql.exec("INSERT OR IGNORE INTO runs(run_id,owner,root_key) VALUES(?,?,?)", h.runId, backendId, h.rowKey);
           if (h.owner) sql.exec("INSERT OR IGNORE INTO row_owners(row_key,owner) VALUES(?,?)", h.rowKey, h.owner);
-          sql.exec("INSERT INTO streams(stream,seq) VALUES(?,1) ON CONFLICT(stream) DO UPDATE SET seq=seq+1", stream);
-          const seq = first<{ seq: number }>("SELECT seq FROM streams WHERE stream=?", stream)!.seq;
+          const seq = (streamSeq ?? first<{ seq: number }>("SELECT seq FROM streams WHERE stream=?", stream)?.seq ?? 0) + 1;
+          streamSeq = seq;
           sql.exec("INSERT INTO publications(publication_id,signature,seq,membership_seq) VALUES(?,?,?,?)", auth.publicationId, auth.signature, seq, auth.membership.seq);
-          if (h.runId) sql.exec("INSERT INTO stream_activity VALUES(?,?) ON CONFLICT(stream) DO UPDATE SET last_activity=excluded.last_activity", `run:${h.runId}`, Date.now());
+          if (h.runId) {
+            const runStream = `run:${h.runId}` as const;
+            const at = Date.now(), activity = runActivity.get(runStream);
+            if (activity) activity.latest = at;
+            else {
+              // A new retention job needs an activity row before the latest trigger runs.
+              saveRunActivity(runStream, at);
+              runActivity.set(runStream, { first: at, latest: at });
+            }
+          }
           sql.exec("INSERT INTO log(stream,seq,row_key,register_key,op,envelope) VALUES(?,?,?,?,?,?)", stream, seq, h.rowKey, h.registerKey ?? null, h.op, encoded);
           if (h.op === "delete") {
             sql.exec("INSERT INTO deleted(row_key,stream,seq,envelope) VALUES(?,?,?,?)", h.rowKey, stream, seq, encoded);
@@ -150,6 +181,13 @@ export function createHubStore(storage: DurableObjectStorage) {
           changed.push({ seq, envelope });
           return ack(seq);
         });
+        // Commit the high-water mark and consumed rate buckets with their records.
+        if (streamSeq !== undefined) sql.exec(`INSERT INTO streams(stream,seq) VALUES(?,?)
+          ON CONFLICT(stream) DO UPDATE SET seq=excluded.seq`, stream, streamSeq);
+        for (const [backend, rate] of pendingRates) saveWriteRate(backend, rate);
+        for (const [runStream, activity] of runActivity) {
+          if (activity.latest !== activity.first) saveRunActivity(runStream, activity.latest);
+        }
         // Fair-use accounting: newly accepted upserts only, one counter write
         // per publication. Idempotent re-ACKs, refusals and deletes are free.
         const accepted = changed.filter((record) => record.envelope.header.op === "upsert").length;
