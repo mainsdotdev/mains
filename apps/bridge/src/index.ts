@@ -9,6 +9,7 @@ import { BRIDGE_READS_PER_MINUTE, createHubStore } from "./store";
 import { handleBlobs, type BlobEnv } from "./blobs";
 import { createBlobQuota, BridgeQuotaError, type BlobReservation, type QuotaEnv } from "./quota";
 import { createBridgeSubscriptions } from "./subscriptions";
+import { listAdminQuotas, type AdminQuotaQuery } from "./admin-quota";
 import { signedInUser } from "./identity";
 import type { BridgeBlobIdentity } from "@mains/contracts/bridge-blobs";
 import { observeBridgeRequest, reportBridgeFailure } from "./observability";
@@ -146,6 +147,15 @@ export class BridgeOperations extends WorkerEntrypoint<Env> {
   }
 }
 
+/** Named, private binding for the quota dashboard. */
+export class BridgeQuotaAdmin extends WorkerEntrypoint<Env> {
+  list(query: AdminQuotaQuery) {
+    if (!this.env.AUTH_DB) throw new Error("Authentication database is not configured");
+    return listAdminQuotas(this.env.AUTH_DB, query, accountId =>
+      this.env.ACCOUNT_HUB.get(this.env.ACCOUNT_HUB.idFromName(accountId)).getAdminQuota(accountId));
+  }
+}
+
 /** Cloudflare requires a class at this runtime boundary; storage/domain helpers remain functions. */
 export class AccountHub extends DurableObject<Env> {
   private store: ReturnType<typeof createHubStore>;
@@ -230,6 +240,9 @@ export class AccountHub extends DurableObject<Env> {
   async subscriptionChanged(accountId: string) { this.subscriptions.invalidate(accountId); this.quota.invalidateLimits(accountId); }
   async recoveryCheckpoint() {
     return this.usage.run("checkpoint", () => this.ctx.blockConcurrencyWhile(async () => ({ bookmark: await this.ctx.storage.getCurrentBookmark(), capturedAt: new Date().toISOString() })));
+  }
+  getAdminQuota(accountId: string) {
+    return this.usage.run("quota", () => this.ctx.blockConcurrencyWhile(() => this.quota.readStatus(accountId)));
   }
   async getQuota(identity: BridgeIdentity) {
     return this.usage.run("quota", () => this.ctx.blockConcurrencyWhile(async () => {
