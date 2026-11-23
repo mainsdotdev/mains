@@ -157,6 +157,7 @@ public final class BackendSession {
     }
     public var supportsMates: Bool { connectedDescriptor?.capabilities.contains("assistants") == true }
     public var supportsMateInfo: Bool { supportsMates && connectedDescriptor?.capabilities.contains("mateInfo") == true }
+    var supportsMateAssignments: Bool { supportsMateInfo || (isDemo && supportsMates) }
     public var supportsMateModelEditing: Bool { supportsMateInfo && connectedDescriptor?.capabilities.contains("mateModelEditing") == true }
     public var supportsMatePinning: Bool { supportsMateInfo && connectedDescriptor?.capabilities.contains("matePinning") == true }
     public var supportsMobileGoalSummary: Bool { connectedDescriptor?.capabilities.contains("mobileGoalSummary") == true }
@@ -947,7 +948,8 @@ public final class BackendSession {
     }
 
     private func mateInfoRead<T: Decodable>(_ channel: String, mateID: String, selection: JSONValue? = nil, as type: T.Type) async throws -> T {
-        guard supportsMateInfo else { throw MainsError.server("Update Mains on your computer to use this Mate tab.") }
+        let supported = channel == "assistants:mobileAssignments" ? supportsMateAssignments : supportsMateInfo
+        guard supported else { throw MainsError.server("Update Mains on your computer to use this Mate tab.") }
         let args = [.string(mateID)] + (selection.map { [$0] } ?? [])
         return try await mateRead(channel, args: args).decode(type)
     }
@@ -1010,8 +1012,15 @@ public final class BackendSession {
         return routine
     }
 
+    func supportsMateChange(_ change: MateChange) -> Bool {
+        switch change {
+        case .assign, .cancelTask: supportsMateAssignments
+        default: supportsMateInfo
+        }
+    }
+
     public func manageMate(_ id: String, change: MateChange) async throws {
-        guard let accountID, let backendID = pairing?.descriptor.backendId, isConnected, supportsMateInfo else { throw MainsError.disconnected }
+        guard let accountID, let backendID = pairing?.descriptor.backendId, isConnected, supportsMateChange(change) else { throw MainsError.disconnected }
         let owner = pairingOwner, current = generation
         let recipientMateID: String?
         switch change {

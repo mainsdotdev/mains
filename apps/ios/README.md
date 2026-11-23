@@ -429,6 +429,9 @@ underlying tooling.
   **New Mate** lets you choose a name, avatar, and model, answer one setup
   question, and approve the profile before starting its first chat. Created
   Mates and their chats reset with the demo session.
+  In **Mate Details → Assignments**, **New Assignment** starts a simulated
+  task. Its status updates in place. When it completes, **Open Chat** leads to
+  the Markdown report. Assignments and their outputs stay in the demo session.
 - The shared home/conversation composer supports **+ → Plugins** and trailing
   **@**, **/** and **$** context triggers. The inline picker keeps the keyboard open,
   groups plugins, Mac apps, skills and commands, and filters by title/description.

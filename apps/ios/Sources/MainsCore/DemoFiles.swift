@@ -87,6 +87,29 @@ struct DemoFile: Sendable {
         Record any failed check before distributing the build.
         """.utf8), version: String(repeating: "3", count: 64))
 
+    static func assignmentReport(title: String, brief: String) -> DemoFile {
+        let excerpt = String(brief.unicodeScalars.prefix(480))
+        let bytes = Data("""
+        # Demo assignment report
+
+        **Assignment:** \(title)
+
+        ## Task brief
+
+        \(excerpt)
+
+        ## Sample handoff
+
+        - Confirm the expected deliverable and who will review it.
+        - Check the result against the completion criteria in the task brief.
+        - Record any follow-up before sharing the result.
+
+        This example was prepared on your iPhone in Demo Mode.
+        """.utf8)
+        let version = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        return DemoFile(name: "mate-assignment-report.md", mime: "text/markdown", preview: "markdown", bytes: bytes, version: version)
+    }
+
     static func launchBrief() throws -> DemoFile {
         let name = "iphone-launch-brief"
         guard let url = demoMediaBundle.url(forResource: name, withExtension: "pdf", subdirectory: "DemoMedia"),

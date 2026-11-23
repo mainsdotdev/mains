@@ -303,6 +303,48 @@ struct DemoTests {
         #expect(session.conversations.allSatisfy { $0.id != runID })
     }
 
+    @Test @MainActor func demoMateAssignmentsFinishAndPublishTheirOutputOffline() async throws {
+        let storage = MemoryStorage()
+        let session = BackendSession(storage: storage)
+        session.restore(); session.setOnline(false); session.setActive(true)
+        try session.startDemo()
+        defer { session.exitDemo() }
+        try await eventually { session.isConnected }
+
+        let mateID = DemoBackend.mateID
+        let title = "Review the release"
+        let brief = "Prepare an iPhone release handoff."
+        let assignment = MateChange.assign(title: title, prompt: brief)
+        let initial = try await session.loadMateTasks(mateID, offset: 0)
+        #expect(session.supportsMateAssignments && initial.items.isEmpty)
+        await #expect(throws: MateConsentRequired.self) { try await session.manageMate(mateID, change: assignment) }
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+        try await session.manageMate(mateID, change: assignment)
+
+        let list = try await session.loadMateTasks(mateID, offset: 0)
+        let task = try #require(list.items.first)
+        let runID = try #require(task.workerRunId)
+        #expect(list.activeCount == 1 && task.status == "running" && task.assignee?.id == mateID)
+        #expect(try await session.listOutputs(runID).items.isEmpty)
+        await session.selectConversation(runID)
+        try await eventually { session.conversations.first { $0.id == runID }?.status == "succeeded" }
+        let finished = try await session.readMateTask(task.id, mateID: mateID)
+        #expect(finished.status == "completed" && finished.brief == brief && finished.result != nil)
+        #expect(try await session.loadMateTasks(mateID, offset: 0).activeCount == 0)
+        let output = try #require(try await session.listOutputs(runID).items.first)
+        #expect(output.name == "mate-assignment-report.md")
+        #expect(try await session.downloadOutput(output) == DemoFile.assignmentReport(title: title, brief: brief).bytes)
+        await session.loadHistory(direction: "refresh")
+        #expect(session.transcript.rows.flatMap(\.media).contains { $0.source == .artifact(output.artifactId) })
+
+        try await session.manageMate(mateID, change: .assign(title: "Cancel this task", prompt: "Start a second handoff."))
+        let toCancel = try #require(try await session.loadMateTasks(mateID, offset: 0).items.first)
+        try await session.manageMate(mateID, change: .cancelTask(toCancel.id))
+        #expect(try await session.readMateTask(toCancel.id, mateID: mateID).status == "canceled")
+        #expect(try await session.listOutputs(try #require(toCancel.workerRunId)).items.isEmpty)
+        #expect(storage.pairing == nil && storage.snapshot == nil && storage.consents.isEmpty)
+    }
+
     @Test @MainActor func replayAcknowledgesStreamsAndDeduplicatesCommands() async throws {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let transport = DemoTransport(backend: backend)

@@ -46,6 +46,7 @@ struct MateInfoView: View {
         let owner: Int
         let connected: Bool
         let supportsMateInfo: Bool
+        let supportsMateAssignments: Bool
         let revision: Int
         let refresh: Int
     }
@@ -54,6 +55,7 @@ struct MateInfoView: View {
         let base: LoadRequest
         let tab: Tab
         let offset: Int
+        var supported: Bool { tab == .assignments ? base.supportsMateAssignments : base.supportsMateInfo }
     }
 
     private struct ScrollChrome: Equatable {
@@ -103,13 +105,13 @@ struct MateInfoView: View {
 
     private var request: LoadRequest {
         LoadRequest(owner: session.ownership, connected: session.isConnected, supportsMateInfo: session.supportsMateInfo,
+                    supportsMateAssignments: session.supportsMateAssignments,
                     revision: session.matesRevision, refresh: refresh)
     }
     private var paneRequest: PaneRequest { PaneRequest(base: request, tab: tab, offset: offset) }
 
-    private var canWrite: Bool {
-        session.isConnected && session.supportsMateInfo && !session.mateCommandPending && !submittingChange && consentRequest == nil
-    }
+    private var readyToWrite: Bool { session.isConnected && !session.mateCommandPending && !submittingChange && consentRequest == nil }
+    private var canWrite: Bool { readyToWrite && session.supportsMateInfo }
 
     private var navigationTitle: String {
         if session.isConnected, scrollChrome.pinned, let profile { return profile.mate.name }
@@ -299,7 +301,7 @@ struct MateInfoView: View {
         return ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 HStack(spacing: 8) {
-                    ForEach(session.isDemo ? [.details] : Tab.allCases) { item in
+                    ForEach(session.isDemo ? [.details, .assignments] : Tab.allCases) { item in
                         FilterChip(selected: item == tab, usesSharedHighlight: true, action: {
                             guard tab != item else { return }
                             tab = item
@@ -395,7 +397,7 @@ struct MateInfoView: View {
     }
 
     @ViewBuilder private func tabContent(_ mate: Mate) -> some View {
-        if !session.supportsMateInfo {
+        if !paneRequest.supported {
             MateInfoSection {
                 Label("Update Mains on your computer to use this tab.", systemImage: "arrow.down.circle")
                     .foregroundStyle(.secondary)
@@ -507,7 +509,10 @@ struct MateInfoView: View {
 
     @ViewBuilder private func taskRows(_ tasks: MateTasks, mate: Mate) -> some View {
         if mate.ready {
-            MateInfoSection { rowAction("New Assignment", systemImage: "plus") { sheet = .newAssignment }.disabled(!canWrite) }
+            MateInfoSection {
+                rowAction("New Assignment", systemImage: "plus") { sheet = .newAssignment }
+                    .disabled(!readyToWrite || !session.supportsMateAssignments)
+            }
         }
         MateInfoSection {
             if tasks.items.isEmpty { Text("No assignments yet").foregroundStyle(.secondary) }
@@ -631,7 +636,7 @@ struct MateInfoView: View {
     }
 
     private func loadPane(_ request: PaneRequest) async {
-        guard request.base.connected, request.base.supportsMateInfo else { return }
+        guard request.base.connected, request.supported else { return }
         do {
             let content: Pane
             switch request.tab {

@@ -2869,6 +2869,40 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Prepare the release"].waitForExistence(timeout: 10))
     }
 
+    func testDemoMateAssignmentCompletesAndOpensItsReport() throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        openSidebar(app); app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-demo-release-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 10)); mate.tap()
+        let info = app.buttons["openMateInfo"]
+        XCTAssertTrue(info.waitForExistence(timeout: 5)); info.tap()
+        let assignments = app.buttons["mateInfoTab-Assignments"]
+        XCTAssertTrue(assignments.waitForExistence(timeout: 5)); assignments.tap()
+
+        let create = app.buttons["New Assignment"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5)); create.tap()
+        let title = app.textFields["Title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5)); title.tap(); title.typeText("Review release handoff")
+        let brief = app.textViews["Task message"]
+        XCTAssertTrue(brief.exists); brief.tap(); brief.typeText("Prepare an iPhone release handoff.")
+        app.navigationBars["New Assignment"].buttons["Assign"].tap()
+        let consent = app.buttons["allowDataSharing"]
+        XCTAssertTrue(consent.waitForExistence(timeout: 5)); XCTAssertEqual(consent.label, "Continue Demo"); consent.tap()
+
+        let task = app.staticTexts["Review release handoff"]
+        XCTAssertTrue(task.waitForExistence(timeout: 10)); task.tap()
+        XCTAssertTrue(app.staticTexts["Status, Completed"].waitForExistence(timeout: 15))
+        let openChat = app.buttons["Open Chat"]
+        XCTAssertTrue(openChat.exists); openChat.tap()
+        let output = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+            "transcriptMedia-output:", "mate-assignment-report.md")).firstMatch
+        XCTAssertTrue(output.waitForExistence(timeout: 10)); output.tap()
+        XCTAssertTrue(app.staticTexts["Demo assignment report"].waitForExistence(timeout: 10))
+    }
+
     func testDemoApprovalAndQuestionCards() throws {
         continueAfterFailure = false
         let app = makeApplication()

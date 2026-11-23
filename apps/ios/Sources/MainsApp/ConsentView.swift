@@ -30,7 +30,7 @@ private struct MateConsentSheet: ViewModifier {
     func body(content: Content) -> some View {
         content.sheet(item: $request, onDismiss: finish) { pending in
             let requirement = pending.requirement
-            ConsentView(context: ConsentContext(backendID: requirement.backendID, providerID: requirement.providerID)) {
+            ConsentView(context: ConsentContext(backendID: requirement.backendID, providerID: requirement.providerID, isDemo: session.isDemo)) {
                 guard belongsToCurrentPairing(requirement) else { return }
                 session.grantConsent(providerID: requirement.providerID, backendID: requirement.backendID)
                 approved = pending

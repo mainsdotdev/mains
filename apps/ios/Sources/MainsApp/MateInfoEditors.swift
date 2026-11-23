@@ -91,7 +91,8 @@ private struct MateEditorForm<Content: View>: View {
     @State private var consentRequest: MateConsentRequest?
 
     private var canWrite: Bool {
-        editable && !submitting && consentRequest == nil && session.isConnected && session.supportsMateInfo && !session.mateCommandPending
+        let supported = (change ?? delete).map(session.supportsMateChange) ?? session.supportsMateInfo
+        return editable && !submitting && consentRequest == nil && session.isConnected && supported && !session.mateCommandPending
     }
 
     var body: some View {
@@ -557,7 +558,7 @@ struct MateTaskDetail: View {
     @State private var confirmCancel = false
     @State private var error: String?
 
-    private var canWrite: Bool { session.isConnected && session.supportsMateInfo && !session.mateCommandPending }
+    private var canWrite: Bool { session.isConnected && session.supportsMateAssignments && !session.mateCommandPending }
 
     var body: some View {
         List {
