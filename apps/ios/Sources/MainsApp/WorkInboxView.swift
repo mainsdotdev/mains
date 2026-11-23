@@ -40,7 +40,7 @@ struct WorkInboxView: View {
             .accessibilityIdentifier("workInboxList")
         }
         .toolbar(.visible, for: .navigationBar)
-        .refreshable { await session.refreshWorkInbox() }
+        .pullToRefresh { await session.refreshWorkInbox() }
     }
 
     private func inboxList(_ groups: WorkInboxGroups, now: Date, live: Bool, isLimited: Bool) -> some View {
@@ -63,7 +63,7 @@ struct WorkInboxView: View {
                 }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
             } else if session.workInboxLoading && !live && groups.isEmpty {
-                ContentLoadingView(title: "Checking your work…").listRow
+                ContentSkeleton(label: "Checking your work…").listRow
             }
 
             inboxSection("Needs you", items: groups.needsYou, kind: .waiting, now: now, live: live)
@@ -201,10 +201,8 @@ private struct WorkInboxRow: View {
                         catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
                     }
                 } label: {
-                    Group {
-                        if session.stoppingRunID == run.id { ProgressView().controlSize(.small) }
-                        else { Image(systemName: "stop.fill").font(.system(size: 10)) }
-                    }
+                    Image(systemName: "stop.fill").font(.system(size: 10))
+                    .opacity(session.stoppingRunID == run.id ? 0.5 : 1)
                     .frame(width: 36, height: 36).modifier(GlassSurface(radius: 18))
                     .frame(width: 44, height: 44).contentShape(.circle)
                 }

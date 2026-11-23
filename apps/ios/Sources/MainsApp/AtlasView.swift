@@ -167,7 +167,7 @@ struct AtlasView: View {
             }
         }
         .task(id: request) { await load(request) }
-        .refreshable { await load(loadKey) }
+        .pullToRefresh { await load(loadKey) }
         .onChange(of: filter) { _, _ in query.page = 1 }
         .fullScreenCover(item: $file) { AtlasFilePreview(session: session, selection: $0, openConversation: { id in file = nil; openConversation(id) }) }
         .sheet(item: $bookmark) { entry in
@@ -196,11 +196,11 @@ struct AtlasView: View {
             if !session.isConnected {
                 DisconnectedState(message: "Connect to your computer to browse Atlas.")
                     .frame(minHeight: emptyContentHeight).listRowInsets(EdgeInsets())
-            } else if loading, library == nil {
-                ContentLoadingView(title: "Loading Atlas…").listRow
+            } else if library == nil, error == nil {
+                librarySkeleton
             }
             if library == nil, session.pendingAtlasSave?.isUpdate == true, session.pendingAtlasSave?.status == .sending {
-                HStack(spacing: 12) { ProgressView(); Text("Updating item…").foregroundStyle(.secondary) }
+                Text("Updating item…").foregroundStyle(.secondary)
             }
             if session.isConnected, let error {
                 Group {
@@ -241,6 +241,30 @@ struct AtlasView: View {
         .listRowSeparator(.hidden)
     }
 
+    private var librarySkeleton: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SkeletonLine(width: 65, height: 16).padding(.leading, 4).padding(.top, 8)
+            ForEach([164, 132, 184, 148], id: \.self) { width in
+                libraryCard(
+                    HStack(spacing: 10) {
+                        RoundedRectangle(cornerRadius: 8).fill(SkeletonLine.fill)
+                            .frame(width: 36, height: 36)
+                        VStack(alignment: .leading, spacing: 6) {
+                            SkeletonLine(width: CGFloat(width), height: 12)
+                            SkeletonLine(width: 96, height: 8)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(minHeight: AppListStyle.minimumContentHeight)
+                )
+            }
+        }
+        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading Atlas…")
+        .accessibilityIdentifier("atlasLibrarySkeleton")
+    }
+
     private var emptyLibrary: some View {
         let category = AtlasCategory(rawValue: query.type) ?? .all
         let state = category.emptyState
@@ -262,10 +286,7 @@ struct AtlasView: View {
 
     private func itemCard(_ entry: AtlasEntry) -> some View {
         Button { open(entry) } label: {
-            AtlasEntryRow(session: session, entry: entry, project: session.collections.first { $0.id == entry.collectionId }?.name)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 24))
+            libraryCard(AtlasEntryRow(session: session, entry: entry, project: session.collections.first { $0.id == entry.collectionId }?.name))
         }
         .buttonStyle(.plain).accessibilityIdentifier("atlasItem-" + entry.key)
         .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
@@ -308,6 +329,13 @@ struct AtlasView: View {
             }
         }
     }
+
+    private func libraryCard(_ content: some View) -> some View {
+        content.padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 24))
+    }
+
     private var libraryFilters: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
@@ -600,13 +628,13 @@ struct AtlasPageView: View {
                     if let id = content.sourceRunId {
                         Button("Open chat with source", systemImage: "bubble.left") { openConversation(id) }
                     }
-                } else { ContentLoadingView(title: "Reading page…") }
+                } else { pageSkeleton }
               }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.bottom, 24)
             }.frame(maxWidth: .infinity, alignment: .leading)
           }
           .id(offset)
           .ignoresSafeArea(.container, edges: session.isConnected && content?.coverFileId != nil && error == nil ? .top : [])
-          .refreshable { refresh() }
+          .pullToRefresh { refresh() }
         }
         .coordinateSpace(.named(Self.titleViewport))
         .background(Color(.systemBackground))
@@ -639,7 +667,7 @@ struct AtlasPageView: View {
         .safeAreaInset(edge: .bottom) {
           VStack(spacing: 0) {
             if working || exporting {
-                HStack(spacing: 10) { ProgressView(); Text(exporting ? "Preparing Markdown…" : "Updating page…").font(.footnote).foregroundStyle(.secondary) }
+                Text(exporting ? "Preparing Markdown…" : "Updating page…").font(.footnote).foregroundStyle(.secondary)
                     .padding(12).frame(maxWidth: .infinity).background(.bar)
             }
             if !previous.isEmpty || content?.nextOffset != nil {
@@ -700,6 +728,25 @@ struct AtlasPageView: View {
             } catch { if !Task.isCancelled && owner == session.ownership { self.error = error.localizedDescription } }
         }
     }
+    private var pageSkeleton: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            SkeletonLine(width: 206, height: 26).padding(.top, 12).padding(.bottom, 4)
+            VStack(alignment: .leading, spacing: 10) {
+                SkeletonLine(width: 570, height: 11)
+                SkeletonLine(width: 466, height: 11)
+                SkeletonLine(width: 224, height: 11)
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                SkeletonLine(width: 548, height: 11)
+                SkeletonLine(width: 282, height: 11)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Reading page…")
+        .accessibilityIdentifier("atlasPageSkeleton")
+    }
+
     private func moveToProject() {
         guard canManage, let owner = pageOwner else { return }
         let ticket = UUID(); operation = ticket; working = true
@@ -822,7 +869,9 @@ private struct AtlasPageInlineImage: View {
                                 Image(systemName: "photo").font(.title2)
                                 Text("Tap to retry").font(.caption)
                             }.foregroundStyle(.secondary)
-                        } else { ProgressView() }
+                        } else {
+                            Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary).accessibilityHidden(true)
+                        }
                     }
                 }.clipShape(.rect(cornerRadius: 12))
             }
@@ -980,9 +1029,9 @@ private struct AtlasBookmarkView: View {
                     }.disabled(!editable).accessibilityIdentifier("trashAtlasBookmark")
                 }
                 if working {
-                    HStack(spacing: 12) { ProgressView(); Text("Updating bookmark…").foregroundStyle(.secondary) }
+                    Text("Updating bookmark…").foregroundStyle(.secondary)
                 } else if loading, current == nil {
-                    ContentLoadingView(title: "Loading bookmark…").listRow
+                    ContentSkeleton(label: "Loading bookmark…", layout: .fields).listRow
                 }
                 if let error {
                     Section {
@@ -1113,7 +1162,10 @@ struct AtlasFilePreview: View {
                     EmptyStateView(artwork: .documents, title: "Couldn’t open file", description: Text(error)) {
                         Button("Try again") { retry += 1 }
                     }.centered
-                } else { VStack(spacing: 16) { ProgressView(value: progress).frame(maxWidth: 180); Text("Opening file…").foregroundStyle(.secondary) } }
+                } else {
+                    MediaSkeleton(symbol: "doc")
+                        .accessibilityLabel("Opening file").accessibilityValue(progress.formatted(.percent))
+                }
             }
         }
         .environment(\.openURL, OpenURLAction { url in ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded })

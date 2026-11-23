@@ -105,13 +105,15 @@ private struct ContextPickerPanel: View {
                 Text(request.pluginsOnly ? "Plugins" : request.query.isEmpty ? "Add context" : "Matching “\(request.query)”")
                     .font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
-                if loading { ProgressView().controlSize(.small).accessibilityLabel("Loading context") }
                 Button(action: request.close) { Image(systemName: "xmark").frame(width: 40, height: 44) }
                     .accessibilityLabel("Close context picker").accessibilityIdentifier("closeContextPicker")
             }.padding(.leading, 16).padding(.trailing, 4)
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    if loading && skills.isEmpty && commands.isEmpty {
+                        ContentSkeleton(label: "Loading context…", count: 1)
+                    }
                     if let error = catalogue.error {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(error).font(.footnote).foregroundStyle(Color(uiColor: .secondaryLabel)).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("contextError")

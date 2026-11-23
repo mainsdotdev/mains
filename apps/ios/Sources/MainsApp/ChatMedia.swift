@@ -146,7 +146,9 @@ private struct ChatImageTile: View {
                         Text(media.name).lineLimit(1)
                         Text(media.available ? "Tap to retry" : "Preview unavailable").font(.caption2)
                     }.font(.caption).foregroundStyle(.secondary).padding(12)
-                } else { ProgressView() }
+                } else {
+                    Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary).accessibilityHidden(true)
+                }
               }
             }
             .clipShape(.rect(cornerRadius: 18))
@@ -189,7 +191,7 @@ struct FullScreenFileImage: View {
         Group {
             if let image { ZoomableFileImage(image: image) }
             else if unsupported { OutputQuickLook(url: url) }
-            else { ProgressView().tint(.white) }
+            else { MediaSkeleton().environment(\.colorScheme, .dark) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).ignoresSafeArea(.container)
         .accessibilityLabel(url.lastPathComponent)

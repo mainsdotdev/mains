@@ -120,14 +120,12 @@ struct MateInfoView: View {
         Group {
             if !session.isConnected {
                 DisconnectedState(message: "Connect to your computer to see this Mate’s details.").centered
-            } else if let profile {
-                info(profile)
-            } else if let profileError {
+            } else if profile == nil, let profileError {
                 EmptyStateView(artwork: .mates, title: "Mate details unavailable", description: Text(profileError)) {
                     Button("Try Again") { refresh += 1 }
                 }.centered
             } else {
-                ContentLoadingView(title: Tab.details.loadingTitle)
+                info(profile)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -165,8 +163,8 @@ struct MateInfoView: View {
         .mateConsentSheet($consentRequest, session: session, resume: perform)
     }
 
-    private func info(_ profile: MateInfoProfile) -> some View {
-        let mate = profile.mate
+    private func info(_ profile: MateInfoProfile?) -> some View {
+        let mate = profile?.mate
         let background = Color(.systemGroupedBackground)
         return GeometryReader { viewport in
             ScrollView {
@@ -178,6 +176,7 @@ struct MateInfoView: View {
                             .frame(minHeight: max(0, viewport.size.height - tabHeight), alignment: .top)
                     } header: {
                         tabStrip
+                            .disabled(profile == nil)
                             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { tabHeight = $0 }
                             .background(background)
                             .overlay(alignment: .bottom) {
@@ -204,12 +203,12 @@ struct MateInfoView: View {
                 if scrollChrome.pinned { scrollPosition.scrollTo(y: profileHeight) }
             }
             .navigationHeaderFade(background: background, height: scrollChrome.navigationFadeHeight)
-            .refreshable { refresh += 1 }
+            .pullToRefresh { refresh += 1 }
         }
-        .alert("Archive \(mate.name)?", isPresented: $confirmArchive) {
+        .alert("Archive \(mate?.name ?? "Mate")?", isPresented: $confirmArchive) {
             Button("Cancel", role: .cancel) {}
             Button("Archive", role: .destructive) {
-                if canWrite, mate.isArchived != true { perform(.archive(true)) }
+                if canWrite, let mate, mate.isArchived != true { perform(.archive(true)) }
             }
         } message: {
             Text("This pauses the Mate’s future routines.")
@@ -223,9 +222,9 @@ struct MateInfoView: View {
         }
     }
 
-    private func paneContent(_ profile: MateInfoProfile) -> some View {
+    private func paneContent(_ profile: MateInfoProfile?) -> some View {
         LazyVStack(alignment: .leading, spacing: 24) {
-            if session.mateCommandUncertain || actionError != nil {
+            if profile != nil, session.mateCommandUncertain || actionError != nil {
                 MateInfoSection {
                     if session.mateCommandUncertain {
                         rowAction("Check Mate change", systemImage: "arrow.clockwise") { Task { await checkChange() } }
@@ -233,8 +232,12 @@ struct MateInfoView: View {
                     if let actionError { Text(actionError).foregroundStyle(.secondary) }
                 }
             }
-            if tab == .details { details(profile) }
-            else { tabContent(profile.mate) }
+            if let profile {
+                if tab == .details { details(profile) }
+                else { tabContent(profile.mate) }
+            } else {
+                detailsSkeleton
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
@@ -250,21 +253,29 @@ struct MateInfoView: View {
         .buttonStyle(.plain)
     }
 
-    private func header(_ mate: Mate) -> some View {
+    private func header(_ mate: Mate?) -> some View {
         let compact = verticalSizeClass == .compact || typeSize.isAccessibilitySize
         let layout = compact ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(spacing: 6))
         return layout {
-            headerAvatar(mate)
-                .frame(width: compact ? 48 : 106, height: compact ? 48 : 106)
-                .accessibilityHidden(true)
+            Group {
+                if let mate { headerAvatar(mate) }
+                else { Circle().fill(skeletonFill) }
+            }
+            .frame(width: compact ? 48 : 106, height: compact ? 48 : 106)
+            .accessibilityHidden(true)
             VStack(alignment: compact ? .leading : .center, spacing: 6) {
-                Text(mate.name)
-                    .font((compact ? Font.headline : .title2).weight(.semibold).width(.expanded))
-                    .lineLimit(2)
-                    .accessibilityAddTraits(.isHeader)
-                    .accessibilityIdentifier("mateInfoName")
-                if !mate.description.isEmpty {
-                    Text(mate.description).font(.subheadline).foregroundStyle(.secondary).lineLimit(compact ? 1 : 3)
+                if let mate {
+                    Text(mate.name)
+                        .font((compact ? Font.headline : .title2).weight(.semibold).width(.expanded))
+                        .lineLimit(2)
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityIdentifier("mateInfoName")
+                    if !mate.description.isEmpty {
+                        Text(mate.description).font(.subheadline).foregroundStyle(.secondary).lineLimit(compact ? 1 : 3)
+                    }
+                } else {
+                    skeletonLine(width: 148, height: compact ? 14 : 18).padding(.vertical, 4)
+                    skeletonLine(width: 208, height: 10).padding(.vertical, 3)
                 }
             }
             .multilineTextAlignment(compact ? .leading : .center)
@@ -401,7 +412,80 @@ struct MateInfoView: View {
             case .routines(let routines): routineRows(routines, mate: mate)
             }
         } else {
-            ContentLoadingView(title: tab.loadingTitle).id(paneRequest)
+            tabSkeleton(mate).id(paneRequest)
+        }
+    }
+
+    private var skeletonFill: Color { SkeletonLine.fill }
+
+    private func skeletonLine(width: CGFloat, height: CGFloat) -> some View {
+        SkeletonLine(width: width, height: height)
+    }
+
+    private func skeleton<Content: View>(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 24, content: content)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(title))
+            .accessibilityIdentifier("mateInfoSkeleton")
+    }
+
+    private var detailsSkeleton: some View {
+        skeleton(Tab.details.loadingTitle) {
+            MateInfoSection {
+                ForEach(0..<4) { _ in
+                    HStack {
+                        skeletonLine(width: 56, height: 12)
+                        Spacer(minLength: 12)
+                        skeletonLine(width: 94, height: 12)
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                skeletonLine(width: 82, height: 10).padding(.horizontal, 20)
+                MateInfoSection {
+                    VStack(alignment: .leading, spacing: 8) {
+                        skeletonLine(width: 232, height: 10)
+                        skeletonLine(width: 166, height: 10)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    private func tabSkeleton(_ mate: Mate) -> some View {
+        skeleton(tab.loadingTitle) {
+            if mate.ready {
+                MateInfoSection {
+                    HStack(spacing: 8) {
+                        Circle().fill(skeletonFill).frame(width: 14, height: 14)
+                        skeletonLine(width: 102, height: 12)
+                    }
+                }
+            }
+            MateInfoSection {
+                ForEach(0..<2) { index in
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .top, spacing: 12) {
+                            Circle().fill(skeletonFill)
+                                .frame(width: 18, height: 18).frame(width: 22).padding(.top, 3)
+                            VStack(alignment: .leading, spacing: 7) {
+                                skeletonLine(width: index == 0 ? 146 : 126, height: 12)
+                                skeletonLine(width: 104, height: 9)
+                                skeletonLine(width: index == 0 ? 202 : 178, height: 10)
+                            }
+                            .padding(.trailing, 16)
+                        }
+                        if tab == .routines {
+                            skeletonLine(width: 72, height: 9)
+                            skeletonLine(width: 116, height: 9)
+                        }
+                    }
+                    .padding(.vertical, tab == .routines ? 8 : 4)
+                }
+            }
         }
     }
 

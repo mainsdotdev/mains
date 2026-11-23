@@ -616,7 +616,7 @@ label:has(:checked) > .onboarding-radio::after {
   top: 50%;
   right: 80px;
   transform: translateY(-50%);
-  padding: 5px 7px;
+  padding: 5px 10px;
   color: var(--onboarding-muted);
   font-size: 10px;
   transition-property: box-shadow;
@@ -656,7 +656,7 @@ label:has(:checked) > .onboarding-radio::after {
   gap: 8px;
   width: 100%;
   padding: 10px 12px;
-  border-radius: 9px;
+  border-radius: 16px;
   background: var(--onboarding-surface);
 }
 .onboarding-command code {

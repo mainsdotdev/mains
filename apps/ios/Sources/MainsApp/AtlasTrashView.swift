@@ -44,7 +44,7 @@ struct AtlasTrashView: View {
             }
             .safeAreaInset(edge: .top) { AtlasSaveDeliveryNotice(session: session) }
             .task(id: key) { await load() }
-            .refreshable { await load() }
+            .pullToRefresh { await load() }
             .accessibilityIdentifier("atlasTrash")
             .alert("Couldn’t restore item", isPresented: Binding(get: { restoreError != nil }, set: { if !$0 { restoreError = nil } })) { Button("OK", role: .cancel) {} } message: { Text(restoreError ?? "") }
         }
@@ -58,7 +58,7 @@ struct AtlasTrashView: View {
                 DisconnectedState(message: "Connect to your computer to see what’s in Trash.")
                     .listRowBackground(Color.clear).listRowSeparator(.hidden)
             } else if loading {
-                ContentLoadingView(title: "Loading Trash…").listRow
+                ContentSkeleton(label: "Loading Trash…").listRow
             }
             if session.isConnected, let error {
                 Text(error).foregroundStyle(.secondary)
@@ -81,13 +81,12 @@ struct AtlasTrashView: View {
                                     .accessibilityLabel([trashedAt.map { "Trashed on " + $0.formatted(date: .abbreviated, time: .shortened) }, project].compactMap { $0 }.joined(separator: ", "))
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                        if restoring == item.id { ProgressView().frame(minWidth: 44, minHeight: 44) }
-                        else {
-                            Button("Restore", systemImage: "arrow.uturn.backward") { restore(item) }
-                                .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
-                                .accessibilityLabel("Restore " + item.title).accessibilityIdentifier("atlasRestore-" + item.id)
-                                .disabled(!session.canSaveToAtlas || owner != session.ownership)
-                        }
+                        Button("Restore", systemImage: "arrow.uturn.backward") { restore(item) }
+                            .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
+                            .opacity(restoring == item.id ? 0.5 : 1)
+                            .accessibilityLabel("Restore " + item.title).accessibilityIdentifier("atlasRestore-" + item.id)
+                            .accessibilityValue(restoring == item.id ? "Restoring" : "")
+                            .disabled(!session.canSaveToAtlas || owner != session.ownership || restoring != nil)
                     }.frame(minHeight: AppListStyle.minimumContentHeight)
                         .listRowInsets(AppListStyle.rowInsets)
                         .accessibilityIdentifier("atlasTrashItem-" + item.id)

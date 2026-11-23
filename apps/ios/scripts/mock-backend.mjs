@@ -59,8 +59,11 @@ const fixtureRoutine = { id: 'fixture-info-routine', title: 'Morning release che
 let acceptsConnections = true;
 let holdSnapshot = 0;
 let atlasLibraryDelayMs = 0;
+let atlasPageDelayMs = 0;
+let chatHistoryDelayMs = 0;
 let atlasLibraryEmpty = false;
 let mateDetailsDelayMs = 0;
+let mateHistoryDelayMs = 0;
 let mateDirectoryDelayMs = 0;
 let mateRoutinesDelayMs = 0;
 let mateArchived = false;
@@ -81,7 +84,8 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
   for (const timer of timers) clearTimeout(timer);
   timers.clear(); replies.clear(); acceptsConnections = true;
   holdSnapshot = 0; atlasLibraryDelayMs = 0; atlasLibraryEmpty = false;
-  mateDetailsDelayMs = 0; mateDirectoryDelayMs = 0; mateRoutinesDelayMs = 0;
+  atlasPageDelayMs = 0; chatHistoryDelayMs = 0;
+  mateDetailsDelayMs = 0; mateHistoryDelayMs = 0; mateDirectoryDelayMs = 0; mateRoutinesDelayMs = 0;
   contextDelayMs = 0; contextInvalidRows = false;
   mateArchived = false;
   forkBehavior = null;
@@ -427,6 +431,13 @@ const server = http.createServer(async (request, response) => {
     atlasLibraryDelayMs = Math.min(15000, Math.max(0, Number(body.durationMs ?? 0)));
     response.end('{}'); return;
   }
+  if (request.method === 'POST' && request.url === '/test/delay-content') {
+    const { historyMs = 0, libraryMs = 0, pageMs = 0 } = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    chatHistoryDelayMs = Math.min(15000, Math.max(0, Number(historyMs)));
+    atlasLibraryDelayMs = Math.min(15000, Math.max(0, Number(libraryMs)));
+    atlasPageDelayMs = Math.min(15000, Math.max(0, Number(pageMs)));
+    response.end('{}'); return;
+  }
   if (request.method === 'POST' && request.url === '/test/empty-atlas-library') {
     atlasLibraryEmpty = true;
     response.end('{}'); return;
@@ -434,6 +445,7 @@ const server = http.createServer(async (request, response) => {
   if (request.method === 'POST' && request.url === '/test/hold-mate-details') {
     const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
     mateDetailsDelayMs = Math.min(15000, Math.max(0, Number(body.durationMs ?? 5000)));
+    mateHistoryDelayMs = Math.min(15000, Math.max(0, Number(body.historyMs ?? 0)));
     response.end('{}'); return;
   }
   if (request.method === 'POST' && request.url === '/test/hold-mate-loads') {
@@ -451,7 +463,7 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method === 'POST' && request.url === '/pair') {
     const body = JSON.parse(Buffer.concat(parts).toString());
-    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-reply-interrupted', 'ios-test-goal-controls'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
+    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-mate-voice', 'ios-test-reply-interrupted', 'ios-test-goal-controls'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
       response.writeHead(403); response.end(JSON.stringify({ error: 'Invalid pairing code' })); return;
     }
     const paging = body.code.startsWith('ios-test-paging');
@@ -465,6 +477,10 @@ const server = http.createServer(async (request, response) => {
     if (body.code === 'ios-test-mate-scroll') descriptor.backendId = 'ios-fixture-mate-scroll';
     if (body.code === 'ios-test-mate-team') descriptor.capabilities.push('mateTeamCreation');
     if (body.code === 'ios-test-mate-consent') descriptor.backendId = `ios-fixture-mate-consent-${randomUUID()}`;
+    if (body.code === 'ios-test-mate-voice') {
+      descriptor.backendId = `ios-fixture-mate-voice-${randomUUID()}`;
+      descriptor.capabilities.push('mateRealtimeConversation');
+    }
     if (body.code === 'ios-test-mate-info') {
       const source = runs[0], id = 'fixture-retired-mate-chat';
       runs.push({ ...source, id, mode: 'work', title: 'Archived release check', assistantId: 'fixture-retired-mate' });
@@ -856,7 +872,8 @@ wss.on('connection', socket => {
           // Claude's SDK projection retains optional keys whose values are undefined.
           // The real wire codec tags those values rather than dropping the keys.
           result = args[0] === 'claude_code' ? modelList.map(model => ({
-            ...model, description: model.description, isDefault: model.isDefault,
+            ...model, description: model.id === 'fixture-deep' ? 'Deep Thinker 5.2 · For complex problems' : model.description,
+            isDefault: model.isDefault,
             supportsFastMode: model.supportsFastMode, supportedEffortLevels: model.supportedEffortLevels,
             serviceTiers: model.serviceTiers,
           })) : modelList.map(model => args[0] === 'codex' && model.supportsFastMode ? {
@@ -1129,7 +1146,12 @@ wss.on('connection', socket => {
         case 'test:refuse': throw new Error('Explicit refusal');
         default: throw new Error(`Unsupported fixture channel: ${channel}`);
       }
-      send(socket, { kind: 'response', id, result: { success: true, data: result } });
+      const reply = { kind: 'response', id, result: { success: true, data: result } };
+      const delay = channel === CHANNELS.runs.getHistory
+        ? args[0].runId.startsWith('fixture-mate-chat-') ? mateHistoryDelayMs : chatHistoryDelayMs
+        : channel === CHANNELS.atlas.readMobilePage ? atlasPageDelayMs : 0;
+      if (delay) later(delay, () => send(socket, reply));
+      else send(socket, reply);
     } catch (error) { send(socket, { kind: 'response', id, result: { success: false, error: error.message } }); }
   });
 });

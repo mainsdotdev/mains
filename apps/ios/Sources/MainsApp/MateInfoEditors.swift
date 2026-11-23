@@ -26,8 +26,8 @@ struct MateRecordView<Record, Content: View>: View {
                                 Button("Try Again") { retry += 1 }
                             }.centered
                         } else {
-                            ContentLoadingView(title: "Loading \(title)…")
-                                .frame(maxHeight: .infinity)
+                            ContentSkeleton(label: "Loading \(title)…", layout: .fields)
+                                .frame(maxHeight: .infinity, alignment: .top)
                         }
                     }
                     .expandedNavigationTitle(title)
@@ -284,7 +284,6 @@ struct MateTeamEditor: View {
                     .disabled(sending || checking)
                     .accessibilityIdentifier("mateTeamName")
                 if let error { Text(error).foregroundStyle(.secondary) }
-                if sending { ProgressView() }
             }
             .defaultFocus($enteringName, true)
             .expandedNavigationTitle("New Team")

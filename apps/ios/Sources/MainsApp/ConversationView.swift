@@ -24,6 +24,7 @@ struct ConversationView: View {
         let mateID: String?
         let revision: Int
         let canLoad: Bool
+        let retry: Int
     }
     private struct GoalRequest: Equatable {
         let owner: Int
@@ -59,6 +60,8 @@ struct ConversationView: View {
     @State private var outputSelection: ConversationOutputSelection?
     @State private var outputsSheet = false
     @State private var loadedMate: (owner: Int, profile: MateInfoProfile)?
+    @State private var mateLoadFailure: (request: MateHeaderRequest, message: String)?
+    @State private var mateLoadRetry = 0
     @State private var updatingArchivedMate = false
     @State private var restoredMateNeedsRefresh = false
     @State private var archivedMateError: String?
@@ -94,28 +97,43 @@ struct ConversationView: View {
     private var mateID: String? { run?.assistantId ?? mateSource?.mateID }
     private var mateHeaderRequest: MateHeaderRequest {
         MateHeaderRequest(owner: session.ownership, mateID: mateID, revision: session.matesRevision,
-                          canLoad: session.isConnected && session.supportsMates)
+                          canLoad: session.isConnected && session.supportsMates, retry: mateLoadRetry)
     }
     private var mateProfile: MateInfoProfile? {
         guard let loadedMate, loadedMate.owner == session.ownership, loadedMate.profile.mate.id == mateID else { return nil }
         return loadedMate.profile
     }
     private var conversationMate: Mate? { mateProfile?.mate }
+    private var composerMate: Mate? {
+        #if MAINS_GPT_LIVE
+        return conversationMate ?? (ownsVoice ? session.voiceMate : nil)
+        #else
+        return conversationMate
+        #endif
+    }
     private var archivedMate: Bool { conversationMate?.isArchived == true }
     private var canRestoreMateHere: Bool {
         guard let run, let conversationMate else { return false }
         return session.supportsMateInfo && run.assistantId == conversationMate.id && run.isReplica != true
     }
-    private var showsMateHeader: Bool { (mateID != nil || mateSource != nil) && !focusedVoice && !showsConnectionPill }
+    private var isMateConversation: Bool { mateID != nil || mateSource != nil }
+    private var hasLoadedHistory: Bool { run != nil && session.viewingRunID == runID && session.transcript.page != nil }
+    private var waitsForMateConversation: Bool {
+        guard isMateConversation, !focusedVoice else { return false }
+        return !hasLoadedHistory || (mateID != nil && mateProfile == nil)
+    }
+    private var usesMateHeader: Bool { isMateConversation && !focusedVoice && !showsConnectionPill }
+    private var showsMateHeader: Bool { usesMateHeader && !waitsForMateConversation }
     private var navigationTitle: String {
-        if focusedVoice || showsConnectionPill { return "" }
+        if focusedVoice || showsConnectionPill || waitsForMateConversation { return "" }
         if showsMateHeader { return conversationMate?.name ?? "" }
         return run?.displayTitle ?? "Conversation"
     }
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
     private var composerContext: ComposerContext? {
-        if let run { return ComposerContext(run: run) }
+        if let run { return ComposerContext(run: run, mateName: conversationMate?.name) }
         #if MAINS_GPT_LIVE
+        if ownsVoice, let mate = composerMate { return ComposerContext(mate: mate, runID: runID) }
         if ownsVoice, let space = session.spaces.first(where: { $0.id == session.voiceSpaceID }) {
             return ComposerContext(space: space, runID: runID)
         }
@@ -270,7 +288,7 @@ struct ConversationView: View {
             rightToLeft: layoutDirection == .rightToLeft, state: companion, divisions: divisions)
         let action = companion.outputsAction(twoReaders: twoReaders)
         let displayedOutputID = outputSelection?.id
-        return ConversationWorkspace(plan: plan, extendsConversationUnderHeader: showsMateHeader) {
+        return ConversationWorkspace(plan: plan, extendsConversationUnderHeader: !focusedVoice) {
             conversationContent.simultaneousGesture(TapGesture().onEnded {
                 if outputSelection?.id == displayedOutputID { companion.focusConversation() }
             })
@@ -284,8 +302,9 @@ struct ConversationView: View {
         .background(Color(.systemBackground))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(navigationTitle)
-        .toolbarRole(showsMateHeader ? .navigationStack : .editor)
+        .toolbarRole(usesMateHeader ? .navigationStack : .editor)
         .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .task(id: historyEntry) {
             owner = session.ownership
             if initialCursor != nil, initializedHistoryEntry != historyEntry {
@@ -309,7 +328,7 @@ struct ConversationView: View {
         .task(id: "\(run?.providerId ?? ""):\(session.isConnected)") {
             if let run { await session.loadModels(run.providerId, force: true) }
         }
-        .task(id: mateHeaderRequest) { try? await loadConversationMate(mateHeaderRequest) }
+        .task(id: mateHeaderRequest) { await refreshConversationMate(mateHeaderRequest) }
         .task(id: goalRequest) {
             let request = goalRequest
             guard request.canRead else { goalSummary = nil; return }
@@ -376,6 +395,15 @@ struct ConversationView: View {
 
     private func adaptCompanion(twoReaders: Bool) { if !focusedVoice { companion.adapt(expanded: twoReaders, hasOutputs: hasOutputs) } }
 
+    private func refreshConversationMate(_ request: MateHeaderRequest) async {
+        guard request.canLoad, request.mateID != nil else { return }
+        do { try await loadConversationMate(request) }
+        catch {
+            guard !Task.isCancelled, request == mateHeaderRequest else { return }
+            mateLoadFailure = (request, error.localizedDescription)
+        }
+    }
+
     private func loadConversationMate(_ request: MateHeaderRequest) async throws {
         guard request.canLoad, let id = request.mateID else { throw MainsError.disconnected }
         let directory = try await session.loadMates(mateID: id)
@@ -383,6 +411,7 @@ struct ConversationView: View {
         guard request == mateHeaderRequest else { throw MainsError.changedBackend }
         guard let mate = directory.mates.first(where: { $0.id == id }) else { throw MainsError.invalidReply }
         loadedMate = (request.owner, MateInfoProfile(mate: mate, teams: directory.teams))
+        mateLoadFailure = nil
     }
 
     private func performOutputsAction(_ action: ConversationCompanionState.OutputsAction) {
@@ -395,14 +424,49 @@ struct ConversationView: View {
         }
     }
 
-    private var conversationContent: some View {
+    @ViewBuilder private var conversationContent: some View {
+        if waitsForMateConversation {
+            #if MAINS_GPT_LIVE
+            mateConversationLoading
+                .safeAreaInset(edge: .bottom, spacing: 0) { if ownsVoice { composerArea } }
+                .environment(\.mateChatTint, composerMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
+            #else
+            mateConversationLoading
+            #endif
+        }
+        else { conversationReader }
+    }
+
+    @ViewBuilder private var mateConversationLoading: some View {
+        if !session.isConnected {
+            DisconnectedState(message: "Connect to your computer to open this Mate chat.").centered
+        } else if session.viewingRunID == runID, !hasLoadedHistory, let error = session.historyError {
+            EmptyStateView(artwork: .chats, title: "Messages couldn't load", description: Text(error)) {
+                Button("Retry") { Task { await session.loadHistory(direction: session.historyRetryDirection) } }
+                    .disabled(session.historyLoading)
+            }.centered
+        } else if mateID != nil, mateProfile == nil, !session.supportsMates {
+            EmptyStateView(artwork: .mates, title: "Mate chat unavailable",
+                           description: Text("Update Mains on your computer to open this Mate chat.")).centered
+        } else if mateProfile == nil, let failure = mateLoadFailure, failure.request == mateHeaderRequest {
+            EmptyStateView(artwork: .mates, title: "Mate chat couldn't load", description: Text(failure.message)) {
+                Button("Try Again") { mateLoadRetry += 1 }
+            }.centered
+        } else {
+            ConversationSkeleton(isMate: true)
+                .padding(.horizontal, 16).padding(.top, 56)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .accessibilityIdentifier("mateConversationLoading")
+        }
+    }
+
+    private var conversationReader: some View {
         ZStack {
             ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", scroll: scroll, openFile: { turn, file in
                 selectedFile = TurnFileSelection(runID: runID, turnID: turn.id, file: file, owner: session.ownership)
             }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor, mate: conversationMate) {
                 content = ContentReference(id: $0)
             }
-            .navigationHeaderFade()
             .safeAreaPadding(.top, showsMateHeader ? archivedMate ? 46 : 32 : 0)
             .opacity(focusedVoice ? 0 : 1)
             .allowsHitTesting(!focusedVoice)
@@ -417,14 +481,14 @@ struct ConversationView: View {
         }
         .background(Color(.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
-        .environment(\.mateChatTint, conversationMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
+        .environment(\.mateChatTint, composerMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
         .environment(\.solidChatNotices, true)
         .composerPickers(model: $modelSheet, options: $optionsSheet, session: session,
                          context: run.map { ComposerContext(run: $0) }, withinPane: true)
     }
 
     @ToolbarContentBuilder private var standardConversationTitle: some ToolbarContent {
-        if !showsConnectionPill && !showsMateHeader && !session.isDemo && !focusedVoice {
+        if !showsConnectionPill && !usesMateHeader && !session.isDemo && !focusedVoice {
             ToolbarItem(placement: .title) {
                 Text(navigationTitle).font(Font.headline.width(.expanded)).lineLimit(1)
             }
@@ -432,7 +496,7 @@ struct ConversationView: View {
     }
 
     @ToolbarContentBuilder private func conversationToolbar(outputsAction: ConversationCompanionState.OutputsAction) -> some ToolbarContent {
-            let hasOutputAction = (hasOutputs || companion.isOpen) && !focusedVoice
+            let hasOutputAction = (hasOutputs || companion.isOpen) && !focusedVoice && !waitsForMateConversation
             let outputsInMenu = showsMateHeader && horizontalSizeClass != .regular
             if showsConnectionPill {
                 ToolbarItem(placement: .principal) {
@@ -457,7 +521,7 @@ struct ConversationView: View {
                 if hasOutputAction && !outputsInMenu {
                     outputsButton(outputsAction)
                 }
-                if !focusedVoice {
+                if !focusedVoice && !waitsForMateConversation {
                     if !archivedMate {
                         Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
                     }
@@ -791,7 +855,7 @@ struct MateConversationTitle: View {
                             if archived { ArchivedMateBadge().accessibilityHidden(true) }
                         }
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18))
+                        .modifier(GlassSurface(radius: 18, interactive: openInfo != nil))
                     }
                     .contentShape(.rect)
                     .frame(width: compact ? 192 : 240)

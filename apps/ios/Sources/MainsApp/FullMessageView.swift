@@ -21,7 +21,7 @@ struct FullMessageView: View {
                 else { Text(text).font(.system(.callout, design: .monospaced)).textSelection(.enabled) }
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
         }
-            .overlay { if loading && text.isEmpty { ContentLoadingView(title: "Loading message…") } }
+            .overlay(alignment: .top) { if loading && text.isEmpty { ContentSkeleton(label: "Loading message…", layout: .text, count: 6) } }
             .safeAreaInset(edge: .bottom) {
                 VStack {
                     if let error { Text(error).font(.caption).foregroundStyle(.red) }

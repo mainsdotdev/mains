@@ -36,6 +36,28 @@ import Testing
     #expect(settings.model == "copilot/raw-haiku")
     #expect(Set(groups.flatMap(\.models).map(\.id)) == Set(models.map(\.id)))
 }
+
+@Test func claudeModelLabelsMatchDesktopCatalogueFormats() throws {
+    let cases: [(String, String, String?, String)] = [
+        ("fable", "Fable", "Fable 5.2 · Best for complex work", "Fable 5.2"),
+        ("sonnet", "Claude Sonnet", "Claude Sonnet 5.5 · Best for everyday work", "Claude Sonnet 5.5"),
+        ("opus[1m]", "Opus", "Opus 5.5 with 1M context", "Opus 5.5 [1M]"),
+        ("opus", "Opus 5.5", "Most capable · Ambitious work", "Opus 5.5"),
+        ("sonnet", "Sonnet", "SonnetPlus 5.5 · A different model", "Sonnet"),
+        ("haiku", "Haiku", nil, "Haiku"),
+    ]
+    for (id, displayName, description, label) in cases {
+        let model = try JSONValue.object([
+            "id": .string(id), "displayName": .string(displayName), "description": description.map(JSONValue.string) ?? .null,
+        ]).decode(ModelChoice.self)
+        #expect(model.label(for: "claude_code") == label)
+        #expect(model.label(for: "codex") == displayName)
+        var settings = ComposerSettings()
+        settings.select(model, provider: "claude_code")
+        #expect(settings.model == id)
+    }
+}
+
 @Test func pairingLinkPreservesEncodedEndpointsAndAcceptsVariants() throws {
     for scheme in ["mains", "mains-dev", "mains-preview", "mains-native"] {
         let link = try PairingLink("\(scheme)://pair#code=a%2Bb&name=Work+Mac&endpoint=http%3A%2F%2F192.168.1.2%3A8787&endpoint=https%3A%2F%2Fmac.example.com&endpoint=javascript%3Abad")

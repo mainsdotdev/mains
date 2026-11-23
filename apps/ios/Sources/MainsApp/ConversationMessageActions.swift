@@ -60,10 +60,8 @@ struct ConversationMessageActions: View {
             }
             if let forkRunID {
                 Button(action: fork) {
-                    Group {
-                        if session.pendingFork?.sourceRunID == forkRunID, session.pendingFork?.status == .sending { ProgressView().controlSize(.mini) }
-                        else { ConversationActionIcons.fork.resizable() }
-                    }.frame(width: 16, height: 16)
+                    ConversationActionIcons.fork.resizable().frame(width: 16, height: 16)
+                        .opacity(session.pendingFork?.sourceRunID == forkRunID && session.pendingFork?.status == .sending ? 0.5 : 1)
                         .frame(width: 32, height: 28, alignment: .leading).contentShape(.rect)
                 }
                 .disabled(!session.canForkConversation(forkRunID))

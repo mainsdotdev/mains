@@ -156,12 +156,22 @@ describe("Dock icons", () => {
       const source = path.join(process.cwd(), "src/renderer/public",
         asset.replace(/\.png$/, ".icon"));
       const document = JSON.parse(fs.readFileSync(path.join(source, "icon.json"), "utf8")) as {
-        groups: { layers: { "image-name"?: string }[] }[];
+        groups: {
+          layers: {
+            "image-name"?: string;
+            "image-name-specializations"?: { value: string }[];
+          }[];
+        }[];
       };
       for (const group of document.groups) {
         for (const layer of group.layers) {
-          const name = layer["image-name"];
-          if (name) expect(fs.existsSync(path.join(source, "Assets", name)), `${asset}: ${name}`).toBe(true);
+          const names = [
+            layer["image-name"],
+            ...(layer["image-name-specializations"] ?? []).map(({ value }) => value),
+          ];
+          for (const name of names) {
+            if (name) expect(fs.existsSync(path.join(source, "Assets", name)), `${asset}: ${name}`).toBe(true);
+          }
         }
       }
     }

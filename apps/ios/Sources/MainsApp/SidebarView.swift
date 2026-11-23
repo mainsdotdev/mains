@@ -83,7 +83,7 @@ struct SidebarView: View {
                     }
                 }.padding(.horizontal, menuInset).padding(.bottom, 24)
             }
-            .refreshable { await session.refresh() }
+            .pullToRefresh { await session.refresh() }
             .scrollIndicators(.hidden)
             .modifier(SidebarScrollFade())
             .frame(width: menuWidth)
@@ -253,18 +253,16 @@ struct SidebarView: View {
                 Button { chooseMode(mode) } label: {
                     GlassSelectionTab(title: Experience.label(mode), selected: selected,
                                       showLabel: showLabel && selected, selection: modeSelection) {
-                        ZStack {
-                            RegistryIcon(token: "icon:\(mode == "developer" ? "code" : mode == "work" ? "bag" : "chat")",
-                                         size: 22, tint: selected ? .primary : .primary.opacity(0.8))
-                                .opacity(pendingMode == mode ? 0 : 1)
-                            if pendingMode == mode { ProgressView().controlSize(.mini).transition(.opacity) }
-                        }
+                        RegistryIcon(token: "icon:\(mode == "developer" ? "code" : mode == "work" ? "bag" : "chat")",
+                                     size: 22, tint: selected ? .primary : .primary.opacity(0.8))
+                        .opacity(pendingMode == mode ? 0.5 : 1)
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: pendingMode)
                     }
                 }
                 .buttonStyle(ChatPressStyle())
                 .disabled(!session.isConnected || session.changingMode || session.sending || pendingMode != nil)
                 .accessibilityLabel(Experience.label(mode)).accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityValue(pendingMode == mode ? "Switching mode" : "")
                 .accessibilityIdentifier("sidebarMode-\(mode)")
             }
         }

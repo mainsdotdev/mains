@@ -60,9 +60,14 @@ if (process.versions.electron) {
     const document = JSON.parse(fs.readFileSync(path.join(iconsDir, name, 'icon.json'), 'utf8'));
     for (const group of document.groups ?? []) {
       for (const layer of group.layers ?? []) {
-        const asset = layer['image-name'];
-        if (asset && !fs.existsSync(path.join(iconsDir, name, 'Assets', asset))) {
-          throw new Error(`${name}: missing image layer ${asset}`);
+        const assets = [
+          layer['image-name'],
+          ...(layer['image-name-specializations'] ?? []).map(({ value }) => value),
+        ];
+        for (const asset of assets) {
+          if (asset && !fs.existsSync(path.join(iconsDir, name, 'Assets', asset))) {
+            throw new Error(`${name}: missing image layer ${asset}`);
+          }
         }
       }
     }

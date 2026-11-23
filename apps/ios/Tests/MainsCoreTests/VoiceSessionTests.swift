@@ -20,6 +20,7 @@ import Testing
     var calls: [(channel: String, args: [JSONValue], commandID: String?)] = []
     var unknownCreate = false
     var unknownStop = false
+    var mateVoiceCapability: Bool?
     var creations = 0
     var receipts: [String: JSONValue] = [:]
     var transports: [SessionVoiceTransport] = []
@@ -38,7 +39,9 @@ import Testing
         if let commandId, let result = probe.receipts[commandId] { return result }
         if channel == "runs:createRealtimeConversation" {
             probe.creations += 1
-            let result: JSONValue = .object(["runId": .string(probe.runID)])
+            var fields: [String: JSONValue] = ["runId": .string(probe.runID)]
+            if let target = args.first?["assistantId"].string { fields["assistantId"] = .string(target) }
+            let result: JSONValue = .object(fields)
             if let commandId { probe.receipts[commandId] = result }
             if probe.unknownCreate { probe.unknownCreate = false; throw MainsError.timeout }
             return result
@@ -55,16 +58,25 @@ import Testing
             if probe.unknownStop { probe.unknownStop = false; throw MainsError.timeout }
             return .null
         }
+        if channel == "backend:describe", let supportsMateVoice = probe.mateVoiceCapability {
+            var descriptor = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout).objectValue
+            var capabilities = descriptor["capabilities"]?.array ?? []
+            capabilities.append(.string("assistants"))
+            if supportsMateVoice { capabilities.append(.string("mateRealtimeConversation")) }
+            descriptor["capabilities"] = .array(capabilities)
+            return .object(descriptor)
+        }
         return try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
     }
 }
 
 @Suite(.serialized) struct VoiceSessionTests {
-    @MainActor private func setup() async throws -> (BackendSession, DemoBackend, SessionVoiceProbe, SessionVoiceMedia) {
+    @MainActor private func setup(mateVoiceCapability: Bool? = nil) async throws -> (BackendSession, DemoBackend, SessionVoiceProbe, SessionVoiceMedia) {
         let backend = try DemoBackend(), storage = MemoryStorage(), probe = SessionVoiceProbe(), media = SessionVoiceMedia()
         // A saved pairing uses the real session path, with an in-memory fixture
         // transport. No microphone, socket, provider or real credentials exist.
         storage.pairing = backend.pairing
+        probe.mateVoiceCapability = mateVoiceCapability
         let session = BackendSession(storage: storage, makeTransport: { _ in
             let transport = SessionVoiceTransport(backend, probe); probe.transports.append(transport); return transport
         })
@@ -73,6 +85,33 @@ import Testing
         try await eventually { session.isConnected }
         probe.runID = try #require(session.conversations.first { $0.providerId == "codex" && !$0.isActive && !$0.isArchived && $0.isReplica != true }?.id)
         return (session, backend, probe, media)
+    }
+
+    @Test(arguments: [true, false]) @MainActor func mateListVoiceRequiresHostSupportAndStartsInTheSelectedMate(supportsMateVoice: Bool) async throws {
+        let (session, backend, probe, _) = try await setup(mateVoiceCapability: supportsMateVoice)
+        defer { try? session.forget(); backend.shutdown() }
+        let mate = try JSONValue.object(["id": .string("kitchen"), "name": .string("Kitchen Mate"), "description": .string(""),
+            "avatar": .object(["shape": .string("terminal-amber"), "color": .string("amber")]), "providerId": .string("codex"),
+            "model": .string("mate-model"), "needsSetup": .bool(false)]).decode(Mate.self)
+        let space = try #require(session.spaces.first { $0.providerId == "codex" })
+        session.selectSpace(space.id)
+        #expect(session.voiceStartAvailability(mate: mate) == (supportsMateVoice ? .ready : .mateHostUpdateRequired))
+        await session.startVoice(mate: mate)
+        #expect(probe.creations == 0)
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+        await session.startVoice(mate: mate)
+        if supportsMateVoice {
+            try await eventually { session.voice.phase == .connected }
+            let create = try #require(probe.calls.first { $0.channel == "runs:createRealtimeConversation" })
+            let start = try #require(probe.calls.first { $0.channel == "runs:startRealtime" })
+            #expect(create.args == [.object(["accountId": .string("demo-account"), "assistantId": .string(mate.id)])])
+            #expect(start.args.first?["runId"].string == probe.runID)
+            #expect(session.voiceMate?.id == mate.id && session.voiceSpaceID == nil && session.selectedSpaceID == space.id)
+            await session.voice.stop()
+        } else {
+            #expect(probe.creations == 0 && !session.voice.ownsCall)
+            #expect(session.canStartVoice(runID: probe.runID))
+        }
     }
 
     @Test @MainActor func consentIsRequiredAndNavigationOrTemporaryInactivityKeepsTheSameCallAlive() async throws {

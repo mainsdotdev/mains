@@ -70,7 +70,6 @@ struct SubagentDock: View {
                             Text(agent.title).font(.subheadline.weight(.medium)).lineLimit(2)
                             Text(agent.state.label).font(.caption).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                        if agent.state == .running { ProgressView().controlSize(.mini).accessibilityHidden(true) }
                         Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
                     }.foregroundStyle(.primary).padding(.vertical, 7).padding(.leading, CGFloat(min(3, agent.depth)) * 10).contentShape(Rectangle())
                 }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("subagent-\(agent.id)")

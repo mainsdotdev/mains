@@ -455,7 +455,7 @@ private struct SettingsRow: View {
                 Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
                     .fixedSize(horizontal: false, vertical: true)
             } else if loading {
-                ProgressView().controlSize(.small).frame(width: 20).accessibilityHidden(true)
+                SkeletonLine(width: 48, height: 11).accessibilityLabel("Loading value…")
             } else if let symbol {
                 SettingsRowIcon(symbol: symbol).foregroundStyle(destructive ? .red : .primary)
             }

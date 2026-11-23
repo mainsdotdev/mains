@@ -30,7 +30,7 @@ struct AtlasBookmarkEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                if loading { ContentLoadingView(title: "Loading bookmark…").listRow }
+                if loading { ContentSkeleton(label: "Loading bookmark…", layout: .fields).listRow }
                 if let original {
                     Section {
                         Text(original.url).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)

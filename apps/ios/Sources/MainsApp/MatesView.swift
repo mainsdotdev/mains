@@ -128,7 +128,7 @@ private struct MateDirectoryView: View {
             }
         }
         .task(id: "\(session.ownership):\(session.isConnected):\(session.matesRevision):\(reload)") { await load() }
-        .refreshable {
+        .pullToRefresh {
             reload += 1
             if !archived { await session.refreshWorkInbox() }
         }
@@ -141,7 +141,7 @@ private struct MateDirectoryView: View {
             if let directory {
                 mateSections(directory, matches: matches, activity: activity)
             } else if error == nil {
-                ContentLoadingView(title: archived ? "Loading archived Mates…" : "Loading Mates…").listRow
+                ContentSkeleton(label: archived ? "Loading archived Mates…" : "Loading Mates…").listRow
             }
         }
         .contentMargins(.top, 8, for: .scrollContent)
@@ -513,7 +513,22 @@ struct MateAvatarBackdrop: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
-    private static let topTintOpacity = 0.58
+    private static let topTintOpacity = 0.43
+
+    // Reuse one static tile so the grain stays still during scrolling and avatar changes.
+    private static let grain: CGImage? = {
+        let side = 256
+        var seed: UInt32 = 1
+        let pixels = (0..<(side * side)).map { _ -> UInt8 in
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            return UInt8(seed >> 24)
+        }
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        return CGImage(width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 8,
+                       bytesPerRow: side, space: CGColorSpaceCreateDeviceGray(),
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    }()
 
     private static func tint(for avatar: MateAvatar) -> Color {
         // Silver's catalogue tint follows the green iris. Use the casing color here.
@@ -535,14 +550,25 @@ struct MateAvatarBackdrop: View {
         Rectangle()
             .fill(tint)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: tint)
+            .overlay {
+                if let grain = Self.grain {
+                    Image(decorative: grain, scale: 2)
+                        .resizable(resizingMode: .tile)
+                        .interpolation(.none)
+                        .opacity(0.16)
+                        .blendMode(.softLight)
+                }
+            }
+            .compositingGroup()
             .mask(alignment: .center) {
                 LinearGradient(stops: [
                     .init(color: .white.opacity(Self.topTintOpacity), location: 0),
-                    .init(color: .white.opacity(0.53), location: 0.24),
-                    .init(color: .white.opacity(0.36), location: 0.50),
-                    .init(color: .white.opacity(0.14), location: 0.75),
-                    .init(color: .clear, location: 1)
-                ], startPoint: .top, endPoint: .bottom)
+                    .init(color: .white.opacity(Self.topTintOpacity), location: 0.18),
+                    .init(color: .white.opacity(0.37), location: 0.34),
+                    .init(color: .white.opacity(0.19), location: 0.52),
+                    .init(color: .white.opacity(0.06), location: 0.69),
+                    .init(color: .clear, location: 0.84)
+                ], startPoint: .topLeading, endPoint: UnitPoint(x: 0.74, y: 0.82))
             }
             .opacity(Self.tintStrength(in: colorScheme))
             .ignoresSafeArea()
@@ -601,7 +627,7 @@ private extension NewMateView {
                     .foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
             }
 
-            if writing { ProgressView("Checking creation…").controlSize(.small) }
+            if writing { Text("Checking creation…").font(.footnote).foregroundStyle(.secondary) }
             if let error { Text(error).foregroundStyle(.secondary).padding(.horizontal, 24) }
             if session.mateCommandUncertain {
                 Button("Check creation") { Task { await checkCreation() } }.disabled(!session.isConnected)
@@ -748,7 +774,7 @@ struct CreatingMateView: View {
                                 .disabled(!session.isConnected)
                         }
                     } else {
-                        Text("Creating Mate…").font(.headline.width(.expanded)).foregroundStyle(.secondary).activityShimmer()
+                        Text("Creating Mate…").font(.headline.width(.expanded)).foregroundStyle(.secondary)
                             .accessibilityIdentifier("creatingMateStatus")
                     }
                 }
@@ -854,9 +880,10 @@ struct MateView: View {
     }
 
     var body: some View {
+        let title = showsSetup ? Text(mate?.name ?? "Mate") : Text("Chats")
         Group {
-            if mate == nil, !session.isConnected {
-                DisconnectedState(message: "Connect to your computer to open this Mate.")
+            if !session.isConnected {
+                DisconnectedState(message: "Connect to your computer to view this Mate’s chats.")
                     .centered.background(Color(.systemGroupedBackground))
             } else if showsSetup, let mate, let welcome = mate.welcome, let question = welcome.question, let setup = question.profileSetup {
                 setupConversation(mate, welcome, question, setup)
@@ -865,18 +892,18 @@ struct MateView: View {
             }
         }
         .environment(\.mateChatTint, mate.map { MateRobotAssets.chatTint(for: $0.avatar) })
-        .navigationTitle(mate?.name ?? "Mate").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if showsSetup, let mate {
+            if session.isConnected, showsSetup, let mate {
                 ToolbarItem(placement: .principal) { MateConversationTitle(mate: mate) }
                     .sharedBackgroundVisibility(.hidden)
             } else {
                 ToolbarItem(placement: .title) {
-                    Text(mate?.name ?? "Mate").font(.headline.weight(.medium).width(.expanded)).lineLimit(1)
+                    title.font(.headline.weight(.medium).width(.expanded)).lineLimit(1)
                 }
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if !showsSetup, mate != nil {
+                if session.isConnected, !showsSetup, mate != nil {
                     Button("Mate Details", systemImage: "info.circle", action: openInfo)
                         .accessibilityIdentifier("openMateInfo")
                 }
@@ -884,7 +911,7 @@ struct MateView: View {
             }
         }
         .task(id: "\(session.ownership):\(session.isConnected):\(session.matesRevision):\(reload)") { await load() }
-        .refreshable { reload += 1 }
+        .pullToRefresh { reload += 1 }
         .sheet(item: $consent, onDismiss: { afterConsent = nil }) { consent in
             ConsentView(context: consent) {
                 guard consent.backendID == session.pairing?.descriptor.backendId else { return }
@@ -915,10 +942,10 @@ struct MateView: View {
                             .allowsHitTesting(!composerFocused)
                             .accessibilityHidden(composerFocused)
                         } else {
-                            ContentLoadingView(title: "Loading profile setup…")
+                            ContentSkeleton(label: "Loading profile setup…", layout: .text)
                         }
                     } else if loading {
-                        ContentLoadingView(title: "Loading Mate…")
+                        ContentSkeleton(label: "Loading Mate…")
                     }
                 }
                 .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 24)
@@ -945,11 +972,17 @@ struct MateView: View {
             if let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
                 MateRobotPreview(preset: preset).frame(width: 120, height: 120)
             }
+            Text(mate.name)
+                .font(.title2.weight(.semibold).width(.expanded))
+                .frame(maxWidth: 460)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("mateChatsName")
             if !mate.description.isEmpty {
                 Text(mate.description).font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).frame(maxWidth: 460)
+                    .frame(maxWidth: 460)
             }
         }
+        .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
     }
@@ -959,8 +992,6 @@ struct MateView: View {
         let days = Dictionary(grouping: history) { calendar.startOfDay(for: $0.updatedAt) }
         return TimelineView(.periodic(from: .now, by: 60)) { clock in
             VStack(alignment: .leading, spacing: 16) {
-                Text("Chats").font(.subheadline.weight(.semibold).width(.expanded))
-                    .padding(.horizontal, 4).accessibilityAddTraits(.isHeader)
                 if history.isEmpty {
                     Text("No chats yet").font(.subheadline).foregroundStyle(.secondary)
                         .padding(.horizontal, 4)
@@ -1043,7 +1074,7 @@ struct MateView: View {
     private func preparingProfile(_ mate: Mate, title: LocalizedStringKey = "Preparing the profile…") -> some View {
         HStack(spacing: 10) {
             MateActivityAvatar(mate: mate)
-            Text(title).foregroundStyle(.secondary).activityShimmer()
+            Text(title).foregroundStyle(.secondary)
         }
     }
 
@@ -1159,7 +1190,8 @@ struct MateView: View {
             }
             MessageComposer(session: session, context: ComposerContext(mate: mate), draft: draft,
                 canSend: session.isConnected && !session.sending && session.pendingMessage?.status != .uncertain && !draft.isSending,
-                model: {}, options: {}, send: { withConsent(mate) { Task { await send(mate) } } }, focusChanged: focusChanged)
+                model: {}, options: {}, send: { withConsent(mate) { Task { await send(mate) } } },
+                voiceCreated: openChat, focusChanged: focusChanged)
         }.padding(.bottom, 8)
     }
 
@@ -1241,8 +1273,8 @@ struct MateView: View {
         catch { if owner == session.ownership { self.error = error.localizedDescription } }
     }
     private func load() async {
+        guard session.isConnected else { return }
         let owner = session.ownership
-        guard session.isConnected else { error = "Connect to your computer to use Mates."; loading = false; return }
         do {
             let directory = try await session.loadMates(mateID: mateID)
             guard !Task.isCancelled, owner == session.ownership else { return }
@@ -1266,7 +1298,11 @@ struct MateView: View {
             }
             error = nil
             loading = false
-        } catch { if !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription; loading = false } }
+        } catch {
+            guard !Task.isCancelled, owner == session.ownership, session.isConnected else { return }
+            self.error = error.localizedDescription
+            loading = false
+        }
     }
 }
 

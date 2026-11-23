@@ -699,7 +699,15 @@ export const runsService = {
   async createRealtimeConversation(
     payload: CreateRealtimeConversationPayload,
   ): Promise<CreateRealtimeConversationResponse> {
-    const { spaceId, mode, space } = await resolveRunMode(payload.spaceId);
+    const { assistantId } = payload;
+    if (assistantId !== undefined && [payload.spaceId, payload.workspaceId, payload.collectionId,
+      payload.conversationSettings, payload.additionalDirectories].some(value => value !== undefined)) {
+      throw new Error("A Mate voice chat uses the Mate’s saved profile.");
+    }
+    const assistant = assistantId === undefined ? null : assistantsService.requireForWork(assistantId, payload.accountId);
+    const { spaceId, mode, space } = assistant
+      ? { spaceId: assistant.spaceId, mode: "work" as const, space: assistant.spaceSnapshot }
+      : await resolveRunMode(payload.spaceId);
     if (!spaceId || !space)
       throw new Error("A valid space is required to start voice chat");
     if (space.accountId !== payload.accountId)
@@ -722,21 +730,19 @@ export const runsService = {
     } else if (payload.workspaceId) {
       throw new Error("Work and Chat runs do not use a workspace");
     }
-    const collectionId = await validateCollectionForRun(
-      payload.collectionId,
-      payload.accountId,
-      mode,
-    );
+    const collectionId = assistant ? undefined : await validateCollectionForRun(payload.collectionId, payload.accountId, mode);
+    if (assistant) assertRecordAvailable(recordKey("assistant", assistant.id, payload.accountId));
     const settings = resolveConversationSettings(
       space.providerId,
       provider.config,
       composeConfigSnapshot(mode, space.providerId, null),
-      undefined,
-      payload.conversationSettings,
+      assistant?.model,
+      assistant?.conversationSettings ?? payload.conversationSettings,
       { inheritProviderPermissions: true },
     );
     const configSnapshot = normalizeAdditionalDirectories(
       composeConfigSnapshot(mode, space.providerId, {
+        ...(assistant ? { assistantId: assistant.id } : {}),
         ...settings.config,
         conversationSettings: settings,
         ...(payload.additionalDirectories !== undefined
@@ -754,6 +760,7 @@ export const runsService = {
       workspaceId: workspace?.id,
       collectionId,
       spaceId,
+      assistantId: assistant?.id,
       providerId: space.providerId,
       mode,
       model: settings.model || undefined,
@@ -762,7 +769,7 @@ export const runsService = {
       toolPolicySnapshot: composeToolPolicy(mode, null) ?? undefined,
     });
     emit(CHANNELS.runs.updated, { runId, ts: Date.now() });
-    return { runId };
+    return assistant ? { runId, assistantId: assistant.id } : { runId };
   },
 
   async startRealtime(payload: RunRealtimeStartPayload, owner?: { deviceId: string; clientId?: string; signal?: AbortSignal }): Promise<void> {

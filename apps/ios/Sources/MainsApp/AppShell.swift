@@ -121,7 +121,9 @@ struct AppShell: View {
                                     }
                                     .id(session.ownership)
                                 case .mate(let id):
-                                    MateView(session: session, mateID: id, openChat: { path.append(.conversation($0, mate: .profile(id))) },
+                                    MateView(session: session, mateID: id, openChat: { runID in
+                                        if path.last == route { path.append(.conversation(runID, mate: .profile(id))) }
+                                    },
                                              openInfo: { path.append(.mateInfo(id)) })
                                         .id("\(session.ownership):mate:\(id)")
                                 case .mateInfo(let id):
@@ -229,7 +231,7 @@ struct AppShell: View {
                 GoalChangeDeliveryNotice(session: session)
 #if MAINS_GPT_LIVE
                 VoiceCallDock(session: session, visibleRunID: visibleVoiceRunID,
-                    preparingHere: mainPaneInteractive && path.isEmpty && homeRunID == nil && session.voiceSpaceID == session.selectedSpaceID,
+                    preparingHere: preparingVoiceHere,
                     open: { openVoiceConversation($0) })
 #endif
 
@@ -312,6 +314,12 @@ struct AppShell: View {
     }
 
 #if MAINS_GPT_LIVE
+    private var preparingVoiceHere: Bool {
+        guard mainPaneInteractive else { return false }
+        if let mate = session.voiceMate { return path.last == .mate(mate.id) }
+        return path.isEmpty && homeRunID == nil && session.voiceSpaceID == session.selectedSpaceID
+    }
+
     private var visibleVoiceRunID: String? {
         guard mainPaneInteractive else { return nil }
         switch path.last {
@@ -323,10 +331,16 @@ struct AppShell: View {
 #endif
 
     private func openVoiceConversation(_ id: String) {
-        var spaceID = session.conversations.first(where: { $0.id == id })?.spaceId
+        let run = session.conversations.first(where: { $0.id == id })
+        var spaceID = run?.spaceId
+        var mateID = run?.assistantId
         #if MAINS_GPT_LIVE
-        spaceID = spaceID ?? (session.voice.runID == id ? session.voiceSpaceID : nil)
+        if session.voice.runID == id {
+            spaceID = spaceID ?? session.voiceSpaceID
+            mateID = mateID ?? session.voiceMate?.id
+        }
         #endif
+        if let mateID { open(.conversation(id, mate: .profile(mateID))); return }
         if let spaceID { session.selectSpace(spaceID) }
         open(.conversation(id))
     }

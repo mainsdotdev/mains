@@ -79,7 +79,7 @@ struct TargetConversationsView: View {
         .scrollingNavigationTitle(title)
         .toolbar(.visible, for: .navigationBar)
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
-        .refreshable { await session.refresh() }
+        .pullToRefresh { await session.refresh() }
     }
 
     private var targetHeader: some View {
@@ -268,7 +268,7 @@ struct SearchView: View {
                     EmptyStateView(artwork: .search, title: "No results found")
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .refreshable { await session.refresh(); await search() }
+                .pullToRefresh { await session.refresh(); await search() }
             } else {
                 ScrollView {
                     TimelineView(.periodic(from: .now, by: 60)) { clock in
@@ -285,7 +285,7 @@ struct SearchView: View {
                                 }
                             } else {
                                 if loading && visibleHits.isEmpty || resultQuery != needle {
-                                    ContentLoadingView(title: "Searching conversations and messages…")
+                                    ContentSkeleton(label: "Searching conversations and messages…")
                                 }
                                 if !visibleHits.isEmpty { sectionTitle("Chats and messages") }
                                 ForEach(visibleHits) { hit in
@@ -298,7 +298,7 @@ struct SearchView: View {
                                     }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-run-\(hit.runId)")
                                 }
                                 if nextCursor != nil && resultQuery == needle {
-                                    Button(loading ? "Loading…" : "More results") { Task { await loadMore() } }
+                                    Button("More results") { Task { await loadMore() } }
                                         .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44).disabled(loading)
                                         .accessibilityIdentifier("loadMoreSearchResults")
                                 }
@@ -314,7 +314,7 @@ struct SearchView: View {
                     }
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .refreshable { await session.refresh(); await search() }
+                .pullToRefresh { await session.refresh(); await search() }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

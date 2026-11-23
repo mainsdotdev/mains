@@ -129,7 +129,7 @@ struct TurnFileDiffView: View {
                     } else if let error {
                         message(error)
                         Button("Try again") { attempt += 1 }.frame(minHeight: 44).accessibilityIdentifier("retryFileDiff")
-                    } else { ContentLoadingView(title: "Loading file diff…") }
+                    } else { ContentSkeleton(label: "Loading file diff…", layout: .text, count: 8) }
                 }.padding(.horizontal, 16).padding(.bottom, 20)
             }.accessibilityIdentifier("fileDiffContent")
                 .safeAreaInset(edge: .bottom, spacing: 0) {

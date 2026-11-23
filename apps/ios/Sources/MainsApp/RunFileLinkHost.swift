@@ -55,7 +55,7 @@ struct LocalTextFilePreview: View {
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
             } else if let error {
                 EmptyStateView(artwork: .documents, title: "Preview unavailable", description: Text(error))
-            } else { ContentLoadingView(title: "Loading preview…") }
+            } else { ContentSkeleton(label: "Loading preview…", layout: .text, count: 8).padding(.horizontal, 8) }
         }
         .defaultScrollAnchor(error == nil ? .top : .center, for: .alignment)
         .id(offset)

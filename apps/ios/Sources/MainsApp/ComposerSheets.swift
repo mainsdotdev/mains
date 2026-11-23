@@ -165,7 +165,10 @@ struct ComposerModelWheel: View {
         let displayName: String
         let accessibilityDetail: String?
         let model: ModelChoice?
-        var accessibleName: String { accessibilityDetail.map { title + ", " + $0 } ?? title }
+        var accessibleName: String {
+            if title.isEmpty { return String(localized: "Loading models…") }
+            return accessibilityDetail.map { title + ", " + $0 } ?? title
+        }
     }
     private var items: [Item] {
         let catalogue = providerID == "opencode" ? OpenCodeModelDisplay.groups(models).flatMap(\.models) : models
@@ -175,7 +178,7 @@ struct ComposerModelWheel: View {
         }
         if !result.contains(where: { $0.id == selectedID }) {
             let name = pendingModel?.label(for: providerID) ?? (providerID == "opencode" ? OpenCodeModelDisplay.parts(selectedID)?.name : nil) ?? selectedID
-            let title = !name.isEmpty ? name : loading ? "Loading models…" : models.isEmpty ? "No models available" : "Select model"
+            let title = !name.isEmpty ? name : loading ? "" : models.isEmpty ? "No models available" : "Select model"
             result.insert(Item(id: selectedID, title: title, displayName: pendingModel?.displayName ?? selectedID,
                                accessibilityDetail: selectedID.isEmpty ? nil : "Saved selection", model: nil), at: 0)
         }
@@ -417,7 +420,8 @@ private struct ModelWheelRow: View {
     var body: some View {
         HStack(spacing: 7) {
             ComposerModelIcon(name: item.displayName, providerID: providerID)
-            Text(item.title).font(.title2.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.85)
+            if item.title.isEmpty { SkeletonLine(width: 112, height: 16) }
+            else { Text(item.title).font(.title2.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.85) }
         }.foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .center).padding(.horizontal, 4)
             .transaction { $0.animation = nil; $0.disablesAnimations = true }
             .accessibilityElement(children: .ignore).accessibilityLabel(item.accessibleName)
@@ -546,7 +550,12 @@ struct RunOptionsSheet: View {
         let height = permissionRowHeight * (dynamicTypeSize.isAccessibilitySize ? 1.8 : 3)
         return Group {
             if context.providerId == "codex", loading {
-                ContentLoadingView(title: "Loading computer policy…")
+                VStack(spacing: 6) {
+                    SkeletonLine(width: 120, height: 16)
+                    SkeletonLine(width: 178, height: 9)
+                }
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore).accessibilityLabel("Loading computer policy…")
             } else if let catalogError {
                 VStack(spacing: 8) {
                     Text(catalogError).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)

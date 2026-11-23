@@ -33,14 +33,13 @@ struct ChatMessage: View {
                 if !row.pendingAttachments.isEmpty { PendingPromptAttachments(attachments: row.pendingAttachments) }
                 else if !row.media.isEmpty { ChatMediaGallery(session: session, media: row.media, prompt: true) }
                 if !row.text.isEmpty {
-                    PromptBubble(text: row.text, skills: row.contextSkills, fill: mateTint ?? Provider.accent(providerID))
+                    PromptBubble(text: row.text, skills: row.contextSkills, fill: Provider.accent(providerID))
                         .accessibilityIdentifier(row.id)
                 }
-                if let delivery = row.delivery {
+                if row.delivery == .uncertain {
                     HStack(spacing: 6) {
-                        if delivery == .sending { ProgressView().controlSize(.mini) }
-                        if delivery == .uncertain { Image(systemName: "exclamationmark.circle") }
-                        Text(delivery == .uncertain ? "Delivery unconfirmed" : delivery == .accepted ? "Sent" : "Sending…")
+                        Image(systemName: "exclamationmark.circle")
+                        Text("Delivery unconfirmed")
                     }.font(.caption).foregroundStyle(.secondary).frame(height: 18).padding(.trailing, 4)
                 }
             case .response:
@@ -161,7 +160,9 @@ private struct MateTaskCard: View {
             if let assignment {
                 if let result = assignment.result, !result.isEmpty { ChatMessageBody(text: result) }
                 if let failure = assignment.error { Text(failure).font(.footnote).foregroundStyle(.secondary) }
-            } else if error == nil && session.isConnected && session.supportsMates { ProgressView().controlSize(.small) }
+            } else if error == nil && session.isConnected && session.supportsMates {
+                SkeletonLine(width: 176, height: 11).accessibilityLabel("Loading assignment…")
+            }
             if let error {
                 Text(error).font(.footnote).foregroundStyle(.secondary)
                 Button("Retry") { retry += 1 }
@@ -267,11 +268,16 @@ struct PromptBubble: View {
     let text: String
     let skills: [ContextSkill]
     let fill: Color
+    @Environment(\.mateChatTint) private var mateTint
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
-        InlineContextText(text: text, skills: skills).textSelection(.enabled).font(.body).lineSpacing(3)
+        let dark = colorScheme == .dark
+        let ink = mateTint?.mix(with: dark ? .white : .black, by: dark ? 0.25 : 0.60, in: .device) ?? .white
+        let surface = mateTint?.mix(with: dark ? .black : .white, by: dark ? 0.78 : 0.84, in: .device) ?? fill
+        InlineContextText(text: text, skills: skills, ink: ink).textSelection(.enabled).font(.body).lineSpacing(3)
             .padding(.horizontal, 16).padding(.vertical, 12)
-            .foregroundStyle(.white)
-            .background(fill, in: .rect(cornerRadius: 22))
+            .background(surface, in: .rect(cornerRadius: 22))
             .padding(.leading, 56)
     }
 }
@@ -318,7 +324,7 @@ struct MateQuestionBubble: View {
                 .frame(maxWidth: visible.isEmpty ? nil : .infinity, alignment: .leading)
                 .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 22))
                 if selected.isEmpty, !entry.answer.isEmpty {
-                    PromptBubble(text: entry.answer.joined(separator: "\n"), skills: [], fill: mateTint ?? Provider.accent(providerID))
+                    PromptBubble(text: entry.answer.joined(separator: "\n"), skills: [], fill: Provider.accent(providerID))
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
@@ -543,11 +549,9 @@ struct ChatActivity: View {
     #endif
     let title: String
     let symbol: String
-    let busy: Bool
     var body: some View {
         HStack(spacing: 9) {
-            if busy { ProgressView().controlSize(.mini) }
-            else { Image(systemName: symbol) }
+            Image(systemName: symbol)
             Text(title)
         }.font(.footnote).foregroundStyle(.secondary).accessibilityElement(children: .combine)
     }

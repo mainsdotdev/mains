@@ -4,23 +4,29 @@ import SwiftUI
 struct ComposerContext {
     let providerId: String
     let mode: String
-    let name: String
+    private let name: String?
     let spaceID: String?
     let runID: String?
     let workspaceID: String?
     let lockedProfile: Bool
+    let mate: Mate?
     var supportsGoalMode: Bool { providerId == "codex" && mode != "chat" }
+    var placeholder: String {
+        if lockedProfile { return name.map { "Message \($0)" } ?? "Message this Mate…" }
+        if runID == nil, let name { return "Start a run in \(name)" }
+        return "Continue this run…"
+    }
     init(space: Space, runID: String? = nil) {
         providerId = space.providerId; mode = space.mode; name = space.name
-        spaceID = space.id; self.runID = runID; workspaceID = nil; lockedProfile = false
+        spaceID = space.id; self.runID = runID; workspaceID = nil; lockedProfile = false; mate = nil
     }
-    init(run: Conversation) {
-        providerId = run.providerId; mode = run.mode; name = Provider.name(run.providerId)
-        spaceID = nil; runID = run.id; workspaceID = run.workspaceId; lockedProfile = run.assistantId != nil
+    init(run: Conversation, mateName: String? = nil) {
+        providerId = run.providerId; mode = run.mode; name = mateName
+        spaceID = nil; runID = run.id; workspaceID = run.workspaceId; lockedProfile = run.assistantId != nil; mate = nil
     }
-    init(mate: Mate) {
+    init(mate: Mate, runID: String? = nil) {
         providerId = mate.providerId; mode = "work"; name = mate.name
-        spaceID = nil; runID = nil; workspaceID = nil; lockedProfile = true
+        spaceID = nil; self.runID = runID; workspaceID = nil; lockedProfile = true; self.mate = mate
     }
     @MainActor func settings(_ session: BackendSession) -> ComposerSettings {
         if let runID, let editing = session.existingMessageQueue(for: runID)?.editingSettings { return editing }
@@ -82,10 +88,8 @@ struct ComposerModelLabel: View {
                 }
             }
         } else if loading {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.mini).accessibilityHidden(true)
-                Text("Loading…")
-            }
+            SkeletonLine(width: 82, height: 12)
+                .accessibilityLabel("Loading model…")
         } else {
             HStack(spacing: 5) {
                 ComposerModelIcon(name: "", providerID: providerID)

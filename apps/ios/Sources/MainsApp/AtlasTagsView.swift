@@ -29,7 +29,7 @@ struct AtlasTagsEditor: View {
     var body: some View {
         NavigationStack {
             List {
-                if loading && original == nil { ContentLoadingView(title: "Loading tags…").listRow }
+                if loading && original == nil { ContentSkeleton(label: "Loading tags…", layout: .fields).listRow }
                 if let original {
                     Section { Text(original.title).font(.headline.width(.expanded)) }
                     Section {
@@ -206,7 +206,7 @@ private struct AtlasTagCatalogue: View {
     private var resultsSection: some View {
         Section {
             if !isFilter { searchField }
-            if result == nil && error == nil { ContentLoadingView(title: "Loading tags…").listRow.id(key) }
+            if result == nil && error == nil { ContentSkeleton(label: "Loading tags…", layout: .fields).listRow.id(key) }
             if let error {
                 Text(error).foregroundStyle(.secondary)
                 Button("Try again") { reload += 1 }.disabled(!session.isConnected || loading)

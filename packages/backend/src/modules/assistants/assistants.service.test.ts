@@ -90,22 +90,34 @@ afterEach(async () => {
 });
 
 describe("Mate voice conversations", () => {
-    it.each(["desktop", "iOS"])("starts voice with the Mate profile and keeps delegated work in the same Mate on %s", async (client) => {
+    it.each(["desktop", "iOS", "Mate Chats"])("starts voice with the Mate profile and keeps delegated work in the same Mate on %s", async (client) => {
         db.update(providers).set({ config: JSON.stringify({ sandboxMode: "read-only" }) }).where(eq(providers.id, "codex")).run();
         const mate = await makeAssistant("Kitchen Mate");
         assistantsService.saveMemory({ accountId: mate.accountId, teamId, assistantId: mate.id,
             title: "Kitchen preference", content: "Use metric measurements", pinned: true });
         db.update(spaces).set({ mode: "chat", systemPrompt: "Unrelated new Space instructions" }).where(eq(spaces.id, mate.spaceId)).run();
-        const run = createRun(db, { assistantId: mate.id, spaceId: mate.spaceId, providerId: "codex",
-            mode: "work", status: "succeeded", sessionId: "native-thread" });
-        const payload = { runId: run.id, accountId: mate.accountId, connectionId: "mate-voice", sdp: "v=0\r\n" };
+        const create = { accountId: mate.accountId, assistantId: mate.id };
+        let runId: string;
+        if (client === "Mate Chats") {
+            await expect(runsService.createRealtimeConversation({ ...create, accountId: "other-account" })).rejects.toThrow("Assistant is unavailable");
+            const voiceChat = await runsService.createRealtimeConversation(create);
+            expect(voiceChat.assistantId).toBe(mate.id);
+            runId = voiceChat.runId;
+            expect(await runsService.getRunById(runId)).toMatchObject({ assistantId: mate.id, spaceId: mate.spaceId, mode: "work",
+                model: mate.model, status: "succeeded", goal: null, sessionId: null, collectionId: null, workspaceId: null });
+            expect(assistantsService.conversations(mate.id, mate.accountId)).toContainEqual(expect.objectContaining({ id: runId }));
+        } else {
+            runId = createRun(db, { ...create, spaceId: mate.spaceId, providerId: "codex",
+                mode: "work", status: "succeeded", sessionId: "native-thread" }).id;
+        }
+        const payload = { runId, accountId: mate.accountId, connectionId: "mate-voice", sdp: "v=0\r\n" };
         const startRealtime = vi.fn(async (_request: WorkRunRealtimeRequest, _publish: (event: RunRealtimeEvent) => void) => {});
         const stopRealtime = vi.fn(async () => {
             startRealtime.mock.calls[0][1]({ ...payload, type: "closed", reason: "ended" });
         });
         vi.mocked(createWorkAdapter).mockReturnValue({ ...createWorkRunAdapter(driver.driver), startRealtime, stopRealtime });
 
-        const owner = client === "iOS" ? { deviceId: "iphone" } : undefined;
+        const owner = client === "desktop" ? undefined : { deviceId: "iphone" };
         try {
             await runsService.startRealtime({ ...payload, conversationSettings: { model: "other-model", config: { sandboxMode: "danger-full-access" } } }, owner);
             const request = startRealtime.mock.calls[0][0];
@@ -127,6 +139,7 @@ describe("Mate voice conversations", () => {
         }
         assistantsService.archive(mate.id, mate.accountId, true);
         await expect(runsService.startRealtime(payload)).rejects.toThrow("Assistant is unavailable");
+        if (client === "Mate Chats") await expect(runsService.createRealtimeConversation(create)).rejects.toThrow("Assistant is unavailable");
     });
 });
 

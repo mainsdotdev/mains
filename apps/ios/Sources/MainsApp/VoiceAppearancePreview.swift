@@ -15,7 +15,7 @@ struct VoiceAppearancePreview: View {
                 NavigationStack {
                     ConversationView(session: session, runID: runID, openComputer: {}, onNew: {}, onFork: { _ in })
                 }
-            } else { ProgressView() }
+            } else { ConversationSkeleton(isMate: false).padding(16).frame(maxHeight: .infinity, alignment: .top) }
         }
         .defaultAppStorage(preferences)
         .environment(\.voiceReduceMotionPreview, CommandLine.arguments.contains("--voice-preview-reduced-motion"))

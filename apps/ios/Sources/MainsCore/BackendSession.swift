@@ -110,6 +110,7 @@ public final class BackendSession {
     public private(set) var pendingVoiceConversation: PendingVoiceConversation?
     public private(set) var checkingVoiceConversation = false
     public private(set) var voiceSpaceID: String?
+    public private(set) var voiceMate: Mate?
     public private(set) var realtimeVoices: RealtimeVoiceCatalog?
     public private(set) var selectedRealtimeVoice: String?
     public private(set) var loadingVoiceSettings = false
@@ -327,10 +328,10 @@ public final class BackendSession {
     }
 
     enum VoiceStartAvailability {
-        case unavailable, workspaceRequired, ready
+        case unavailable, workspaceRequired, mateHostUpdateRequired, ready
     }
 
-    func voiceStartAvailability(runID: String? = nil, spaceID: String? = nil) -> VoiceStartAvailability {
+    func voiceStartAvailability(runID: String? = nil, spaceID: String? = nil, mate: Mate? = nil) -> VoiceStartAvailability {
         guard isConnected, !isDemo, voice.makeMedia != nil, !voice.ownsCall, pendingVoiceConversation == nil,
               pendingFork == nil, pendingConversationAction == nil, pendingMessage == nil, voiceSelectionChange == nil, !sending, stoppingRunID == nil else { return .unavailable }
         if let runID {
@@ -339,6 +340,10 @@ public final class BackendSession {
                   run.archivedReplyError == nil, settingsChanges[runID] == nil,
                   !decisionDeliveries.contains(where: { $0.value.attempt?.runID == runID }) else { return .unavailable }
             return .ready
+        }
+        if let mate {
+            guard mate.ready, mate.providerId == "codex", supportsMates else { return .unavailable }
+            return connectedDescriptor?.capabilities.contains("mateRealtimeConversation") == true ? .ready : .mateHostUpdateRequired
         }
         guard let space = spaces.first(where: { $0.id == spaceID }), space.providerId == "codex", !changingMode else { return .unavailable }
         if space.mode == "developer" {
@@ -349,29 +354,34 @@ public final class BackendSession {
         return .ready
     }
 
-    public func canStartVoice(runID: String? = nil, spaceID: String? = nil) -> Bool {
-        voiceStartAvailability(runID: runID, spaceID: spaceID) == .ready
+    public func canStartVoice(runID: String? = nil, spaceID: String? = nil, mate: Mate? = nil) -> Bool {
+        voiceStartAvailability(runID: runID, spaceID: spaceID, mate: mate) == .ready
     }
 
     /// Creates an idle conversation only when the user explicitly starts voice.
-    /// A new-chat draft and its attachments remain owned by the home composer.
-    public func startVoice(runID: String? = nil, spaceID: String? = nil) async {
-        guard canStartVoice(runID: runID, spaceID: spaceID), let pairing, let accountID, let candidate = transport else { return }
+    /// A new-chat draft and its attachments remain owned by the source composer.
+    public func startVoice(runID: String? = nil, spaceID: String? = nil, mate: Mate? = nil) async {
+        guard canStartVoice(runID: runID, spaceID: spaceID, mate: mate), let pairing, let accountID, let candidate = transport else { return }
         guard hasConsent(providerID: "codex") else { actionError = "Allow data sharing with OpenAI before starting voice chat."; return }
         let owner = pairingOwner, current = generation
-        let label = runID.flatMap { id in conversations.first { $0.id == id }?.displayTitle } ?? "New conversation"
+        let newMate = runID == nil ? mate : nil
+        let label = runID.flatMap { id in conversations.first { $0.id == id }?.displayTitle } ?? newMate?.name ?? "New conversation"
         let existingSettings = runID.flatMap { settings(forRunID: $0) }
-        voiceSpaceID = runID.flatMap { id in conversations.first { $0.id == id }?.spaceId } ?? spaceID
         var creation: PendingVoiceConversation?
-        if runID == nil, let space = spaces.first(where: { $0.id == spaceID }) {
+        if let newMate {
+            creation = PendingVoiceConversation(commandID: UUID().uuidString,
+                payload: .object(["accountId": .string(accountID), "assistantId": .string(newMate.id)]), owner: owner)
+        } else if runID == nil, let space = spaces.first(where: { $0.id == spaceID }) {
             let target = homeTargets[space.id] ?? HomeTarget()
             var payload: [String: JSONValue] = ["accountId": .string(accountID), "spaceId": .string(space.id)]
             do { payload["conversationSettings"] = try .encode(settings(for: space)) }
             catch { actionError = error.localizedDescription; return }
             if space.mode == "developer", let workspaceID = target.workspaceID { payload["workspaceId"] = .string(workspaceID) }
             if space.mode != "developer", let collectionID = target.collectionID { payload["collectionId"] = .string(collectionID) }
-            creation = PendingVoiceConversation(spaceID: space.id, commandID: UUID().uuidString, payload: .object(payload), owner: owner)
+            creation = PendingVoiceConversation(commandID: UUID().uuidString, payload: .object(payload), owner: owner)
         }
+        voiceMate = newMate
+        voiceSpaceID = newMate == nil ? runID.flatMap { id in conversations.first { $0.id == id }?.spaceId } ?? spaceID : nil
         let startID = UUID().uuidString
         var stopID = UUID().uuidString
         await voice.start(label: label) { [weak self] in
@@ -423,6 +433,7 @@ public final class BackendSession {
         do {
             let result = try await command("runs:createRealtimeConversation", args: [pending.payload], commandID: pending.commandID, owner: pending.owner)
             guard let id = result["runId"].string, !id.isEmpty, id.utf8.count <= 800 else { throw MainsError.invalidReply }
+            if let mateID = pending.payload["assistantId"].string, result["assistantId"].string != mateID { throw MainsError.invalidReply }
             if pairingOwner == pending.owner { pendingVoiceConversation = nil }
             return id
         } catch {
@@ -1477,7 +1488,7 @@ public final class BackendSession {
         pendingConversationAction = nil; retiredConversation = nil; conversationActionRevision = 0
         pendingGoalChange = nil
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
-        voice.retire(); pendingVoiceConversation = nil; checkingVoiceConversation = false; voiceSpaceID = nil
+        voice.retire(); pendingVoiceConversation = nil; checkingVoiceConversation = false; voiceSpaceID = nil; voiceMate = nil
         realtimeVoices = nil; selectedRealtimeVoice = nil; voiceSettingsReadID = nil; voiceSelectionChange = nil
         loadingVoiceSettings = false; savingVoiceSettings = false; voiceSettingsError = nil; uncertainVoiceSelection = false
 #endif

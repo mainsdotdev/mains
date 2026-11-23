@@ -22,7 +22,6 @@ public enum RealtimeVoicePhase: String, Sendable {
 }
 
 public struct PendingVoiceConversation: Sendable {
-    public let spaceID: String
     public var uncertain = false
     let commandID: String
     let payload: JSONValue

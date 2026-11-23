@@ -171,8 +171,30 @@ public struct ModelChoice: Codable, Equatable, Identifiable, Sendable {
     }
     /// Compact composer label; catalogue identities and provider groups stay intact.
     public func label(for providerID: String) -> String {
-        guard providerID == "opencode", let parts = OpenCodeModelDisplay.parts(displayName) else { return name }
-        return parts.name
+        switch providerID {
+        case "claude_code": claudeLabel
+        case "opencode": OpenCodeModelDisplay.parts(displayName)?.name ?? name
+        default: name
+        }
+    }
+
+    // Older Claude catalogues put the version in the lead-in to the description.
+    // Match desktop's model-display.ts and retain the catalogue name for taglines.
+    private var claudeLabel: String {
+        guard let description else { return name }
+        let prefix = description.prefix(while: { $0 != "·" }).trimmingCharacters(in: .whitespacesAndNewlines)
+        let contextSuffix = " with 1M context"
+        guard description.contains("·") || prefix.hasSuffix(contextSuffix) else { return name }
+
+        func withoutBrand(_ value: String) -> String {
+            value.replacingOccurrences(of: #"^Claude\s+"#, with: "", options: [.regularExpression, .caseInsensitive])
+        }
+        let catalogueName = withoutBrand(displayName).trimmingCharacters(in: .whitespacesAndNewlines)
+        let describedName = withoutBrand(prefix)
+        guard !catalogueName.isEmpty, describedName.lowercased().hasPrefix(catalogueName.lowercased()) else { return name }
+        if let boundary = describedName.dropFirst(catalogueName.count).first,
+           !boundary.isWhitespace, boundary != "(", boundary != "[" { return name }
+        return prefix.hasSuffix(contextSuffix) ? String(prefix.dropLast(contextSuffix.count)) + " [1M]" : prefix
     }
 }
 

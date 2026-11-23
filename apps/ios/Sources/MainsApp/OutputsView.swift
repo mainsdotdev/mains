@@ -18,7 +18,7 @@ struct OutputsView: View {
     var body: some View {
         ComposerSheet(title: "Outputs") {
             List {
-                if loading && page == nil { ContentLoadingView(title: "Loading outputs…").listRow }
+                if loading && page == nil { ContentSkeleton(label: "Loading outputs…").listRow }
                 if let error {
                     Text(error).foregroundStyle(.secondary)
                     Button("Try again") { Task { await load() } }
@@ -47,7 +47,7 @@ struct OutputsView: View {
                         Button("Next") { if let next = page?.nextOffset { previous.append(offset); offset = next } }.disabled(page?.nextOffset == nil || loading)
                     }
                 }
-            }.scrollContentBackground(.hidden).refreshable { await load() }.task(id: offset) { await load() }
+            }.scrollContentBackground(.hidden).pullToRefresh { await load() }.task(id: offset) { await load() }
         }
         .presentationDetents([.large])
         .fullScreenCover(item: $selection) { output in OutputPreviewView(session: session, output: output) }
@@ -130,7 +130,10 @@ struct OutputPreviewView: View {
                     EmptyStateView(artwork: .documents, title: "Couldn’t open file", description: Text(error)) {
                         Button("Try again") { retry += 1 }
                     }.centered
-                } else { VStack(spacing: 16) { ProgressView(value: progress).frame(maxWidth: 180); Text("Opening \(name)…").font(.footnote).foregroundStyle(.secondary) } }
+                } else {
+                    MediaSkeleton(symbol: "doc")
+                        .accessibilityLabel("Opening \(name)").accessibilityValue(progress.formatted(.percent))
+                }
         }
     }
     private func cleanup() { if let folder { try? FileManager.default.removeItem(at: folder) }; folder = nil; url = nil }
@@ -303,7 +306,8 @@ struct FileOptionsMenu: View {
                     AtlasSaveButton(session: session, source: source, owner: owner, knownSaved: retention,
                                     onFailure: { permissionDenied = false; error = $0 })
                 } else {
-                    Button {} label: { Label("Checking Atlas…", image: "registry-globe") }.disabled(true)
+                    Button {} label: { Label("Keep in Atlas", image: "registry-globe") }.disabled(true)
+                        .accessibilityValue("Checking Atlas")
                 }
             } else if savedInAtlas { Label("Saved in Atlas", systemImage: "checkmark") }
             if let openSourceChat { Button("Open chat with source", systemImage: "bubble.left", action: openSourceChat) }

@@ -86,8 +86,6 @@ private struct ChatToolRow: View {
     @State private var expanded = false
     @State private var fullContent: ToolContentSelection?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var providerID: String { session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? "" }
-    private var animate: Bool { session.isConnected && session.conversations.first { $0.id == session.viewingRunID }?.isActive == true }
     var body: some View {
         let view = ToolPresentation(call, status: displayStatus)
         let statFirst = view.kind == .glob || view.kind == .view
@@ -97,10 +95,7 @@ private struct ChatToolRow: View {
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 6) {
-                    Group {
-                        if view.running { AgentAsciiSpinner(providerID: providerID, animated: animate) }
-                        else { RegistryIcon(token: view.icon, size: 16, tint: tint) }
-                    }.frame(width: 16)
+                    RegistryIcon(token: view.icon, size: 16, tint: tint).frame(width: 16)
                     Text(view.verb).fontWeight(.medium).foregroundStyle(tint).lineLimit(1).layoutPriority(1)
                     if statFirst { stat(view.stat) }
                     if !view.detail.isEmpty {

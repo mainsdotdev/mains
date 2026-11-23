@@ -283,8 +283,8 @@ struct ModelEffortPicker: View {
                 HStack {
                     Text("Effort").foregroundStyle(.secondary)
                     Spacer()
-                    if showingModelSave { ProgressView().controlSize(.mini).accessibilityLabel("Saving model") }
-                    Text(preview ?? effort)
+                    Text(preview ?? effort).opacity(showingModelSave ? 0.5 : 1)
+                        .accessibilityValue(showingModelSave ? "Saving model" : "")
                 }.font(.subheadline).padding(.horizontal, 28).frame(height: effortCaptionHeight)
                     .opacity(showsCaption ? 1 : 0).accessibilityHidden(!showsCaption)
                 ZStack {
@@ -292,7 +292,9 @@ struct ModelEffortPicker: View {
                         EffortControlPanel(providerID: providerID, model: model, settings: settings, baseKind: kind,
                                            canInteract: enabled, saving: saving, expanded: true,
                                            expandedControlHeight: effortControlHeight, onPreview: { preview = $0 }, onChange: updateEffort)
-                    } else if loading { ProgressView() }
+                    } else if loading {
+                        SkeletonLine(width: 224, height: 34).accessibilityLabel("Loading effort options…")
+                    }
                 }
                 .frame(height: effortControlHeight + 16)
             }

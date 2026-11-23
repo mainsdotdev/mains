@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_MODEL_EDITING_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY } from "@mains/contracts/assistants";
 import { CHANNELS } from "@mains/contracts/channels";
 import { MOBILE_GOAL_CONTROLS_CAPABILITY, MOBILE_GOAL_SUMMARY_CAPABILITY } from "@mains/contracts/provider-goals";
+import { MATE_REALTIME_CONVERSATION_CAPABILITY } from "@mains/contracts/realtime";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { assertAuthActive, createAuthFence, createAuthGrants } from "@mains/contracts/auth-lifecycle";
 import { registeredChannels } from "../../ipc-kit";
@@ -302,6 +303,9 @@ export const backendService = {
       namespaces.push(MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_MODEL_EDITING_CAPABILITY);
     }
     if (reachable.includes(CHANNELS.assistants.createTeam)) namespaces.push(MOBILE_MATE_TEAM_CREATION_CAPABILITY);
+    if (reachable.includes(CHANNELS.runs.createRealtimeConversation) && reachable.includes(CHANNELS.runs.startRealtime)) {
+      namespaces.push(MATE_REALTIME_CONVERSATION_CAPABILITY);
+    }
     if (reachable.includes(CHANNELS.providers.getMobileGoalSummary)) namespaces.push(MOBILE_GOAL_SUMMARY_CAPABILITY);
     if (reachable.includes(CHANNELS.providers.getMobileGoalSummary) && reachable.includes(CHANNELS.providers.changeMobileGoal)) {
       namespaces.push(MOBILE_GOAL_CONTROLS_CAPABILITY);

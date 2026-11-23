@@ -35,12 +35,13 @@ struct AtlasSaveButton: View {
                 }
             }
         } label: {
-            let title = saving ? "Keeping…" : isChecking ? "Checking Atlas…" : statusError != nil ? "Retry Atlas check" : isSaved ? "Saved in Atlas" : "Keep in Atlas"
+            let title = saving ? "Keeping…" : statusError != nil ? "Retry Atlas check" : isSaved ? "Saved in Atlas" : "Keep in Atlas"
             if isSaved { Label(title, systemImage: "checkmark") }
             else { Label(title, image: "registry-globe") }
         }
         .disabled(isSaved || saving || isChecking || !session.canSaveToAtlas || owner != session.ownership || session.conversations.first(where: { $0.id == source.runId })?.isReplica == true)
         .accessibilityIdentifier("saveToAtlas")
+        .accessibilityValue(isChecking ? "Checking Atlas" : "")
         .onChange(of: source) { _, _ in operation = UUID(); saved = false; saving = false; error = nil }
         .task(id: readKey) {
             guard knownSaved == nil, !saving, owner == session.ownership, session.isConnected else { checking = false; return }
@@ -110,8 +111,7 @@ struct MoveAtlasItemView: View {
                            isSelectionKnown: selection.projectKnown, canMove: canMove, error: error,
                            rowIdentifier: { "atlasMove-" + ($0 ?? "none") }, move: move) {
             if saving {
-                HStack(spacing: 12) { ProgressView(); Text("Moving item…").foregroundStyle(.secondary) }
-                    .padding()
+                Text("Moving item…").foregroundStyle(.secondary).padding()
             } else if session.pendingAtlasSave?.status == .uncertain {
                 Text("The change hasn’t been confirmed. Close this sheet and use Check change to confirm it.")
                     .font(.subheadline).foregroundStyle(.secondary).padding()

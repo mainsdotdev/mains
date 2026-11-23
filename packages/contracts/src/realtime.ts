@@ -31,6 +31,8 @@ export interface VoiceTaskLink {
 /** Prepare a conversation without sending a prompt or starting a work turn. */
 export interface CreateRealtimeConversationPayload {
   accountId: string;
+  /** Uses the Mate's pinned Work profile instead of a caller-selected target. */
+  assistantId?: string;
   spaceId?: string;
   workspaceId?: string;
   collectionId?: string;
@@ -40,7 +42,10 @@ export interface CreateRealtimeConversationPayload {
 
 export interface CreateRealtimeConversationResponse {
   runId: string;
+  assistantId?: string;
 }
+
+export const MATE_REALTIME_CONVERSATION_CAPABILITY = "mateRealtimeConversation";
 
 export interface RunRealtimeStartPayload {
   runId: string;

@@ -33,6 +33,53 @@ extension View {
                 }
             }
     }
+
+    func pullToRefresh(_ refresh: @escaping @MainActor () async -> Void) -> some View {
+        modifier(PullToRefresh(refresh: refresh))
+    }
+}
+
+private struct PullToRefresh: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    private static let threshold: CGFloat = 72
+    let refresh: @MainActor () async -> Void
+    @State private var dragging = false
+    @State private var armed = false
+    @State private var refreshTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .scrollBounceBehavior(.always, axes: .vertical)
+            .onScrollGeometryChange(for: Bool.self) { Self.pulledFarEnough($0) } action: { _, pastThreshold in
+                if dragging && pastThreshold { armed = true }
+            }
+            .onScrollPhaseChange { old, phase, context in
+                dragging = phase == .interacting
+                if old == .interacting && !dragging {
+                    if armed || Self.pulledFarEnough(context.geometry) { startRefresh() }
+                    armed = false
+                }
+            }
+            .accessibilityAction(named: Text("Refresh")) { startRefresh() }
+            .onDisappear {
+                refreshTask?.cancel()
+                dragging = false; armed = false
+            }
+    }
+
+    private static func pulledFarEnough(_ geometry: ScrollGeometry) -> Bool {
+        geometry.contentOffset.y + geometry.contentInsets.top < -threshold
+    }
+
+    private func startRefresh() {
+        guard refreshTask == nil else { return }
+        refreshTask = Task {
+            defer { refreshTask = nil }
+            await refresh()
+        }
+    }
 }
 
 struct DisconnectedState: View {
@@ -53,46 +100,79 @@ struct DisconnectedState: View {
     }
 }
 
-/// A quiet, indeterminate loader for screens and panes with content still to read.
-struct ContentLoadingView: View {
+struct ContentSkeleton: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    let title: LocalizedStringKey
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var visible = false
+    enum Layout { case rows, text, fields }
+    let label: LocalizedStringKey
+    var layout: Layout = .rows
+    var count = 3
 
     var body: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .controlSize(.small)
-                .tint(AppBrand.accent)
-                .accessibilityHidden(true)
-            Text(title)
-                .font(.subheadline)
-                .foregroundStyle(Color(.secondaryLabel))
-                .multilineTextAlignment(.center)
+        VStack(alignment: .leading, spacing: layout == .rows ? 16 : 10) {
+            ForEach(0..<count, id: \.self) { index in
+                switch layout {
+                case .rows:
+                    HStack(spacing: 12) {
+                        RoundedRectangle(cornerRadius: 8).fill(SkeletonLine.fill).frame(width: 32, height: 32)
+                        VStack(alignment: .leading, spacing: 6) {
+                            SkeletonLine(width: index.isMultiple(of: 2) ? 156 : 126, height: 12)
+                            SkeletonLine(width: 86, height: 8)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(minHeight: AppListStyle.minimumContentHeight)
+                case .text:
+                    SkeletonLine(width: index % 3 == 2 ? 190 : 560, height: 11)
+                case .fields:
+                    SkeletonLine(width: index.isMultiple(of: 2) ? 110 : 192, height: 14)
+                        .frame(height: AppListStyle.minimumContentHeight, alignment: .leading)
+                }
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 24)
-        .frame(maxWidth: .infinity)
-        .opacity(visible ? 1 : 0)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: visible)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("contentLoading")
-        .accessibilityHidden(!visible)
-        .task {
-            do { try await Task.sleep(for: .milliseconds(220)) }
-            catch { return }
-            visible = true
-        }
-        .onDisappear { visible = false }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(label))
+        .accessibilityIdentifier("contentSkeleton")
     }
 
     var listRow: some View {
         self.listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
+    }
+}
+
+struct MediaSkeleton: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    var symbol = "photo"
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 16).fill(SkeletonLine.fill)
+            .aspectRatio(1.5, contentMode: .fit)
+            .overlay { Image(systemName: symbol).font(.title2).foregroundStyle(.secondary) }
+            .frame(maxWidth: 156)
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+    }
+}
+
+struct SkeletonLine: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    static let fill = Color.primary.opacity(0.12)
+    let width: CGFloat
+    let height: CGFloat
+    @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 4).fill(Self.fill)
+            .frame(maxWidth: width)
+            .frame(height: height * scale)
     }
 }
 

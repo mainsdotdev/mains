@@ -48,7 +48,6 @@ struct ConversationOutputsPane: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Menu {
-                    if loading { Text("Loading outputs…") }
                     ForEach(page?.items ?? []) { output in
                         Button(output.name, systemImage: output.previewType == "image" ? "photo" : "doc.text") {
                             selection = ConversationOutputSelection(source: .output(output), owner: owner)
@@ -64,7 +63,7 @@ struct ConversationOutputsPane: View {
                         Text(selection?.title ?? "Outputs").fontWidth(.expanded).lineLimit(1).truncationMode(.middle)
                         Image(systemName: "chevron.down").font(.caption2)
                     }.font(.subheadline.weight(.medium)).frame(minHeight: 44)
-                }.accessibilityLabel("Choose output").accessibilityIdentifier("chooseCompanionOutput")
+                }.disabled(loading && page == nil).accessibilityLabel("Choose output").accessibilityIdentifier("chooseCompanionOutput")
                 Spacer(minLength: 0)
                 Button { reload += 1 } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44).contentShape(.rect) }
                     .accessibilityLabel("Refresh outputs").disabled(loading || !session.isConnected)
@@ -75,7 +74,7 @@ struct ConversationOutputsPane: View {
             if let selection, selection.owner == session.ownership {
                 preview(selection).id(selection.id).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if loading {
-                ContentLoadingView(title: "Loading outputs…").frame(maxHeight: .infinity)
+                ContentSkeleton(label: "Loading outputs…").frame(maxHeight: .infinity, alignment: .top)
             } else {
                 EmptyStateView(artwork: .documents, title: "No outputs yet",
                                description: Text("Files from this conversation appear here.")).centered

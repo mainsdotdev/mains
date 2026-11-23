@@ -73,12 +73,13 @@ struct InlineContextText: View {
     #endif
     let text: String
     let skills: [ContextSkill]
+    let ink: Color
     @State private var artwork = ContextArtwork()
     @Environment(\.mateMentionAvatars) private var mateAvatars
     @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 17
     var body: some View {
         let projection = ContextText(text, skills: skills, canonical: true)
-        rendered(projection).accessibilityLabel(projection.readable)
+        rendered(projection).foregroundStyle(ink).accessibilityLabel(projection.readable)
             .task(id: skills) { await artwork.load(skills) }
     }
     private func rendered(_ projection: ContextText) -> Text {
@@ -89,7 +90,7 @@ struct InlineContextText: View {
             let skill = mention.skill
             let avatar = ContextArtwork.matePreset(skill, avatars: mateAvatars).flatMap { MateRobotAssets.image(for: $0) }
             let size = skill.mateID == nil ? iconSize : iconSize * 1.18
-            let icon = ContextArtwork.icon(avatar ?? artwork.images[skill.name], skill: skill, size: size, tint: .white)
+            let icon = ContextArtwork.icon(avatar ?? artwork.images[skill.name], skill: skill, size: size, tint: UIColor(ink))
             let symbol = Text(Image(uiImage: icon).renderingMode(.original)).baselineOffset(-iconSize * 0.14 - (size - iconSize) / 2)
             let title = Text((skill.mateID == nil ? " " : "\u{00a0}") + skill.mentionTitle).fontWeight(.semibold)
             result = Text("\(result)\(prefix)\(symbol)\(title)")

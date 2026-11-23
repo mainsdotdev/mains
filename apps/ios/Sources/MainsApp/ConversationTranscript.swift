@@ -1,6 +1,38 @@
 import SwiftUI
 import Observation
 
+struct ConversationSkeleton: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let isMate: Bool
+
+    var body: some View {
+        VStack(spacing: 24) {
+            message([152, 96], alignment: .trailing, boxed: true)
+            message([246, 222, 148], alignment: .leading, boxed: isMate)
+            message([108], alignment: .trailing, boxed: true)
+            message([230, 164], alignment: .leading, boxed: isMate)
+        }
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(isMate ? Text("Loading Mate chat…") : Text("Loading conversation…"))
+    }
+
+    private func message(_ widths: [CGFloat], alignment: Alignment, boxed: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            ForEach(widths, id: \.self) { width in
+                SkeletonLine(width: width, height: 11)
+            }
+        }
+        .padding(.horizontal, boxed ? 16 : 0)
+        .padding(.vertical, boxed ? 14 : 3)
+        .background(boxed ? SkeletonLine.fill.opacity(0.5) : .clear, in: .rect(cornerRadius: 22))
+        .padding(.leading, alignment == .trailing ? 56 : 0)
+        .frame(maxWidth: .infinity, alignment: alignment)
+    }
+}
+
 @MainActor @Observable
 final class TranscriptScrollState {
     private(set) var paging = false
@@ -103,9 +135,11 @@ struct ConversationTranscript: View {
         let pending = self.pending
         let searchRowID = self.searchRowID
         let isMate = run?.assistantId != nil
+        let historyError = session.viewingRunID == runID ? session.historyError : nil
         let empty = rows.isEmpty && pending == nil && run?.isActive != true
         let needsConnection = empty && !session.isConnected
-        let showsEmptyState = needsConnection || empty && !session.historyLoading && session.historyError == nil
+        let waitsForHistory = session.isConnected && page == nil && rows.isEmpty && pending == nil && historyError == nil
+        let showsEmptyState = needsConnection || empty && !waitsForHistory && historyError == nil
         let sections = TranscriptSection.build(rows, foldsResponses: !isMate)
         let liveSectionID = run?.isActive == true && !session.transcript.isHistorical ? sections.last?.id : nil
         let forkRowID = isMate || run?.isReplica == true ? nil : TranscriptForkAnchor.rowID(
@@ -118,19 +152,19 @@ struct ConversationTranscript: View {
             VStack(alignment: .leading, spacing: 24) {
                 if page?.hasOlder == true {
                     Button { navigate("older") } label: {
-                        HStack(spacing: 8) {
-                            if loadingDirection == "older" { ProgressView().controlSize(.mini) }
-                            Text(loadingDirection == "older" ? "Loading earlier messages…" : "Load earlier messages")
-                        }.font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        Text("Load earlier messages")
+                            .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 8)
+                            .opacity(loadingDirection == "older" ? 0.5 : 1)
                     }.buttonStyle(.plain).disabled(session.historyLoading || scroll.paging || !session.isConnected)
                         .accessibilityIdentifier("loadEarlierMessages")
                 }
                 Color.clear.frame(height: 1).id("transcript-top")
                 if needsConnection {
                     DisconnectedState(title: "Not downloaded yet", message: "Reconnect to your computer to load this conversation.")
-                } else if session.historyLoading && rows.isEmpty {
-                    ContentLoadingView(title: "Loading conversation…").padding(.vertical, 24)
-                } else if empty && session.historyError == nil {
+                } else if waitsForHistory {
+                    ConversationSkeleton(isMate: isMate)
+                        .accessibilityIdentifier("conversationSkeleton")
+                } else if empty && historyError == nil {
                     EmptyStateView(artwork: .chats, title: "Pick up where you left off",
                                    description: Text("Send a message to continue with \(Provider.name(providerID))."))
                 }
@@ -157,14 +191,13 @@ struct ConversationTranscript: View {
                     }.buttonStyle(ChatPressStyle()).disabled(!session.isConnected)
                         .accessibilityIdentifier("moreConversationActivity")
                 }
-                if !needsConnection, let error = session.historyError {
+                if !needsConnection, let error = historyError {
                     ChatNotice(title: "Messages couldn't load", message: error, symbol: "wifi.exclamationmark", warning: true,
                                horizontalInset: Self.noticeInset) {
                         Button("Retry") { navigate(session.historyRetryDirection) }
                             .disabled(!session.isConnected || session.historyLoading || scroll.paging)
                     }
                 }
-                if loadingDirection == "newer" { ProgressView().controlSize(.small).frame(maxWidth: .infinity).accessibilityLabel("Loading messages") }
                 RunDecisionCards(session: session, runID: runID, providerID: providerID)
                 ZStack(alignment: .leading) {
                     Color.clear.frame(height: 24).accessibilityHidden(true)
@@ -180,6 +213,7 @@ struct ConversationTranscript: View {
             .coordinateSpace(name: "transcript-content")
             .animation(nil, value: rows)
         }
+        .scrollEdgeEffectStyle(.soft, for: .top)
         .scrollPosition($scrollPosition)
         .accessibilityIdentifier("conversationTranscript")
         .onPreferenceChange(TranscriptFramesKey.self) { frames in
@@ -260,12 +294,12 @@ struct ConversationTranscript: View {
         if session.stoppingRunID == runID {
             if isMate {
                 AgentActivityView(activity: AgentActivity(thinking: "Stopping reply…"), artwork: activityArtwork)
-            } else { ChatActivity(title: "Stopping reply…", symbol: "stop.circle", busy: true) }
+            } else { ChatActivity(title: "Stopping reply…", symbol: "stop.circle") }
         } else if session.waitingForDecision {
             EmptyView()
         } else if run?.isActive == true {
             if !session.isConnected {
-                ChatActivity(title: "Reply continues on your computer", symbol: "sparkle", busy: false)
+                ChatActivity(title: "Reply continues on your computer", symbol: "sparkle")
             } else if !session.transcript.isHistorical, run?.status == "queued" {
                 AgentActivityView(activity: AgentActivity(thinking: "Queued"), artwork: activityArtwork)
             } else if !session.transcript.isHistorical, session.viewingRunID == runID, let activity = session.transcript.activity,
@@ -273,7 +307,7 @@ struct ConversationTranscript: View {
                 AgentActivityView(activity: activity, artwork: activityArtwork)
             }
         } else if run?.status == "canceled" {
-            ChatActivity(title: "Reply stopped", symbol: "stop.circle", busy: false)
+            ChatActivity(title: "Reply stopped", symbol: "stop.circle")
         } else if run?.status == "failed", run?.archivedReplyError == nil {
             ChatNotice(title: "Reply interrupted", message: run?.lastError ?? "You can send a follow-up to continue.",
                        symbol: "exclamationmark.circle", warning: true, horizontalInset: Self.noticeInset) { EmptyView() }
@@ -383,7 +417,9 @@ private struct ConversationActivitySheet: View {
                 }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
             }
             .id(page?.start).defaultScrollAnchor(.top)
-            .overlay { if loading && rows.isEmpty { ContentLoadingView(title: "Loading conversation activity…") } }
+            .overlay(alignment: .top) {
+                if loading && rows.isEmpty { ConversationSkeleton(isMate: isMate).padding(20) }
+            }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 8) {
                     if let error {

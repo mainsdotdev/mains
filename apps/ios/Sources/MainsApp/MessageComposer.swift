@@ -59,11 +59,14 @@ struct MessageComposer: View {
     private var speed: ComposerSpeed? { ComposerSpeed(model: selectedModel, providerID: context.providerId) }
     #if MAINS_GPT_LIVE
     private var ownsVoice: Bool {
-        session.voice.ownsCall && (session.voice.runID == context.runID && context.runID != nil || context.runID == nil && voiceStartOwner == session.ownership)
+        guard session.voice.ownsCall else { return false }
+        if let id = context.runID { return session.voice.runID == id }
+        if let mate = context.mate { return session.voiceMate?.id == mate.id && session.voice.runID == nil }
+        return voiceStartOwner == session.ownership && session.voiceMate == nil && session.voiceSpaceID == context.spaceID
     }
     private var voiceStartAvailability: BackendSession.VoiceStartAvailability {
         guard AppFeatures.gptLiveEnabled, !context.saving(session) else { return .unavailable }
-        return session.voiceStartAvailability(runID: context.runID, spaceID: context.spaceID)
+        return session.voiceStartAvailability(runID: context.runID, spaceID: context.spaceID, mate: context.mate)
     }
     #endif
     private var effort: String? {
@@ -98,10 +101,7 @@ struct MessageComposer: View {
                     .frame(maxWidth: .infinity).padding(.bottom, 4)
             }
             if ownsVoice && session.voice.phase == .connecting {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small).accessibilityHidden(true)
-                    Text("Connecting voice…")
-                }.font(.footnote).foregroundStyle(.secondary)
+                Text("Connecting voice…").font(.footnote).foregroundStyle(.secondary)
             }
             if ownsVoice && voicePresentation == .focus { focusComposer }
             else { standardComposer }
@@ -132,10 +132,20 @@ struct MessageComposer: View {
         }
     #if MAINS_GPT_LIVE
         .onChange(of: session.voice.runID) { _, id in
-            if let id, context.runID == nil, voiceStartOwner == session.ownership, session.selectedSpaceID == context.spaceID { voiceCreated?(id) }
+            guard let id, context.runID == nil, voiceStartOwner == session.ownership else { return }
+            if let mate = context.mate {
+                guard session.voiceMate?.id == mate.id else { return }
+            } else {
+                guard session.voiceMate == nil, session.selectedSpaceID == context.spaceID else { return }
+            }
+            voiceStartOwner = nil
+            voiceCreated?(id)
         }
         .onChange(of: session.ownership) { _, _ in
             approvedVoiceConsentOwner = nil; voiceConsent = nil
+        }
+        .onDisappear {
+            if context.mate != nil { voiceStartOwner = nil }
         }
         .sheet(item: $voiceConsent, onDismiss: resumeVoiceAfterConsent) { request in
             ConsentView(context: request.context) {
@@ -164,7 +174,7 @@ struct MessageComposer: View {
     }
     private var standardComposer: some View {
         let expanded = context.lockedProfile && (focused || !draft.text.isEmpty)
-        let compactMatePage = context.lockedProfile && context.runID == nil && !expanded
+        let compactMate = context.lockedProfile && !expanded
         return VStack(alignment: .leading, spacing: 4) {
             if let error = draft.storageError { Text(error).font(.caption).foregroundStyle(.orange).padding(.horizontal, 12).padding(.top, 8).accessibilityIdentifier("draftStorageError") }
             if !draft.attachments.isEmpty {
@@ -195,7 +205,7 @@ struct MessageComposer: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, compactMatePage ? 4 : 8)
+        .padding(.horizontal, 8).padding(.vertical, compactMate ? 4 : 8)
         .modifier(GlassSurface(radius: 34, interactive: false))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("messageComposer")
@@ -205,8 +215,7 @@ struct MessageComposer: View {
 
     private var textEditor: some View {
         ContextTextEditor(text: $draft.text, skills: $draft.contextSkills, scope: contextScope, focused: $focused,
-            placeholder: context.lockedProfile ? (context.runID == nil ? "Message \(context.name)" : "Message this Mate…")
-                : (context.runID == nil ? "Start a run in \(context.name)" : "Continue this run…"),
+            placeholder: context.placeholder,
             identifier: context.runID == nil ? "homeMessageInput" : "messageInput")
     }
 
@@ -256,16 +265,13 @@ struct MessageComposer: View {
             .accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
     }
 
-    private func stopActionIcon(symbol: String = "stop.fill", useMateTint: Bool = true) -> some View {
-        let tint = useMateTint ? mateTint : nil
-        let ink = tint ?? .white
-        let fill = tint?.mix(with: .black, by: 0.62, in: .device) ?? Provider.accent(context.providerId)
-        return Group {
-            if stopping { ProgressView().tint(ink) }
-            else { Image(systemName: symbol).font(.callout.weight(.semibold)) }
-        }
-        .frame(width: 36, height: 36).foregroundStyle(ink)
-        .background(fill, in: .circle)
+    private var composerAccent: Color { mateTint ?? Provider.accent(context.providerId) }
+
+    private func stopActionIcon(symbol: String = "stop.fill") -> some View {
+        Image(systemName: symbol).font(.callout.weight(.semibold))
+        .opacity(stopping ? 0.5 : 1)
+        .frame(width: 36, height: 36).foregroundStyle(.white)
+        .background(composerAccent, in: .circle)
         .frame(width: 44, height: 44).contentShape(.circle)
     }
 
@@ -281,8 +287,7 @@ struct MessageComposer: View {
                 if ownsVoice { Task { await session.voice.stop() } }
                 if active { stop?() }
             } label: {
-                stopActionIcon(symbol: ownsVoice && session.voice.phase == .stopFailed ? "arrow.clockwise" : "stop.fill",
-                               useMateTint: !ownsVoice)
+                stopActionIcon(symbol: ownsVoice && session.voice.phase == .stopFailed ? "arrow.clockwise" : "stop.fill")
             }.buttonStyle(ChatPressStyle()).disabled(ownsVoice ? session.voice.phase == .ending : !session.isConnected || stopping)
                 .accessibilityLabel(ownsVoice ? session.voice.phase == .stopFailed ? "Retry ending voice chat" : "End voice chat" : stopping ? "Stopping reply" : "Stop reply")
                 .accessibilityIdentifier(ownsVoice ? "endVoice" : "stopReply")
@@ -290,7 +295,7 @@ struct MessageComposer: View {
             Button(action: prepareVoice) {
                 Image(systemName: "waveform").font(.system(size: 18, weight: .medium))
                     .frame(width: 36, height: 36).foregroundStyle(.white)
-                    .background(Provider.accent(context.providerId), in: .circle)
+                    .background(composerAccent, in: .circle)
                     .frame(width: 44, height: 44).contentShape(.circle)
             }.buttonStyle(ChatPressStyle()).disabled(voiceStartAvailability == .unavailable)
                 .accessibilityLabel("Start GPT Live").accessibilityIdentifier("startVoice")
@@ -348,11 +353,11 @@ struct MessageComposer: View {
                     Task { await session.voice.stop() }
                     if active { stop?() }
                 } label: {
-                    Group {
-                        if session.voice.phase == .ending { ProgressView() }
-                        else { Image(systemName: session.voice.phase == .stopFailed ? "arrow.clockwise" : "xmark").font(.system(size: 22, weight: .medium)) }
-                    }
-                    .frame(width: 52, height: 52).foregroundStyle(Color(.systemBackground)).background(.primary, in: .circle)
+                    Image(systemName: session.voice.phase == .stopFailed ? "arrow.clockwise" : "xmark")
+                    .font(.system(size: 22, weight: .medium)).opacity(session.voice.phase == .ending ? 0.5 : 1)
+                    .frame(width: 52, height: 52)
+                    .foregroundStyle(mateTint == nil ? Color(.systemBackground) : .white)
+                    .background(mateTint ?? .primary, in: .circle)
                 }
                 .disabled(session.voice.phase == .ending)
                 .accessibilityLabel(session.voice.phase == .stopFailed ? "Retry ending voice chat" : "End voice chat").accessibilityIdentifier("endVoice")
@@ -396,6 +401,9 @@ struct MessageComposer: View {
     private func validateVoiceStart() -> Bool {
         let availability = voiceStartAvailability
         if availability == .workspaceRequired { onVoiceWorkspaceRequired?() }
+        if availability == .mateHostUpdateRequired {
+            session.actionError = "Update Mains on your computer to start a new Mate voice chat. You can also start voice from an existing chat."
+        }
         return availability == .ready
     }
     private func prepareVoice() {
@@ -417,7 +425,7 @@ struct MessageComposer: View {
         Task {
             guard owner == session.ownership, validateVoiceStart() else { return }
             focused = false; voiceStartOwner = owner
-            await session.startVoice(runID: context.runID, spaceID: context.spaceID)
+            await session.startVoice(runID: context.runID, spaceID: context.spaceID, mate: context.mate)
         }
     }
     #endif
@@ -476,10 +484,8 @@ struct ComposerSendButton: View {
     var body: some View {
         let ink = Color.white
         Button(action: action) {
-            Group {
-                if sending { ProgressView().tint(ink) }
-                else { Image(systemName: "arrow.up").font(.system(size: 18, weight: .medium)) }
-            }
+            Image(systemName: "arrow.up").font(.system(size: 18, weight: .medium))
+            .opacity(sending ? 0.5 : 1)
             .frame(width: 36, height: 36).foregroundStyle(ink)
             .background(mateTint ?? Provider.accent(providerID), in: .circle)
             .frame(width: 44, height: 44).contentShape(.circle)

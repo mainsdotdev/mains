@@ -21,7 +21,7 @@ struct VoiceSettingsView: View {
         List {
             Section {
                 if session.loadingVoiceSettings && choices.isEmpty {
-                    ContentLoadingView(title: "Loading voices…").listRow
+                    ContentSkeleton(label: "Loading voices…").listRow
                 }
                 if !session.isConnected {
                     Label("Connect to your computer to change voices.", systemImage: "wifi.slash")
@@ -39,7 +39,7 @@ struct VoiceSettingsView: View {
                     }
                 }
                 if session.savingVoiceSettings {
-                    HStack(spacing: 12) { ProgressView(); Text("Saving voice…").foregroundStyle(.secondary) }
+                    Text("Saving voice…").foregroundStyle(.secondary)
                 }
                 if let selected = session.selectedRealtimeVoice, !choices.contains(selected) {
                     Text("\(name(selected)) is no longer available. Choose another voice.")

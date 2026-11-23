@@ -111,8 +111,7 @@ struct PairingView: View {
                             }.font(.subheadline.weight(.semibold))
                         }
                     } else {
-                        ProgressView()
-                        Text("Opening camera…").font(.subheadline).foregroundStyle(.secondary)
+                        MediaSkeleton(symbol: "qrcode.viewfinder").accessibilityLabel("Opening camera")
                     }
                 }.padding(28)
             }
@@ -206,10 +205,8 @@ struct PairingView: View {
     }
     private var pairButton: some View {
         Button(action: pair) {
-            HStack(spacing: 8) {
-                if session.pairingInProgress { ProgressView().tint(.white) }
-                Text(session.pairingInProgress ? "Pairing…" : "Pair with this computer")
-            }.fixedSize(horizontal: true, vertical: false)
+            Text(session.pairingInProgress ? "Pairing…" : "Pair with this computer")
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(PairingActionStyle(compact: true)).disabled(session.pairingInProgress)
         .accessibilityIdentifier("confirmPairing")

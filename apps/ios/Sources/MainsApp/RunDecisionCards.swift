@@ -60,7 +60,6 @@ private struct PendingApprovalCard: View {
                     Label(isTool ? display.label : approval.kind == "ask_user" ? "Question" : "Input needed",
                           systemImage: isTool ? display.symbol : "questionmark.bubble")
                         .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, alignment: .leading)
-                    if delivery.phase == .sending { ProgressView().controlSize(.mini) }
                     if let risk = display.risk {
                         Text("\(risk.capitalized) risk").font(.caption2.weight(.medium)).foregroundStyle(risk == "high" ? .red : risk == "medium" ? .orange : .green)
                     }
@@ -311,7 +310,6 @@ private struct AsyncQuestionCard: View {
                 HStack {
                     Label("Question", systemImage: "questionmark.bubble").foregroundStyle(accent)
                     Spacer()
-                    if delivery.phase == .sending { ProgressView().controlSize(.mini) }
                     Text("\(index + 1) of \(pending.questions.count)").foregroundStyle(.secondary)
                 }.font(.subheadline.weight(.semibold))
                 Text(question.title).font(.headline.width(.expanded)).accessibilityIdentifier("asyncQuestionTitle")
@@ -441,7 +439,7 @@ private struct DecisionRecovery: View {
     let check: () -> Void
     var body: some View {
         Button(action: check) {
-            HStack { if delivery.phase == .sending { ProgressView().controlSize(.small) }; Text(delivery.phase == .sending ? "Checking delivery…" : "Check delivery") }
+            Text(delivery.phase == .sending ? "Checking delivery…" : "Check delivery")
         }.buttonStyle(DecisionActionStyle(accent: .blue, prominent: true)).disabled(!enabled || delivery.phase == .sending).accessibilityIdentifier("decisionCheckDelivery")
     }
 }
