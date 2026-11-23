@@ -291,6 +291,7 @@ export const runsApi = baseApi.injectEndpoints({
       query: (id) => ({
         handler: CHANNELS.runs.getById,
         args: [id],
+        timeoutMs: 10_000,
       }),
       providesTags: (_result, _error, id) => [{ type: "Runs", id }],
     }),

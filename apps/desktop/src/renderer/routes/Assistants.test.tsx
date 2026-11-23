@@ -274,6 +274,20 @@ describe("assistant profile and conversation", () => {
     expect(screen.getByTestId("conversation").textContent).toBe("second");
   });
 
+  it("can retry the chat list before the first conversation is selected", async () => {
+    mocks.loadingChats = true;
+    const view = setup("/assistants?assistant=release");
+    expect(screen.getByText("Loading conversation…").getAttribute("role")).toBe("status");
+    view.unmount();
+
+    mocks.chatsError = { error: "Could not load conversations" };
+    setup("/assistants?assistant=release");
+    expect(screen.queryByText("Loading conversation…")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toBe("Could not load conversations");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(mocks.refetchChats).toHaveBeenCalledOnce();
+  });
+
   it("shows loading, retry and empty states without mixing them with another assistant’s chats", async () => {
     mocks.loadingChats = true;
     const view = setup("/assistants?assistant=release&run=first&tab=chats");

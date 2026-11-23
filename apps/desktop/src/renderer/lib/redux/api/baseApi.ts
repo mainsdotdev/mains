@@ -16,21 +16,27 @@ const ipcBaseQuery = (): BaseQueryFn<
     handler: string;
     args?: any[];
     cancel?: { handler: string; args: unknown[] };
+    /** Bounds a read so it can be retried if the transport never replies. */
+    timeoutMs?: number;
   },
   unknown,
   unknown
-> => async ({ handler, args = [], cancel }, { signal }) => {
+> => async ({ handler, args = [], cancel, timeoutMs }, { signal }) => {
   const transport = getTransport();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   const abort = () => {
     if (cancel) void transport.invoke(cancel.handler, cancel.args).catch(() => {});
   };
   if (cancel && signal.aborted) return { error: 'Request cancelled' };
   if (cancel) signal.addEventListener('abort', abort, { once: true });
   try {
-    const result: ServiceResponse<unknown> = await transport.invoke(
-      handler,
-      args,
-    );
+    const request: Promise<ServiceResponse<unknown>> = transport.invoke(handler, args);
+    const result = await (timeoutMs === undefined ? request : Promise.race([
+      request,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('The request timed out.')), timeoutMs);
+      }),
+    ]));
 
     if (cancel && (signal.aborted || getTransport() !== transport)) return { error: 'Request cancelled' };
 
@@ -47,6 +53,7 @@ const ipcBaseQuery = (): BaseQueryFn<
       },
     };
   } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
     if (cancel) signal.removeEventListener('abort', abort);
   }
 };

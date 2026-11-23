@@ -20,14 +20,15 @@ import { voiceChatPresence } from "@/features/workspace/lib/voice-chat-presence"
 const mocks = vi.hoisted(() => ({
   send: vi.fn(), respond: vi.fn(), refetch: vi.fn(), load: vi.fn(),
   registerAppConversation: vi.fn(), attachAppRun: vi.fn(), appContext: vi.fn(),
-  run: undefined as Record<string, unknown> | undefined,
+  run: undefined as Record<string, unknown> | null | undefined,
+  runError: undefined as unknown,
   workspace: undefined as Workspace | undefined,
   context: { items: [] }, history: { historical: false }, events: [] as StreamingEvent[],
   approval: false, question: false,
   transport: { subscribe: () => () => {}, onStatusChange: () => () => {} },
 }));
 vi.mock("@/lib/redux/api", () => ({
-  useGetRunByIdQuery: () => ({ currentData: mocks.run, refetch: mocks.refetch }),
+  useGetRunByIdQuery: () => ({ currentData: mocks.run, refetch: mocks.refetch, error: mocks.runError }),
   useGetWorkspaceQuery: () => ({ currentData: mocks.workspace }),
   useAbortRunMutation: () => [vi.fn()],
 }));
@@ -71,7 +72,8 @@ beforeEach(() => {
   mocks.respond.mockReset().mockReturnValue({ unwrap: () => Promise.resolve({ runId: "welcome-run" }) });
   mocks.registerAppConversation.mockReset().mockReturnValue(() => {});
   mocks.attachAppRun.mockReset(); mocks.appContext.mockReset().mockReturnValue([]);
-  mocks.run = undefined; mocks.workspace = undefined;
+  mocks.run = undefined; mocks.runError = undefined; mocks.workspace = undefined;
+  mocks.refetch.mockReset();
   mocks.events = []; mocks.approval = false; mocks.question = false;
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
@@ -81,10 +83,39 @@ function setup(options: { selectedRunId?: string; welcome?: AssistantWelcome; se
   const legacyState = { ...assistantsReducer(undefined, { type: "init" }), draftExecutionByOwner: options.seedWorkspaceId ? { [ownerKey]: { mode: "developer", workspaceId: options.seedWorkspaceId } } : {} };
   const store = configureStore({ reducer: { assistants: assistantsReducer, workspace: workspaceReducer, appSettings: appSettingsReducer, backends: () => ({ activeBackendId: "local" }) }, preloadedState: { assistants: legacyState } });
   const selected = vi.fn();
-  const tree = () => <Provider store={store}><AssistantChat assistant={{ ...assistant, isArchived: options.archived === true }} selectedRunId={options.selectedRunId ?? null} welcome={options.welcome} onSelectRun={selected} onOpenDetails={vi.fn()} onAvatarState={options.onAvatarState} /></Provider>;
+  const openChats = vi.fn();
+  const tree = () => <Provider store={store}><AssistantChat assistant={{ ...assistant, isArchived: options.archived === true }} selectedRunId={options.selectedRunId ?? null} welcome={options.welcome} onSelectRun={selected} onOpenDetails={vi.fn()} onOpenChats={openChats} onAvatarState={options.onAvatarState} /></Provider>;
   const view = render(tree());
-  return { store, selected, ...view, update: () => view.rerender(tree()) };
+  return { store, selected, openChats, ...view, update: () => view.rerender(tree()) };
 }
+
+it("stops loading when the selected conversation no longer exists", async () => {
+  const user = userEvent.setup();
+  const view = setup({ selectedRunId: "missing" });
+  expect(screen.getByText("Loading conversation…").getAttribute("role")).toBe("status");
+
+  mocks.run = null;
+  view.update();
+  expect(screen.queryByText("Loading conversation…")).toBeNull();
+  expect(screen.getByRole("alert").textContent).toBe("This conversation could not be found.");
+  await user.click(screen.getByRole("button", { name: "View chats" }));
+  expect(view.openChats).toHaveBeenCalledOnce();
+});
+
+it("can retry a failed conversation lookup", async () => {
+  mocks.runError = { error: "The request timed out." };
+  const user = userEvent.setup();
+  const view = setup({ selectedRunId: "existing" });
+  expect(screen.getByRole("alert").textContent).toBe("The request timed out.");
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  expect(mocks.refetch).toHaveBeenCalledOnce();
+
+  mocks.runError = undefined;
+  mocks.run = { id: "existing", assistantId: assistant.id, mode: "work", status: "succeeded", createdAt: new Date() };
+  view.update();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByText("Existing transcript")).toBeTruthy();
+});
 
 it("shows an archived Mate's history without a composer or an app send handler", () => {
   mocks.run = { id: "existing", assistantId: assistant.id, status: "succeeded", mode: "work", createdAt: new Date() };
@@ -208,12 +239,29 @@ describe("assistant task location", () => {
     const user = userEvent.setup(); setup({ seedWorkspaceId: "repo" });
     await user.type(screen.getByLabelText("Message"), "Review the repo");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await screen.findByText("Lost response");
+    const failure = await screen.findByRole("alert");
+    expect(failure.textContent).toBe("Lost response");
+    expect(failure.compareDocumentPosition(screen.getByLabelText("Message")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole("button", { name: "Check delivery" }));
     await waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2));
     expect(mocks.send.mock.calls[1][0]).toEqual(mocks.send.mock.calls[0][0]);
     expect(mocks.send.mock.calls[1][0].execution).toEqual({ mode: "work" });
+  });
+  it("shows delivery errors above an existing chat's retained composer", async () => {
+    mocks.run = { id: "existing", assistantId: assistant.id, mode: "work", status: "succeeded", createdAt: new Date() };
+    mocks.send.mockReturnValueOnce({ unwrap: () => Promise.reject(new Error("This chat is archived in Codex.")) });
+    const user = userEvent.setup();
+    setup({ selectedRunId: "existing" });
+    const input = screen.getByLabelText("Message") as HTMLTextAreaElement;
+    await user.type(input, "Continue");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    const failure = await screen.findByRole("alert");
+    expect(failure.textContent).toBe("This chat is archived in Codex.");
+    expect(failure.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByLabelText("Message")).toBe(input);
+    expect(input.value).toBe("Continue");
   });
   it("starts the welcome's first task in Work", async () => {
     const user = userEvent.setup();

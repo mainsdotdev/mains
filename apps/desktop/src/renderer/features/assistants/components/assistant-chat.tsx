@@ -42,13 +42,14 @@ import type { McpAppMessageOptions } from "@/features/workspace/lib/mcp-app-cont
 const keepProfile = () => {};
 const EMPTY_EVENTS: RunEvent[] = [];
 
-export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunId, onSelectRun, onOpenDetails, onAvatarState }: {
+export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunId, onSelectRun, onOpenDetails, onOpenChats, onAvatarState }: {
   assistant: Assistant;
   welcome?: AssistantWelcome;
   animateWelcome?: boolean;
   selectedRunId: string | null;
   onSelectRun(id: string | null): void;
   onOpenDetails(): void;
+  onOpenChats(): void;
   onAvatarState?(state: AssistantAvatarState | undefined): void;
 }) {
   // The route adds the welcome run ID after this chat mounts.
@@ -65,9 +66,12 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
   const setMessage = useCallback((text: string) => dispatch(setDraftText({ key: ownerKey, text })), [dispatch, ownerKey]);
   const context = useComposerContext();
   const transport = useSyncExternalStore(onTransportChange, getTransport);
-  const { currentData: run, refetch: refreshRun, error: runError } = useGetRunByIdQuery(chatRunId ?? "", { skip: !chatRunId });
+  const { currentData: run, refetch: refreshRun, error: runError, isFetching: loadingRun } = useGetRunByIdQuery(chatRunId ?? "", { skip: !chatRunId });
   const { currentData: workspace } = useGetWorkspaceQuery(run?.workspaceId ?? "", { skip: !run?.workspaceId });
   const belongs = !chatRunId || run?.assistantId === assistant.id;
+  const runProblem = runError ? errorText(runError)
+    : run === null ? "This conversation could not be found."
+    : run && !belongs ? "This conversation belongs to another mate." : null;
   const voiceRunId = chatRunId && belongs && !archived && run?.providerId === "codex" && !run.isArchived && !run.isReplica
     ? chatRunId : null;
   useVoiceChatPresence(voiceRunId);
@@ -180,6 +184,12 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
   const stop = useCallback(() => { if (chatRunId) void abort(chatRunId).unwrap().catch(error => { if (bound.current) setFailure(errorText(error)); }); }, [chatRunId, abort]);
   const variant = assistant.providerId === "codex" ? "codex" : "claude";
   const mateColor = AVATAR_COLORS[normalizeAssistantAvatar(assistant.avatar).color].fill;
+  const failureNotice = failure && (
+    <div className="mx-auto flex w-full max-w-210 flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs text-danger">
+      <span role="alert" className="max-h-32 min-w-0 flex-1 basis-48 overflow-y-auto wrap-anywhere">{failure}</span>
+      {pending && <Button variant="ghost" className="shrink-0" disabled={preparing} onClick={() => void submit()}>Check delivery</Button>}
+    </div>
+  );
   const composer = <WorkspaceInput assistantComposer goal={pending?.message ?? message} onGoalChange={setMessage} onSubmit={() => void submit()} onStop={stop}
     isLoading={preparing || sending.isLoading} disabled={!!pending || !belongs} sendDisabled={!!pending} activeRun={visibleRun}
     canResume={!!chatRunId} providerId={assistant.providerId} mode={run?.mode ?? "work"} selectedModel={assistant.model}
@@ -203,19 +213,28 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
               : <AssistantWelcomeCard welcome={waitingWelcome} busy={welcomeResponse.isLoading || welcomePreparation.isLoading}
                   onAnswer={answerWelcome} onRetry={retryWelcome} />}
           </div>
-          {waitingWelcome.state === "skipped" && <div className="w-full">{composer}</div>}
+          {waitingWelcome.state === "skipped" ? <div className="w-full">{failureNotice}{composer}</div> : failureNotice}
         </div> : !chatRunId ? <div className={`flex min-h-0 flex-1 flex-col items-center justify-center gap-5 overflow-y-auto py-10 ${CONTENT_COLUMN_GUTTER}`}>
           <div className="text-center"><AssistantMonogram name={assistant.name} providerId={assistant.providerId} avatar={assistant.avatar} working={working} size="lg" onClick={onOpenDetails} /><h1 className="text-2xl font-medium">{assistant.name}</h1><p className="mx-auto mt-2 max-w-md text-sm text-primary-500">{assistant.description || "How can I help?"}</p></div>
-          <div className="w-full">{composer}</div>
+          <div className="relative w-full">
+            {failure && <div className="absolute inset-x-0 bottom-full z-10 mx-auto max-w-210 rounded-xl bg-primary dark:bg-primary-950">{failureNotice}</div>}
+            {composer}
+          </div>
         </div> : <>
           <div className="min-h-0 flex-1 overflow-hidden">
-            {belongs ? <WorkspaceEvents appearance="assistant" assistant={assistant} hideTurnChanges hasPendingUserInput={!!approval} mode={run?.mode ?? "work"} runs={visibleRun ? [visibleRun] : []} activeTab={chatRunId} currentEvents={events} currentWorkspace={workspace ?? null} eventsEndRef={eventsEndRef} history={history} issueTabs={[]} turns={turns} variant={variant} onSuggestionSelect={archived ? undefined : setMessage} /> : <p role={runError ? "alert" : "status"} className="p-6 text-sm text-primary-500">{runError ? errorText(runError) : run ? "This conversation belongs to another mate." : "Loading conversation…"}</p>}
+            {belongs ? <WorkspaceEvents appearance="assistant" assistant={assistant} hideTurnChanges hasPendingUserInput={!!approval} mode={run?.mode ?? "work"} runs={visibleRun ? [visibleRun] : []} activeTab={chatRunId} currentEvents={events} currentWorkspace={workspace ?? null} eventsEndRef={eventsEndRef} history={history} issueTabs={[]} turns={turns} variant={variant} onSuggestionSelect={archived ? undefined : setMessage} /> : <div className="flex flex-wrap items-center gap-x-3 gap-y-1 p-6 text-sm text-primary-500">
+              {runProblem ? <>
+                <p role="alert" className="text-danger">{runProblem}</p>
+                {runError ? <Button variant="ghost" disabled={loadingRun} onClick={() => void refreshRun()}>Retry</Button>
+                  : <Button variant="ghost" onClick={onOpenChats}>View chats</Button>}
+              </> : <p role="status">Loading conversation…</p>}
+            </div>}
           </div>
-          {!archived && <div className={CONTENT_COLUMN_GUTTER}>
+          {!archived && <div className={`shrink-0 ${CONTENT_COLUMN_GUTTER}`}>
+            {failureNotice}
             <ComposerSlot request={approval} onRespond={respond} variant={variant}>{composer}</ComposerSlot>
           </div>}
         </>}
-        {failure && <div role="alert" className="mx-auto flex max-w-210 items-center gap-3 px-6 pb-3 text-xs text-danger"><span>{failure}</span>{pending && <Button variant="ghost" className="shrink-0" disabled={preparing} onClick={() => void submit()}>Check delivery</Button>}</div>}
       </div>
     </AsyncQuestionDialogProvider>
   </PluginLogoProvider>;

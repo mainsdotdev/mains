@@ -40,7 +40,7 @@ export const assistantsApi = baseApi.injectEndpoints({
         assistantConversations: b.query<AssistantConversation[], {
             accountId: string;
             id: string;
-        }>({ query: ({ accountId, id }) => ({ handler: CHANNELS.assistants.conversations, args: [accountId, id] }), providesTags: ["AssistantChats"] }),
+        }>({ query: ({ accountId, id }) => ({ handler: CHANNELS.assistants.conversations, args: [accountId, id], timeoutMs: 10_000 }), providesTags: ["AssistantChats"] }),
         sendAssistantMessage: b.mutation<{
             runId: string;
         }, SendAssistantMessage>({ query: input => ({ handler: CHANNELS.assistants.send, args: [input] }), invalidatesTags: ["AssistantChats", "Assistants"] }),

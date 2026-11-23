@@ -45,7 +45,7 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
   const creating = params.get("new") === "1";
   const createdMateId = (location.state as { createdMateId?: string } | null)?.createdMateId;
   const animateWelcome = selectedId === createdMateId;
-  const { currentData: chats, error: chatsError, refetch: refetchChats } = useAssistantConversationsQuery({ accountId, id: selectedId ?? "" }, { skip: !selected });
+  const { currentData: chats, error: chatsError, isFetching: loadingChats, refetch: refetchChats } = useAssistantConversationsQuery({ accountId, id: selectedId ?? "" }, { skip: !selected });
   const ownerKey = assistantConversationOwner(backendId, accountId, selectedId ?? "");
   const savedView = useAppSelector(state => state.assistants.views[ownerKey]);
   const navigateChat = useCallback((id: string, replace = false) => {
@@ -149,7 +149,8 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
         </div>
       ) : runParam ? <>
         <AssistantChat key={avatarScope} assistant={selected} welcome={overview?.welcomes?.find(w => w.assistantId === selected.id && w.runId === runId)}
-          animateWelcome={animateWelcome} selectedRunId={runId} onAvatarState={reportAvatarState} onOpenDetails={() => changeTab("profile")} onSelectRun={id => {
+          animateWelcome={animateWelcome} selectedRunId={runId} onAvatarState={reportAvatarState} onOpenDetails={() => changeTab("profile")}
+          onOpenChats={() => changeTab("chats")} onSelectRun={id => {
             if (selected.isArchived) return;
             if (!id) { openChat("new"); return; }
             if (!runId) dispatch(replaceAssistantConversationDraft({ ownerKey, runId: id }));
@@ -161,7 +162,12 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
           <Button variant="subtle" disabled={archiving.isLoading} onClick={() => void toggleArchive()}>Restore mate</Button>
           {failure && <p role="alert" className="text-danger">{failure}</p>}
         </div>}
-      </> : <div className="flex flex-1 items-center justify-center text-sm text-primary-500">Loading conversation…</div>}
+      </> : <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-sm text-primary-500">
+        {chatsError ? <>
+          <p role="alert" className="text-danger">{errorText(chatsError)}</p>
+          <Button variant="ghost" disabled={loadingChats} onClick={() => void refetchChats()}>Retry</Button>
+        </> : <p role="status">Loading conversation…</p>}
+      </div>}
     </> : <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
       {error ? <><p role="alert" className="text-sm text-danger">{errorText(error)}</p><Button variant="ghost" onClick={() => void refetch()}>Retry</Button></> : isLoading || (isFetching && animateWelcome) ? <p className="text-sm text-primary-500">Loading mates…</p> : <>
         {selectedId ? <Bot className="size-8 text-primary-400" aria-hidden /> : (
