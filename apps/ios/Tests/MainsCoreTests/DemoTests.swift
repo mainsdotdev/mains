@@ -178,6 +178,46 @@ struct DemoTests {
         #expect(storage.pairing == nil && storage.snapshot == nil && storage.consents.isEmpty)
     }
 
+    @Test @MainActor func launchBriefSavesTheWorkOutputToItsAtlasProjectOffline() async throws {
+        let session = BackendSession(storage: MemoryStorage())
+        session.restore(); session.setOnline(false); session.setActive(true)
+        try session.startDemo()
+        defer { session.exitDemo() }
+        try await eventually { session.isConnected }
+
+        let project = try #require(session.collections.first { $0.name == "Work" })
+        let runID = DemoBackend.launchBriefRunID
+        let run = try #require(session.conversations.first { $0.id == runID })
+        #expect(run.mode == "work" && run.status == "succeeded" && run.collectionId == project.id)
+        await session.selectConversation(runID)
+        let media = try #require(session.transcript.rows.flatMap(\.media).first)
+        let output = try #require(try await session.listOutputs(runID).items.first)
+        #expect(media.name == output.name && media.source == .artifact(output.artifactId))
+        #expect(output.name == "iphone-launch-brief.pdf" && output.previewType == "pdf")
+        let bytes = try await session.downloadOutput(output)
+        #expect(bytes == (try DemoFile.launchBrief()).bytes)
+
+        let source = AtlasSaveSource.output(output)
+        let owner = session.ownership
+        #expect(try await session.atlasSaveStatus(source, owner: owner) == false)
+        var wrongRun = source; wrongRun.runId = DemoBackend.tourID
+        await #expect(throws: MainsError.self) { try await session.atlasSaveStatus(wrongRun, owner: owner) }
+        var query = AtlasQuery(); query.collectionID = project.id; query.scope = "saved"
+        #expect(try await session.atlasLibrary(query).items.allSatisfy { $0.title != output.name })
+
+        let saved = try await session.saveAtlasFile(source, owner: owner)
+        #expect(try await session.atlasSaveStatus(source, owner: owner) == true)
+        #expect(try await session.saveAtlasFile(source, owner: owner).id == saved.id)
+        let entries = try await session.atlasLibrary(query).items.filter { $0.sourceRunId == runID }
+        let entry = try #require(entries.first)
+        #expect(entries.count == 1 && entry.savedIdentity == saved.id && entry.collectionId == project.id)
+        let file = try await session.describeAtlasFile(try #require(entry.file))
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try await session.downloadAtlasFile(file, owner: owner, to: url)
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+
     @Test @MainActor func replayAcknowledgesStreamsAndDeduplicatesCommands() async throws {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let transport = DemoTransport(backend: backend)

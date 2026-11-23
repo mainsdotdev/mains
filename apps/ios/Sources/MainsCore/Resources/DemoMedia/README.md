@@ -5,3 +5,5 @@ Offline Atlas samples prepared from the supplied cloud artwork:
 - atlas-clouds-thumbnail.jpg: 128 × 86, library and bookmark thumbnails.
 
 JPEG variants preserve the source composition. Demo Mode reads only these bundled samples and never downloads replacement artwork.
+
+`iphone-launch-brief.pdf` is the prepared output for the iPhone launch brief Work conversation.

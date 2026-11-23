@@ -421,6 +421,8 @@ underlying tooling.
   backend. Demo links stay on-device; expiry and decline do not execute an action.
   Demo also supplies plugin, skill and command examples; sending selected context
   produces a prepared acknowledgement without invoking a plugin or external service.
+  Open **iPhone launch brief** from Activity or the Work project to try the PDF
+  preview. **Keep in Atlas** saves the brief to the same Work project.
 - The shared home/conversation composer supports **+ → Plugins** and trailing
   **@**, **/** and **$** context triggers. The inline picker keeps the keyboard open,
   groups plugins, Mac apps, skills and commands, and filters by title/description.

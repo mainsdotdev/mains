@@ -1,6 +1,14 @@
 import Foundation
 import CryptoKit
 
+private var demoMediaBundle: Bundle {
+    #if SWIFT_PACKAGE
+    Bundle.module
+    #else
+    Bundle.main
+    #endif
+}
+
 /// Prepared derivatives of the supplied cloud artwork. Never scale a list
 /// thumbnail up into a Page cover or export it in place of the full demo image.
 struct DemoAtlasMedia: Sendable {
@@ -9,13 +17,8 @@ struct DemoAtlasMedia: Sendable {
     let thumbnail: JSONValue
 
     init() throws {
-        #if SWIFT_PACKAGE
-        let bundle = Bundle.module
-        #else
-        let bundle = Bundle.main
-        #endif
         func bytes(_ name: String, limit: Int) throws -> Data {
-            guard let url = bundle.url(forResource: name, withExtension: "jpg", subdirectory: "DemoMedia"),
+            guard let url = demoMediaBundle.url(forResource: name, withExtension: "jpg", subdirectory: "DemoMedia"),
                   let data = try? Data(contentsOf: url), data.starts(with: [0xff, 0xd8]), data.count <= limit else {
                 throw MainsError.server("The demo sample images are missing or invalid.")
             }
@@ -70,6 +73,16 @@ struct DemoFile: Sendable {
     static let notes = DemoFile(name: "demo-notes.md", mime: "text/markdown", preview: "markdown",
                                bytes: Data("# Mains demo notes\n\nThese sample files stay on this iPhone.\n\n- Explore workspaces and conversations\n- Send a simulated message\n- Preview images and PDFs\n\nNo AI service or computer was contacted.\n".utf8),
                                version: String(repeating: "2", count: 64))
+
+    static func launchBrief() throws -> DemoFile {
+        let name = "iphone-launch-brief"
+        guard let url = demoMediaBundle.url(forResource: name, withExtension: "pdf", subdirectory: "DemoMedia"),
+              let bytes = try? Data(contentsOf: url), bytes.starts(with: "%PDF-".utf8), bytes.count <= 256 * 1024 else {
+            throw MainsError.server("The demo launch brief is missing or invalid.")
+        }
+        let version = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        return DemoFile(name: name + ".pdf", mime: "application/pdf", preview: "pdf", bytes: bytes, version: version)
+    }
 
     // Prepared 128-pixel version of the checked-in demo image, never real media.
     static let atlasThumbnail: JSONValue = .object([

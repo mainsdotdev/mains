@@ -2767,6 +2767,37 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["stopReply"].waitForNonExistence(timeout: 10))
     }
 
+    func testDemoLaunchBriefOpensAndSavesToAtlasWorkProject() throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        openSidebar(app); app.buttons["openWorkInbox"].tap()
+        let brief = app.buttons["inboxRun-demo-work-launch-brief"]
+        XCTAssertTrue(brief.waitForExistence(timeout: 10)); brief.tap()
+
+        let pdf = app.buttons["transcriptMedia-output:-9003"]
+        XCTAssertTrue(pdf.waitForExistence(timeout: 10)); pdf.tap()
+        XCTAssertTrue(app.otherElements["outputPreview"].waitForExistence(timeout: 10))
+        let options = app.buttons["fileOptions"]
+        XCTAssertTrue(options.waitForExistence(timeout: 5)); options.tap()
+        let save = app.buttons["saveToAtlas"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5)); XCTAssertTrue(save.isEnabled); save.tap()
+        options.tap()
+        XCTAssertTrue(app.buttons["Saved in Atlas"].waitForExistence(timeout: 5))
+        // Dismiss the options menu outside its rows before leaving the preview.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.07, dy: 0.62)).tap()
+        app.buttons["Close preview"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        openSidebar(app); app.buttons["openAtlas"].tap()
+        let saved = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "atlasItem-", "iphone-launch-brief.pdf")).firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 10))
+        XCTAssertTrue(saved.label.contains("Work")); saved.tap()
+        XCTAssertTrue(app.otherElements["atlasFilePreview"].waitForExistence(timeout: 10))
+    }
+
     func testDemoApprovalAndQuestionCards() throws {
         continueAfterFailure = false
         let app = makeApplication()
@@ -2861,11 +2892,14 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(pdf.waitForExistence(timeout: 10))
         pdf.tap()
         XCTAssertTrue(app.otherElements["outputPreview"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["shareOutput"].exists)
+        let options = app.buttons["fileOptions"]
+        XCTAssertTrue(options.waitForExistence(timeout: 5)); options.tap()
+        XCTAssertTrue(app.buttons["shareOutput"].waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.07, dy: 0.62)).tap()
         app.buttons["Close preview"].tap()
         let image = app.buttons["transcriptImage-output:9000003"]
         XCTAssertTrue(image.waitForExistence(timeout: 5)); image.tap()
-        XCTAssertTrue(app.otherElements["outputPreview"].waitForExistence(timeout: 10))
+        XCTAssertTrue(options.waitForExistence(timeout: 10))
         app.buttons["Close preview"].tap()
 
         let input = app.textViews["messageInput"]

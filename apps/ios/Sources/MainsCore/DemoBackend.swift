@@ -10,6 +10,7 @@ final class DemoBackend {
     static let tourID = "demo-native-tour"
     static let activityApprovalRunID = "demo-activity-approval"
     static let activityQueueRunID = "demo-activity-queue"
+    static let launchBriefRunID = "demo-work-launch-brief"
     static let decisionPrompt = "Walk me through approvals and questions"
     static let changesPrompt = "Show sample file changes and diffs"
     static let subagentsPrompt = "Review the sample workspace with subagents"
@@ -26,6 +27,7 @@ final class DemoBackend {
     private var spaces: [[String: JSONValue]]
     private var images: [Int: JSONValue] = [:]
     private var attachments: [String: DemoFile] = [:]
+    private var outputs: [String: [Int: DemoFile]] = [DemoBackend.tourID: [-9001: .pdf, -9002: .notes]]
     private let atlas: DemoAtlas
     private var attachmentBytes = 0
     private var nextID = 10_000_000
@@ -116,6 +118,7 @@ final class DemoBackend {
         self.stepDelay = stepDelay; self.streamDelay = streamDelay; self.decisionLifetime = decisionLifetime
         for (id, image) in data["images"].objectValue { if let id = Int(id) { images[id] = image } }
         addTour()
+        try addLaunchBrief()
         addActivitySamples()
     }
 
@@ -189,6 +192,7 @@ final class DemoBackend {
                 if channel == "runs:delete" {
                     runs.remove(at: index); tasks.removeValue(forKey: runID)?.cancel(); replays[runID] = nil
                     artifacts[runID] = nil; tools[runID] = nil; turns[runID] = nil; patches[runID] = nil; goals[runID] = nil
+                    outputs[runID] = nil
                     push("runs:updated", ["runId": .string(runID)])
                     return .null
                 }
@@ -201,10 +205,15 @@ final class DemoBackend {
             guard first["accountId"].string == seed["account"]["id"].string else { throw MainsError.server("Atlas account not found.") }
             try requireRun(runID)
             let file: DemoFile, source: String
-            if let attachmentID = first["attachmentId"].string { file = try attachment(runID, id: attachmentID); source = "attachment:" + runID + ":" + attachmentID }
-            else if runID == Self.tourID, [-9001.0, -9002.0].contains(first["artifactId"].number ?? 0) {
-                file = first["artifactId"].number == -9001 ? .pdf : .notes; source = "output:" + runID + ":" + String(first["artifactId"].number!)
-            } else { throw MainsError.server("Demo output not found.") }
+            if let attachmentID = first["attachmentId"].string {
+                guard first["artifactId"].number == nil else { throw MainsError.invalidReply }
+                file = try attachment(runID, id: attachmentID)
+                source = "attachment:\(runID):\(attachmentID)"
+            } else {
+                let output = try outputFile(runID, artifactID: first["artifactId"].number)
+                file = output.file
+                source = "output:\(runID):\(output.id)"
+            }
             guard first["version"].string == file.version else { throw MainsError.server("This demo file changed.") }
             if channel == "atlas:readMobileSaveStatus" { return .object(["saved": .bool(atlas.hasSavedCopy(source: source))]) }
             let result = try atlas.save(file, source: source, runID: runID, collectionID: runs.first(where: { $0["id"]?.string == runID })?["collectionId"]?.string)
@@ -340,14 +349,15 @@ final class DemoBackend {
             return .null
         case "runs:listOutputs":
             try requireRun(runID)
-            let items: [JSONValue] = runID == Self.tourID ? [DemoFile.pdf.descriptor(runID: runID, artifactID: -9001), DemoFile.notes.descriptor(runID: runID, artifactID: -9002)] : []
             let requested = first["artifactId"].number
-            return .object(["items": .array((first["offset"].number ?? 0) > 0 ? [] : items.filter { requested == nil || $0["artifactId"].number == requested }), "nextOffset": .null])
+            let items = (outputs[runID] ?? [:]).sorted { $0.key > $1.key }
+                .filter { requested == nil || requested == Double($0.key) }
+                .map { $0.value.descriptor(runID: runID, artifactID: $0.key) }
+            return .object(["items": .array((first["offset"].number ?? 0) > 0 ? [] : items), "nextOffset": .null])
         case "runs:readOutputFile":
             try requireRun(runID)
-            let file: DemoFile
-            switch first["artifactId"].number { case -9001: file = .pdf; case -9002: file = .notes; default: throw MainsError.server("Demo output not found.") }
-            return try file.chunk(first)
+            let output = try outputFile(runID, artifactID: first["artifactId"].number)
+            return try output.file.chunk(first)
         case "runArtifacts:describeAttachmentFile", "runArtifacts:readAttachmentChunk", "runArtifacts:readAttachmentImage":
             try requireRun(runID)
             let id = first["attachmentId"].string ?? ""
@@ -780,6 +790,12 @@ final class DemoBackend {
         .object(["attachmentId": .string(id), "name": .string(file.name), "type": .string(file.mime.hasPrefix("image/") ? "image" : "document"),
                  "mimeType": .string(file.mime), "byteSize": .number(Double(file.bytes.count))])
     }
+    private func outputFile(_ runID: String, artifactID: Double?) throws -> (id: Int, file: DemoFile) {
+        guard let artifactID, let id = Int(exactly: artifactID), let file = outputs[runID]?[id] else {
+            throw MainsError.server("Demo output not found.")
+        }
+        return (id, file)
+    }
     private func attachment(_ runID: String, id: String) throws -> DemoFile {
         guard artifacts[runID]?.contains(where: { ($0["metadata"]?["attachments"].array ?? []).contains { $0["attachmentId"].string == id } }) == true else {
             throw MainsError.server("Demo attachment not found in this conversation.")
@@ -807,6 +823,7 @@ final class DemoBackend {
                 .min(by: { time(runs[$0], "updatedAt") < time(runs[$1], "updatedAt") }),
                   let id = runs[index]["id"]?.string else { return }
             runs.remove(at: index); artifacts[id] = nil; tools[id] = nil; turns[id] = nil; patches[id] = nil; goals[id] = nil
+            outputs[id] = nil
             let keys = attachments.keys.filter { $0.hasPrefix(id + ":") }
             for key in keys { if let file = attachments.removeValue(forKey: key) { attachmentBytes -= file.bytes.count } }
         }
@@ -831,8 +848,7 @@ final class DemoBackend {
             ["id": .number(9_000_001), "runId": .string(Self.tourID), "kind": .string("report"),
              "content": .string("## Welcome to Mains\n\nExplore workspaces, switch between Code, Work and Chat, or send a message to try a simulated reply.\n\nThe image and PDF below are bundled samples. **Demo Mode stays on this iPhone.**"),
              "createdAt": .number(at + 100), "metadata": .object([:])],
-            ["id": .number(-9001), "runId": .string(Self.tourID), "kind": .string("document"), "content": .null, "createdAt": .number(at + 300),
-             "metadata": .object(["fileName": .string(DemoFile.pdf.name), "outputSelected": .bool(true), "byteSize": .number(Double(DemoFile.pdf.bytes.count))])],
+            documentArtifact(id: -9001, runID: Self.tourID, file: .pdf, at: .number(at + 300)),
         ]
         if image != nil {
             artifacts[Self.tourID]!.append(["id": .number(9_000_003), "runId": .string(Self.tourID), "kind": .string("image"), "content": .null,
@@ -844,6 +860,40 @@ final class DemoBackend {
                               "startedAt": .number(at), "createdAt": .number(at), "endedAt": .number(at + 300)]]
         installChanges(Self.tourID, turnID: 9_000_001)
         installSubagents(Self.tourID, baseID: 9_100_000, at: at + 50, stage: 2)
+    }
+
+    private func addLaunchBrief() throws {
+        let runID = Self.launchBriefRunID
+        guard let collectionID = seed["collections"].array.first(where: { $0["name"].string == "Work" })?["id"].string else {
+            throw MainsError.server("The demo Work project is missing.")
+        }
+        let model = seed["models"]["codex"].array.first?["id"] ?? .null
+        let completionTime = Date().timeIntervalSince1970 * 1000
+        let startedAt = JSONValue.number(completionTime - 30_000)
+        let completedAt = JSONValue.number(completionTime)
+        let file = try DemoFile.launchBrief()
+        let artifactID = -9003
+
+        runs.append(["id": .string(runID), "accountId": seed["account"]["id"], "spaceId": .string("codex"), "providerId": .string("codex"),
+                     "mode": .string("work"), "model": model, "collectionId": .string(collectionID), "title": .string("iPhone launch brief"),
+                     "status": .string("succeeded"), "isArchived": .bool(false), "isReplica": .bool(false),
+                     "createdAt": startedAt, "updatedAt": completedAt, "endedAt": completedAt])
+        artifacts[runID] = [
+            ["id": .number(Double(takeID())), "runId": .string(runID), "kind": .string("user-prompt"), "createdAt": startedAt,
+             "content": .string("Prepare a one-page launch brief for the iPhone app."), "metadata": .object(["source": .string("user")])],
+            ["id": .number(Double(takeID())), "runId": .string(runID), "kind": .string("report"), "createdAt": .number(completionTime - 1000),
+             "content": .string("The launch brief is ready. Open the PDF and choose **Keep in Atlas** from File options to save it to the Work project."),
+             "metadata": .object(["source": .string("assistant.message")])],
+            documentArtifact(id: artifactID, runID: runID, file: file, at: completedAt),
+        ]
+        turns[runID] = [["id": .number(Double(takeID())), "turnIndex": .number(0), "status": .string("completed"), "model": model,
+                         "createdAt": startedAt, "startedAt": startedAt, "endedAt": completedAt]]
+        outputs[runID] = [artifactID: file]
+    }
+
+    private func documentArtifact(id: Int, runID: String, file: DemoFile, at: JSONValue) -> [String: JSONValue] {
+        ["id": .number(Double(id)), "runId": .string(runID), "kind": .string("document"), "content": .null, "createdAt": at,
+         "metadata": .object(["fileName": .string(file.name), "outputSelected": .bool(true), "byteSize": .number(Double(file.bytes.count))])]
     }
 
     private func addActivitySamples() {
