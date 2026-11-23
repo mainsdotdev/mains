@@ -121,13 +121,11 @@ struct SidebarView: View {
                     RegistryIcon(token: "icon:globe", size: shortcutIconSize, tint: .primary)
                 }
             }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openAtlas")
-            if !session.isDemo {
-                Button(action: openMates) {
-                    shortcutLabel("Mates") {
-                        SidebarMateIcon(sidebarVisible: isVisible, size: shortcutIconSize + 4)
-                    }
-                }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openMates")
-            }
+            Button(action: openMates) {
+                shortcutLabel("Mates") {
+                    SidebarMateIcon(sidebarVisible: isVisible, size: shortcutIconSize + 4)
+                }
+            }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openMates")
         }
     }
     private func shortcutLabel<Icon: View, Trailing: View>(_ title: String, @ViewBuilder icon: () -> Icon,

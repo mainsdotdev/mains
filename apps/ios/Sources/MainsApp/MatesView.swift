@@ -1398,7 +1398,7 @@ struct MateView: View {
         if session.hasConsent(providerID: mate.providerId) { action() }
         else if let backend = session.pairing?.descriptor.backendId {
             afterConsent = action
-            consent = ConsentContext(backendID: backend, providerID: mate.providerId)
+            consent = ConsentContext(backendID: backend, providerID: mate.providerId, isDemo: session.isDemo)
         }
     }
     private func send(_ mate: Mate) async {

@@ -218,6 +218,91 @@ struct DemoTests {
         #expect(try Data(contentsOf: url) == bytes)
     }
 
+    @Test @MainActor func releaseMateHasAChatAndPreviewsItsChecklistOffline() async throws {
+        let storage = MemoryStorage()
+        let session = BackendSession(storage: storage)
+        session.restore(); session.setOnline(false); session.setActive(true)
+        try session.startDemo()
+        defer { session.exitDemo() }
+        try await eventually { session.isConnected }
+
+        let directory = try await session.loadMates()
+        let mate = try #require(directory.mates.first)
+        #expect(session.supportsMates && mate.ready && mate.id == DemoBackend.mateID)
+        #expect(directory.teams.contains { $0.id == mate.teamId })
+        #expect(try await session.loadMates(mateID: mate.id).mates.first?.details?.instructions.isEmpty == false)
+        let chats = try await session.loadMateChats(mate.id)
+        #expect(chats.map(\.id) == [DemoBackend.mateChatID])
+
+        await session.selectConversation(DemoBackend.mateChatID)
+        let document = try #require(session.transcript.rows.flatMap(\.media).first)
+        let output = try #require(try await session.listOutputs(DemoBackend.mateChatID).items.first)
+        #expect(document.source == .artifact(output.artifactId) && document.name == "release-checklist.md")
+        #expect(try await session.downloadOutput(output) == DemoFile.releaseChecklist.bytes)
+
+        let prompt = "Summarize the release checks"
+        await #expect(throws: MainsError.self) { try await session.send(prompt, mate: mate) }
+        session.grantConsent(providerID: mate.providerId, backendID: DemoBackend.backendID)
+        let runID = try await session.send(prompt, mate: mate)
+        await session.selectConversation(runID)
+        try await eventually {
+            session.conversations.first { $0.id == runID }?.status == "succeeded" &&
+                session.transcript.rows.contains { $0.text.contains("Sample release review") }
+        }
+        #expect(session.conversations.first { $0.id == runID }?.assistantId == mate.id)
+        #expect(try await session.loadMateChats(mate.id).map(\.id) == [runID, DemoBackend.mateChatID])
+        #expect(storage.pairing == nil && storage.snapshot == nil && storage.consents.isEmpty)
+    }
+
+    @Test @MainActor func demoMateCreationKeepsTheApprovedProfileAndFirstChatInMemory() async throws {
+        let storage = MemoryStorage()
+        let session = BackendSession(storage: storage)
+        session.restore(); session.setOnline(false); session.setActive(true)
+        try session.startDemo()
+        defer { session.exitDemo() }
+        try await eventually { session.isConnected }
+
+        let space = try #require(session.mateSpaces.first { $0.providerId == "claude_code" })
+        await session.loadModels(space.providerId)
+        let model = try #require(session.models[space.providerId]?.first)
+        let directory = try await session.loadMates()
+        let team = try #require(directory.teams.first)
+        let avatar = MateAvatar(shape: "terminal-amber", color: "amber")
+        let id = try await session.createMate(name: "Release Planner", space: space, model: model.id,
+                                              effort: "high", teamID: team.id, avatar: avatar)
+        let created = try #require(try await session.loadMates(mateID: id).mates.first)
+        #expect(created.needsSetup && created.avatar == avatar && created.teamId == team.id)
+        #expect(created.providerId == space.providerId && created.model == model.id)
+        await #expect(throws: MainsError.self) { try await session.send("Prepare the release", mate: created) }
+        try await session.answerMateSetup(id, step: 0, answer: "Help plan iPhone releases")
+        let candidate = try #require(try await session.loadMates(mateID: id).mates.first)
+        let setup = try #require(candidate.welcome?.question?.profileSetup)
+        let draft = try #require(setup.draft)
+        #expect(setup.turns.map(\.answer) == ["Help plan iPhone releases"] && draft.description == "Help plan iPhone releases")
+        let approved = MateProfile(description: "Plans iPhone releases", instructions: draft.instructions + "\nCheck the release notes.")
+        try await session.saveMateSetup(id, profile: approved)
+
+        let ready = try #require(try await session.loadMates(mateID: id).mates.first)
+        #expect(ready.ready && ready.description == approved.description && ready.details?.instructions == approved.instructions)
+        #expect(ready.details?.effort == "high" && ready.welcome?.question?.profileSetup?.saved == true)
+        session.grantConsent(providerID: ready.providerId, backendID: DemoBackend.backendID)
+        let runID = try await session.send("Prepare the release", mate: ready, useMateWelcome: true)
+        #expect(runID == ready.welcome?.runId)
+        await session.selectConversation(runID)
+        try await eventually { session.transcript.rows.contains { $0.text.contains(approved.description) } }
+        #expect(session.conversations.first { $0.id == runID }?.assistantId == id)
+        let chats = try await session.loadMateChats(id)
+        let current = try #require(try await session.loadMates(mateID: id).mates.first)
+        #expect(current.welcome == nil && chats.map(\.id) == [runID] && chats.allSatisfy { current.showsChat($0) })
+        #expect(storage.pairing == nil && storage.snapshot == nil && storage.consents.isEmpty)
+
+        session.exitDemo()
+        try session.startDemo()
+        try await eventually { session.isConnected }
+        #expect(try await session.loadMates().mates.map(\.id) == [DemoBackend.mateID])
+        #expect(session.conversations.allSatisfy { $0.id != runID })
+    }
+
     @Test @MainActor func replayAcknowledgesStreamsAndDeduplicatesCommands() async throws {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let transport = DemoTransport(backend: backend)

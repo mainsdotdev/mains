@@ -86,7 +86,7 @@ private struct ContextPickerPanel: View {
         LoadKey(scope: request.scope, owner: request.owner, revision: request.session.contextRevisions[request.scope.providerID] ?? 0,
                 connected: request.session.isConnected, retry: retry)
     }
-    private var showMates: Bool { request.offersMates && request.trigger == "@" && !request.pluginsOnly && request.session.supportsMates }
+    private var showMates: Bool { request.offersMates && request.trigger == "@" && !request.pluginsOnly && request.session.supportsMates && !request.session.isDemo }
     private var skills: [ContextSkill] {
         let choices = showMates ? mates.filter { mate in
             mate.ready && (request.query.isEmpty || mate.name.localizedCaseInsensitiveContains(request.query) || mate.description.localizedCaseInsensitiveContains(request.query))

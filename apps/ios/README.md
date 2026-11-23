@@ -423,6 +423,12 @@ underlying tooling.
   produces a prepared acknowledgement without invoking a plugin or external service.
   Open **iPhone launch brief** from Activity or the Work project to try the PDF
   preview. **Keep in Atlas** saves the brief to the same Work project.
+  **Mates → Release Reviewer** opens a prepared Mate with profile details, a
+  release review conversation, and a Markdown checklist. New messages receive
+  prepared replies on the phone.
+  **New Mate** lets you choose a name, avatar, and model, answer one setup
+  question, and approve the profile before starting its first chat. Created
+  Mates and their chats reset with the demo session.
 - The shared home/conversation composer supports **+ → Plugins** and trailing
   **@**, **/** and **$** context triggers. The inline picker keeps the keyboard open,
   groups plugins, Mac apps, skills and commands, and filters by title/description.

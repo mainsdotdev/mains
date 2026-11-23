@@ -299,7 +299,7 @@ struct MateInfoView: View {
         return ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 HStack(spacing: 8) {
-                    ForEach(Tab.allCases) { item in
+                    ForEach(session.isDemo ? [.details] : Tab.allCases) { item in
                         FilterChip(selected: item == tab, usesSharedHighlight: true, action: {
                             guard tab != item else { return }
                             tab = item

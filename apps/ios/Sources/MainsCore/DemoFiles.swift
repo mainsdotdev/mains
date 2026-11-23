@@ -73,6 +73,19 @@ struct DemoFile: Sendable {
     static let notes = DemoFile(name: "demo-notes.md", mime: "text/markdown", preview: "markdown",
                                bytes: Data("# Mains demo notes\n\nThese sample files stay on this iPhone.\n\n- Explore workspaces and conversations\n- Send a simulated message\n- Preview images and PDFs\n\nNo AI service or computer was contacted.\n".utf8),
                                version: String(repeating: "2", count: 64))
+    static let releaseChecklist = DemoFile(name: "release-checklist.md", mime: "text/markdown", preview: "markdown",
+        bytes: Data("""
+        # iPhone release checklist
+
+        Prepared by Release Reviewer in Demo Mode.
+
+        - [ ] Pair the iPhone with the intended computer.
+        - [ ] Confirm a pending approval appears in Activity.
+        - [ ] Open a Work output and check its file preview.
+        - [ ] Review the launch brief before sharing the build.
+
+        Record any failed check before distributing the build.
+        """.utf8), version: String(repeating: "3", count: 64))
 
     static func launchBrief() throws -> DemoFile {
         let name = "iphone-launch-brief"

@@ -2798,6 +2798,77 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.otherElements["atlasFilePreview"].waitForExistence(timeout: 10))
     }
 
+    func testDemoMateOpensItsChecklistAndRepliesOnDevice() throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        XCTAssertTrue(app.buttons["demoSuggestedPrompt"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["Explore Mains"].exists)
+        openSidebar(app); app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-demo-release-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["newMate"].exists)
+        mate.tap()
+
+        let chat = app.staticTexts["Release readiness review"]
+        XCTAssertTrue(chat.waitForExistence(timeout: 10)); chat.tap()
+        let header = app.descendants(matching: .any).matching(identifier: "mateConversationHeader").firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 10))
+        XCTAssertEqual(header.label, "Release Reviewer")
+        let checklist = app.buttons["transcriptMedia-output:-9004"]
+        XCTAssertTrue(checklist.waitForExistence(timeout: 10)); checklist.tap()
+        XCTAssertTrue(app.staticTexts["iPhone release checklist"].waitForExistence(timeout: 10))
+        app.buttons["Close preview"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        let input = app.textViews["homeMessageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap(); input.typeText("Summarize the release checks")
+        app.buttons["startConversation"].tap()
+        let consent = app.buttons["allowDataSharing"]
+        XCTAssertTrue(consent.waitForExistence(timeout: 5)); XCTAssertEqual(consent.label, "Continue Demo"); consent.tap()
+        XCTAssertTrue(app.staticTexts["Sample release review"].waitForExistence(timeout: 10))
+    }
+
+    func testDemoCreatesMateAndOpensItsFirstChat() throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        openSidebar(app); app.buttons["openMates"].tap()
+        let newMate = app.buttons["newMate"]
+        XCTAssertTrue(newMate.waitForExistence(timeout: 10)); newMate.tap()
+        let name = app.textFields["mateName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5)); name.tap(); name.typeText("Release Planner")
+        app.buttons["nextMateStep"].tap()
+
+        let codex = app.buttons["mate-provider-codex"]
+        XCTAssertTrue(codex.waitForExistence(timeout: 5))
+        if !codex.isSelected { codex.tap() }
+        let create = app.buttons["createMate"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: create)], timeout: 10), .completed)
+        create.tap()
+
+        let greeting = app.staticTexts["Hi, I’m Release Planner. What would you like me to help with?"]
+        XCTAssertTrue(greeting.waitForExistence(timeout: 10))
+        let role = app.descendants(matching: .any).matching(identifier: "mateSetupAnswer").firstMatch
+        XCTAssertTrue(role.exists); role.tap(); role.typeText("Help plan iPhone releases")
+        app.buttons["sendMateSetupAnswer"].tap()
+        let consent = app.buttons["allowDataSharing"]
+        XCTAssertTrue(consent.waitForExistence(timeout: 5)); XCTAssertEqual(consent.label, "Continue Demo"); consent.tap()
+        let save = app.buttons["saveMateProfile"]
+        XCTAssertTrue(save.waitForExistence(timeout: 10)); scrollTo(save, in: app); save.tap()
+
+        let input = app.textViews["homeMessageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap(); input.typeText("Prepare the release")
+        app.buttons["startConversation"].tap()
+        XCTAssertTrue(app.staticTexts["Sample Mate reply"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Help plan iPhone releases"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons["BackButton"].tap()
+        XCTAssertTrue(app.staticTexts["Prepare the release"].waitForExistence(timeout: 10))
+    }
+
     func testDemoApprovalAndQuestionCards() throws {
         continueAfterFailure = false
         let app = makeApplication()

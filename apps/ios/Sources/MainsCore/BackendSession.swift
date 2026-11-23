@@ -155,7 +155,7 @@ public final class BackendSession {
         guard let pendingMateCommand, pendingMateCommand.channel == "assistants:createTeam" else { return nil }
         return pendingMateCommand.args.first?["name"].string
     }
-    public var supportsMates: Bool { connectedDescriptor?.capabilities.contains("assistants") == true && !isDemo }
+    public var supportsMates: Bool { connectedDescriptor?.capabilities.contains("assistants") == true }
     public var supportsMateInfo: Bool { supportsMates && connectedDescriptor?.capabilities.contains("mateInfo") == true }
     public var supportsMateModelEditing: Bool { supportsMateInfo && connectedDescriptor?.capabilities.contains("mateModelEditing") == true }
     public var supportsMatePinning: Bool { supportsMateInfo && connectedDescriptor?.capabilities.contains("matePinning") == true }
