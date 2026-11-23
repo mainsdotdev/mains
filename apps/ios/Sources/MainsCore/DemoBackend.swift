@@ -8,6 +8,8 @@ final class DemoBackend {
     static let backendID = "demo-mac"
     static let endpoint = URL(string: "demo://on-this-phone")!
     static let tourID = "demo-native-tour"
+    static let activityApprovalRunID = "demo-activity-approval"
+    static let activityQueueRunID = "demo-activity-queue"
     static let decisionPrompt = "Walk me through approvals and questions"
     static let changesPrompt = "Show sample file changes and diffs"
     static let subagentsPrompt = "Review the sample workspace with subagents"
@@ -36,12 +38,13 @@ final class DemoBackend {
     private var emit: ((String, JSONValue) -> Void)?
     private var tasks: [String: Task<Void, Never>] = [:]
     private enum Step { case text(String), thinking(String), tool(String, JSONValue, JSONValue), approval(JSONValue), questions, changes, subagents(Int), finish }
+    private enum ReplayWait { case approval, followUp }
     private struct Replay {
         let steps: [Step]
         var index = 0
         var count = 0
         var streamID = UUID().uuidString
-        var waiting = false
+        var waitingFor: ReplayWait?
         var activeToolID: Int?
         var agentBaseID: Int?
         var agentsStartedAt: Double?
@@ -113,6 +116,7 @@ final class DemoBackend {
         self.stepDelay = stepDelay; self.streamDelay = streamDelay; self.decisionLifetime = decisionLifetime
         for (id, image) in data["images"].objectValue { if let id = Int(id) { images[id] = image } }
         addTour()
+        addActivitySamples()
     }
 
     func attach(owner: UUID, emit: @escaping (String, JSONValue) -> Void) {
@@ -134,6 +138,12 @@ final class DemoBackend {
         tasks = [:]; replays = [:]; emit = nil; owner = nil; patches = [:]
         for timer in approvalTimers.values { timer.cancel() }; approvalTimers = [:]; approvals = [:]
         attachments = [:]; attachmentBytes = 0
+    }
+
+    func didQueueFollowUp(_ runID: String) {
+        guard replays[runID]?.waitingFor == .followUp else { return }
+        replays[runID]?.waitingFor = nil
+        resume(runID)
     }
 
     func invoke(_ channel: String, args: [JSONValue], commandID: String? = nil) throws -> JSONValue {
@@ -536,7 +546,7 @@ final class DemoBackend {
     }
 
     private func resume(_ runID: String) {
-        guard emit != nil, tasks[runID] == nil, let replay = replays[runID], !replay.waiting else { return }
+        guard emit != nil, tasks[runID] == nil, let replay = replays[runID], replay.waitingFor == nil else { return }
         tasks[runID] = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, let replay = self.replays[runID], replay.index < replay.steps.count else { return }
@@ -585,14 +595,10 @@ final class DemoBackend {
             }
             push("runs:eventPersisted", ["runId": .string(runID)])
         case .approval(let template):
-            let id = UUID().uuidString, token = UUID().uuidString
-            let request = JSONValue.object(template.objectValue.merging([
-                "requestId": .string(id), "approvalToken": .string(token), "runId": .string(runID),
-                "timestamp": Self.now, "expiresAt": .number((Date().timeIntervalSince1970 + decisionLifetime) * 1000),
-            ]) { _, next in next })
-            approvals[id] = request; replay.waiting = true; replay.index += 1
+            replay.waitingFor = .approval; replay.index += 1
             replays[runID] = replay; tasks.removeValue(forKey: runID)?.cancel()
-            armExpiry(request); push("runs:toolApprovalRequest", request.objectValue); return
+            requestApproval(template, runID: runID, expiresAt: Date().addingTimeInterval(decisionLifetime))
+            return
         case .questions:
             append(runID, kind: "report", text: "Choose the next step in the question card below.", metadata: [
                 "source": .string("codex_async_questions"), "questions": .array([
@@ -656,12 +662,7 @@ final class DemoBackend {
     private func decisionScenario() -> [Step] {
         [
             .text("This walkthrough uses the same approval and question cards as a paired computer. Nothing leaves this iPhone, and no command or external service is used."),
-            .approval(.object(["kind": .string("tool_approval"), "toolName": .string("Bash"), "toolInput": .object([
-                "message": .string("Allow this sample workspace check?"), "command": .string("/bin/zsh -lc \"swift test\""),
-                "cwd": .string("/Demo/mains"), "environmentId": .string("local"),
-                "commandActions": .array([.object(["command": .string("swift test"), "type": .string("unknown")])]),
-                "_meta": .object(["subtitle": .string("A simulated command; no process will start."), "riskLevel": .string("low")]),
-            ])])),
+            .approval(sampleCheckApproval(message: "Allow this sample workspace check?")),
             .approval(.object(["kind": .string("ask_user"), "toolName": .string("AskUserQuestion"), "header": .string("Choose a review style"),
                 "question": .string("Which sample result would you like?"), "multiSelect": .bool(true), "isOther": .bool(true),
                 "options": .array([.object(["label": .string("Review only"), "description": .string("Inspect the bundled sample.")]),
@@ -679,6 +680,26 @@ final class DemoBackend {
                 "description": .string("In Demo Mode this opens an on-device explanation instead of a browser.")])),
             .questions,
         ]
+    }
+
+    private func sampleCheckApproval(message: String) -> JSONValue {
+        .object(["kind": .string("tool_approval"), "toolName": .string("Bash"), "toolInput": .object([
+            "message": .string(message), "command": .string("/bin/zsh -lc \"swift test\""),
+            "cwd": .string("/Demo/mains"), "environmentId": .string("local"),
+            "commandActions": .array([.object(["command": .string("swift test"), "type": .string("unknown")])]),
+            "_meta": .object(["subtitle": .string("A simulated command; no process will start."), "riskLevel": .string("low")]),
+        ])])
+    }
+
+    private func requestApproval(_ template: JSONValue, runID: String, expiresAt: Date) {
+        let id = UUID().uuidString
+        let request = JSONValue.object(template.objectValue.merging([
+            "requestId": .string(id), "approvalToken": .string(UUID().uuidString), "runId": .string(runID),
+            "timestamp": Self.now, "expiresAt": .number(expiresAt.timeIntervalSince1970 * 1000),
+        ]) { _, next in next })
+        approvals[id] = request
+        armExpiry(request)
+        push("runs:toolApprovalRequest", request.objectValue)
     }
 
     private func respondToApproval(_ payload: JSONValue) throws -> JSONValue {
@@ -704,11 +725,15 @@ final class DemoBackend {
         approvals[id] = nil; approvalTimers.removeValue(forKey: id)?.cancel()
         push("runs:toolApprovalResolved", ["requestId": .string(id), "approvalToken": request["approvalToken"]])
         append(runID, kind: "report", text: message, metadata: [:])
-        if replays[runID] != nil { replays[runID]!.waiting = false; resume(runID) }
+        if replays[runID]?.waitingFor == .approval {
+            replays[runID]?.waitingFor = nil
+            resume(runID)
+        }
     }
 
     private func armExpiry(_ request: JSONValue) {
-        guard let id = request["requestId"].string, let expiry = request["expiresAt"].number else { return }
+        guard let id = request["requestId"].string, let expiry = request["expiresAt"].number,
+              expiry < Date.distantFuture.timeIntervalSince1970 * 1000 else { return }
         approvalTimers[id]?.cancel()
         approvalTimers[id] = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(max(0, expiry / 1000 - Date().timeIntervalSince1970))) } catch { return }
@@ -819,6 +844,38 @@ final class DemoBackend {
                               "startedAt": .number(at), "createdAt": .number(at), "endedAt": .number(at + 300)]]
         installChanges(Self.tourID, turnID: 9_000_001)
         installSubagents(Self.tourID, baseID: 9_100_000, at: at + 50, stage: 2)
+    }
+
+    private func addActivitySamples() {
+        addActivityRun(Self.activityApprovalRunID, title: "Review release checks",
+                       prompt: "Run the release checks after I approve them.",
+                       message: "The sample release checks are ready for your review.", waitFor: .approval, steps: [.finish])
+        // Keep the prepared request available until the user reviews or stops the sample.
+        requestApproval(sampleCheckApproval(message: "Run the sample release checks?"),
+                        runID: Self.activityApprovalRunID, expiresAt: .distantFuture)
+
+        addActivityRun(Self.activityQueueRunID, title: "Draft release notes",
+                       prompt: "Draft a short set of release notes for the iPhone app.",
+                       message: "I’m drafting the sample release notes. Send a follow-up to queue it. This sample finishes after you add one.",
+                       waitFor: .followUp,
+                       steps: [
+                        .tool("Read", .object(["file_path": .string("/Demo/mains/release-notes.md")]), .string("Sample release highlights: Activity, Atlas and file previews.")),
+                        .text("## Sample release notes\n\n- Review approvals from Activity.\n- Keep useful files and links in Atlas."),
+                        .finish,
+                       ])
+    }
+
+    private func addActivityRun(_ runID: String, title: String, prompt: String, message: String, waitFor: ReplayWait, steps: [Step]) {
+        let at = Self.now
+        let model = seed["models"]["codex"].array.first?["id"] ?? .null
+        runs.append(["id": .string(runID), "accountId": seed["account"]["id"], "spaceId": .string("codex"), "providerId": .string("codex"),
+                     "mode": .string("work"), "model": model, "title": .string(title), "status": .string("running"),
+                     "isArchived": .bool(false), "isReplica": .bool(false), "createdAt": at, "updatedAt": at])
+        append(runID, kind: "user-prompt", text: prompt, metadata: ["source": .string("user")])
+        turns[runID] = [["id": .number(Double(takeID())), "turnIndex": .number(0), "status": .string("active"),
+                         "model": model, "startedAt": at, "createdAt": at]]
+        append(runID, kind: "report", text: message, metadata: ["source": .string("assistant.message")])
+        replays[runID] = Replay(steps: steps, waitingFor: waitFor)
     }
 
     private func installSubagents(_ runID: String, baseID: Int, at: Double, stage: Int) {

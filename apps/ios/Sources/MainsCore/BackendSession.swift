@@ -526,7 +526,12 @@ public final class BackendSession {
 
     public func messageQueue(for id: String) -> ConversationQueue { runQueues.queue(id) }
     public func existingMessageQueue(for id: String) -> ConversationQueue? { runQueues.existing(id) }
-    public func submitQueuedDraft(_ id: String) throws { try runQueues.submit(id, draft: draft(for: id)) }
+    public func submitQueuedDraft(_ id: String) throws {
+        try runQueues.submit(id, draft: draft(for: id))
+        if let demoBackend, runQueues.existing(id)?.messages.isEmpty == false {
+            demoBackend.didQueueFollowUp(id)
+        }
+    }
     public func editQueuedMessage(_ runID: String, id: String) { runQueues.edit(runID, id: id) }
     public func cancelQueuedEdit(_ runID: String) { runQueues.cancelEdit(runID) }
     public func removeQueuedMessage(_ runID: String, id: String) { runQueues.remove(runID, id: id) }

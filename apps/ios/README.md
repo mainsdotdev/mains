@@ -412,13 +412,15 @@ underlying tooling.
   or provider consents. A saved real pairing always takes priority. Replay pauses
   in the background and resumes on foreground, including without network access.
   Settings offers Exit Demo Mode or pairing a real computer. Demo disclosures use
-  Continue Demo and never authorize real sharing. The home suggestion **Try
-  approvals and questions** starts a walkthrough of tool consent, a multiple-choice
-  question, a validated form, a local sample connection link, and Codex async
-  questions. Replies use the same session channels as a real backend. Demo links
-  stay on-device; expiry and decline do not execute an action. Demo also supplies
-  plugin, skill and command examples; sending selected context produces a prepared
-  acknowledgement without invoking a plugin or external service.
+  Continue Demo and never authorize real sharing. Activity starts with a release
+  check waiting for review and release notes in progress. Queue a follow-up in
+  the release notes conversation to see it send after the sample finishes. The
+  home suggestion **Try approvals and questions** starts a walkthrough of tool
+  consent, a multiple-choice question, a validated form, a local sample connection
+  link, and Codex async questions. Replies use the same session channels as a real
+  backend. Demo links stay on-device; expiry and decline do not execute an action.
+  Demo also supplies plugin, skill and command examples; sending selected context
+  produces a prepared acknowledgement without invoking a plugin or external service.
 - The shared home/conversation composer supports **+ → Plugins** and trailing
   **@**, **/** and **$** context triggers. The inline picker keeps the keyboard open,
   groups plugins, Mac apps, skills and commands, and filters by title/description.

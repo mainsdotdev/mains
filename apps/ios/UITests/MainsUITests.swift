@@ -2738,6 +2738,35 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["startDemo"].waitForExistence(timeout: 5))
     }
 
+    func testDemoActivityOpensPreparedApprovalAndQueuesAFollowUp() throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        XCTAssertTrue(app.buttons["demoSuggestedPrompt"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["Review a pending approval"].exists)
+        openSidebar(app); app.buttons["openWorkInbox"].tap()
+        let waiting = app.buttons["inboxRun-demo-activity-approval"]
+        XCTAssertTrue(waiting.waitForExistence(timeout: 10)); waiting.tap()
+        let allow = app.buttons["approvalAllow"]
+        XCTAssertTrue(allow.waitForExistence(timeout: 10)); scrollTo(allow, in: app)
+        XCTAssertTrue(app.staticTexts["Run the sample release checks?"].exists)
+        allow.tap()
+        XCTAssertTrue(app.staticTexts["Sample command approved. No command was executed."].waitForExistence(timeout: 10))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let running = app.buttons["inboxRun-demo-activity-queue"]
+        XCTAssertTrue(running.waitForExistence(timeout: 5)); running.tap()
+        let input = app.textViews["messageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap(); input.typeText("Include Atlas")
+        let submit = app.buttons["sendMessage"]
+        XCTAssertEqual(submit.label, "Queue message")
+        submit.tap()
+        let consent = app.buttons["allowDataSharing"]
+        XCTAssertTrue(consent.waitForExistence(timeout: 5)); consent.tap()
+        XCTAssertTrue(app.staticTexts["Demo result"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["stopReply"].waitForNonExistence(timeout: 10))
+    }
+
     func testDemoApprovalAndQuestionCards() throws {
         continueAfterFailure = false
         let app = makeApplication()

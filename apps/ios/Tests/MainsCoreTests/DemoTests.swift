@@ -135,6 +135,49 @@ struct DemoTests {
         #expect(storage.consents == originalConsent && storage.snapshot?.backendID == "keep-real-cache")
     }
 
+    @Test @MainActor func activitySamplesUseTheNormalDecisionAndQueueWhileOffline() async throws {
+        let storage = MemoryStorage()
+        let session = BackendSession(storage: storage)
+        session.restore(); session.setOnline(false); session.setActive(true)
+        try session.startDemo()
+        defer { session.exitDemo() }
+        try await eventually { session.isConnected }
+
+        let approvalID = DemoBackend.activityApprovalRunID
+        let queueID = DemoBackend.activityQueueRunID
+        await session.refreshWorkInbox()
+        let groups = session.workInbox.groups(live: session.workInboxIsCurrent)
+        #expect(groups.needsYou.map(\.id) == [approvalID])
+        #expect(groups.running.map(\.id) == [queueID])
+        #expect(session.viewingRunID == nil)
+
+        await session.selectConversation(approvalID)
+        let approval = try #require(session.pendingApprovals.first)
+        try await session.respondToApproval(approval, approved: true)
+        try await eventually { session.conversations.first { $0.id == approvalID }?.status == "succeeded" }
+        #expect(session.pendingApprovals.isEmpty)
+        #expect(session.transcript.rows.contains { $0.text == "Sample command approved. No command was executed." })
+        await session.refreshWorkInbox()
+        let updated = session.workInbox.groups(live: session.workInboxIsCurrent)
+        #expect(updated.needsYou.isEmpty && updated.finished.contains { $0.id == approvalID })
+        #expect(updated.running.map(\.id) == [queueID])
+
+        await session.selectConversation(queueID)
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+        let followUp = "Include a note about Atlas"
+        session.draft(for: queueID).text = followUp
+        try session.submitQueuedDraft(queueID)
+        let queue = session.messageQueue(for: queueID)
+        #expect(queue.messages.first?.input.text == followUp)
+        #expect(!session.transcript.rows.contains { $0.text == followUp })
+        try await eventually({
+            queue.messages.isEmpty && session.conversations.first { $0.id == queueID }?.status == "succeeded" &&
+                session.transcript.rows.contains { $0.kind == .prompt && $0.text == followUp }
+        }, seconds: 15)
+        #expect(session.transcript.rows.filter { $0.kind == .prompt && $0.text == followUp }.count == 1)
+        #expect(storage.pairing == nil && storage.snapshot == nil && storage.consents.isEmpty)
+    }
+
     @Test @MainActor func replayAcknowledgesStreamsAndDeduplicatesCommands() async throws {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let transport = DemoTransport(backend: backend)
