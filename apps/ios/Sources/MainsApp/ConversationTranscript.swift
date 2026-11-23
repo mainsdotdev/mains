@@ -1,6 +1,11 @@
 import SwiftUI
 import Observation
 
+enum TranscriptRowMetrics {
+    static let spacing: CGFloat = 20
+    static let summaryHeight: CGFloat = 32
+}
+
 struct ConversationSkeleton: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -140,6 +145,7 @@ struct ConversationTranscript: View {
         let needsConnection = empty && !session.isConnected
         let waitsForHistory = session.isConnected && page == nil && rows.isEmpty && pending == nil && historyError == nil
         let showsEmptyState = needsConnection || empty && !waitsForHistory && historyError == nil
+        let centersEmptyState = showsEmptyState && page?.hasOlder != true && page?.hasNewer != true && page?.activity == nil
         let sections = TranscriptSection.build(rows, foldsResponses: !isMate)
         let liveSectionID = run?.isActive == true && !session.transcript.isHistorical ? sections.last?.id : nil
         let forkRowID = isMate || run?.isReplica == true ? nil : TranscriptForkAnchor.rowID(
@@ -149,7 +155,7 @@ struct ConversationTranscript: View {
         return ScrollView {
             // The backend already caps this page at 200 rows / 1 MB. Eager
             // measurement avoids lazy height estimates shifting a live tail.
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: TranscriptRowMetrics.spacing) {
                 if page?.hasOlder == true {
                     Button { navigate("older") } label: {
                         Text("Load earlier messages")
@@ -158,7 +164,7 @@ struct ConversationTranscript: View {
                     }.buttonStyle(.plain).disabled(session.historyLoading || scroll.paging || !session.isConnected)
                         .accessibilityIdentifier("loadEarlierMessages")
                 }
-                Color.clear.frame(height: 1).id("transcript-top")
+                if !centersEmptyState { Color.clear.frame(height: 1).id("transcript-top") }
                 if needsConnection {
                     DisconnectedState(title: "Not downloaded yet", message: "Reconnect to your computer to load this conversation.")
                 } else if waitsForHistory {
@@ -167,6 +173,7 @@ struct ConversationTranscript: View {
                 } else if empty && historyError == nil {
                     EmptyStateView(artwork: .chats, title: "Pick up where you left off",
                                    description: Text("Send a message to continue with \(Provider.name(providerID))."))
+                        .accessibilityIdentifier("conversationEmptyState")
                 }
                 ForEach(sections) { section in
                     VStack(alignment: .leading, spacing: 12) {
@@ -199,16 +206,21 @@ struct ConversationTranscript: View {
                     }
                 }
                 RunDecisionCards(session: session, runID: runID, providerID: providerID)
-                ZStack(alignment: .leading) {
-                    Color.clear.frame(height: 24).accessibilityHidden(true)
+                if centersEmptyState {
                     activity
+                } else {
+                    ZStack(alignment: .leading) {
+                        Color.clear.frame(height: TranscriptRowMetrics.summaryHeight).accessibilityHidden(true)
+                        activity
+                    }
+                    Color.clear.frame(height: 1).id("transcript-bottom")
                 }
-                Color.clear.frame(height: 1).id("transcript-bottom")
             }
             .scrollTargetLayout()
-            .padding(.horizontal, Self.transcriptInset).padding(.top, 24).padding(.bottom, 12)
+            .padding(.horizontal, Self.transcriptInset)
+            .padding(.top, centersEmptyState ? 0 : 24).padding(.bottom, centersEmptyState ? 0 : 12)
             // Keep a tappable blank area around short conversations to dismiss the keyboard.
-            .frame(minHeight: minimumHeight, alignment: showsEmptyState ? .center : .top)
+            .frame(minHeight: centersEmptyState ? nil : minimumHeight, alignment: .top)
             .background(alignment: .center) { KeyboardDismissBackground() }
             .coordinateSpace(name: "transcript-content")
             .animation(nil, value: rows)
@@ -239,8 +251,12 @@ struct ConversationTranscript: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { scroll.transcriptFrame = $0 }
         .scrollDismissesKeyboard(.interactively)
         .defaultScrollAnchor(.top, for: .initialOffset)
-        .defaultScrollAnchor(.top, for: .alignment)
+        .defaultScrollAnchor(centersEmptyState ? .center : .top, for: .alignment)
         .defaultScrollAnchor(nil, for: .sizeChanges)
+        .contentShape(.rect)
+        .simultaneousGesture(TapGesture().onEnded {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }, isEnabled: centersEmptyState && !session.waitingForDecision && session.pendingQuestions == nil)
         .onScrollPhaseChange { _, phase in
             guard paneVisible else { return }
             if phase == .tracking || phase == .interacting {
@@ -262,14 +278,14 @@ struct ConversationTranscript: View {
             let direction = scroll.viewport.update(next, hasNewer: page?.hasNewer == true, hasOlder: page?.hasOlder == true)
             if scroll.viewport.following != followed { session.setHistoryFollowing(scroll.viewport.following) }
             if paneVisible, let direction, session.historyError == nil { navigate(direction.rawValue) }
-            if paneVisible && scroll.viewport.chasing && page?.hasNewer != true &&
+            if !centersEmptyState && paneVisible && scroll.viewport.chasing && page?.hasNewer != true &&
                 (old.content != next.content || old.frame != next.frame || old.topInset != next.topInset || old.bottomInset != next.bottomInset) {
                 scrollPosition.scrollTo(edge: .bottom)
             }
         }
         .onChange(of: paneVisible) { _, visible in
             if !visible { scroll.viewport.interruptInteraction() }
-            else if scroll.viewport.chasing && self.page?.hasNewer != true { scrollPosition.scrollTo(edge: .bottom) }
+            else if !centersEmptyState && scroll.viewport.chasing && self.page?.hasNewer != true { scrollPosition.scrollTo(edge: .bottom) }
         }
         .overlay(alignment: .bottom) {
             if scroll.showsJump(hasNewer: page?.hasNewer == true) {
@@ -505,7 +521,7 @@ private struct ChatTurnView: View {
         .onChange(of: searchRowID, initial: true) { _, id in if let id, section.rows.contains(where: { $0.id == id }) { disclosure.expand() } }
     }
     private func messages(_ rows: [TranscriptRow]) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: TranscriptRowMetrics.spacing) {
             let lastResponse = section.rows.last(where: { $0.kind == .response && $0.mateTask == nil })
             let copyRowID = live || lastResponse?.live == true ? nil : lastResponse?.id
             ForEach(TranscriptGroup.build(rows)) { group in

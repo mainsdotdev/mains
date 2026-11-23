@@ -258,7 +258,8 @@ describe("codex.driver / app-server protocol", () => {
   it.each([
     ["0.169.0", "Codex withheld this response."],
     ["0.170.0", "Codex blocked this response."],
-  ])("projects only completed, display-approved answers from Codex %s", async (version, notice) => {
+    ["0.171.0", "Codex blocked this response."],
+  ])("streams live replies but uses Codex %s display decisions for completed messages", async (version, notice) => {
     vi.stubEnv("MAINS_CODEX_FIXTURE_VERSION", version);
     const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
     drivers.push(driver);
@@ -269,9 +270,17 @@ describe("codex.driver / app-server protocol", () => {
     );
     expect(outcome.status).toBe("succeeded");
     const reports = events.filter((event) => event.type === "artifact" && event.kind === "report");
-    expect(reports.map((event) => event.content)).toEqual([notice, "Ordinary test answer"]);
-    expect(reports.some((event) => event.ephemeral)).toBe(false);
-    expect(JSON.stringify(events)).not.toContain("Private ");
+    expect(reports.map((event) => event.content)).toEqual([
+      "Private test", "Private test draft", "Ordinary draft", notice, "Ordinary test answer", "Private unfinished draft",
+    ]);
+    const previews = reports.filter((event) => event.ephemeral);
+    expect(previews).toHaveLength(4);
+    expect(previews.every((event) => event.requiresCompletedItem === true)).toBe(true);
+    expect(previews[0].streamId).toBe(previews[1].streamId);
+    const completed = reports.filter((event) => !event.ephemeral);
+    expect(completed.map((event) => [event.content, event.streamId])).toEqual([
+      [notice, previews[0].streamId], ["Ordinary test answer", previews[2].streamId],
+    ]);
   });
 
   it("routes a native human command to one-call approval and waits for the response", async () => {

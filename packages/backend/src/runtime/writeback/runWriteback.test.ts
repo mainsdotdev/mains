@@ -36,6 +36,8 @@ describe("run writeback through shared projection rules", () => {
     const start = writer.handleEvent({ type: "tool_call", toolName: "Agent", metadata: { phase: "start", toolCallId: "closing-agent" } });
     const task = writer.handleEvent({ type: "task", toolCallId: "closing-agent", taskId: "agent", phase: "started", status: "running" });
     await writer.handleEvent({ type: "artifact", kind: "report", ephemeral: true, streamId: "unfinished", content: "Keep this answer" });
+    await writer.handleEvent({ type: "artifact", kind: "report", ephemeral: true, requiresCompletedItem: true,
+      streamId: "codex-unfinished", content: "Discard this preview" });
     await writer.finish("canceled"); await Promise.all([start, task]);
     expect(await calls()).toEqual([expect.objectContaining({ status: "error", metadata: expect.objectContaining({ task: expect.objectContaining({ status: "stopped" }) }) })]);
     expect(await runsService.getArtifactsByRun(CONFIG.runId)).toEqual([expect.objectContaining({ content: "Keep this answer", metadata: expect.objectContaining({ interrupted: true, streaming: false }) })]);

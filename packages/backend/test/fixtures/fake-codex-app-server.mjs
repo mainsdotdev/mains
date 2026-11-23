@@ -427,7 +427,9 @@ input.on("line", (line) => {
         if (prompt === "answer display") {
           const threadId = params.threadId;
           const itemId = "withheld-answer";
-          notify("item/agentMessage/delta", { threadId, turnId, itemId, delta: "Private test draft" });
+          notify("item/agentMessage/delta", { threadId, turnId, itemId, delta: "Private test" });
+          notify("item/agentMessage/delta", { threadId, turnId, itemId, delta: " draft" });
+          notify("item/agentMessage/delta", { threadId, turnId, itemId: "ordinary-answer", delta: "Ordinary draft" });
           notify("item/completed", {
             threadId, turnId,
             item: {
@@ -437,6 +439,7 @@ input.on("line", (line) => {
                 : { moderated: true, display: { mode: "block", version: 1, reason: { kind: "protection", protectionType: "test" } } },
             },
           });
+          notify("item/agentMessage/delta", { threadId, turnId, itemId, delta: "Late withheld delta" });
           notify("item/completed", {
             threadId, turnId,
             item: { type: "agentMessage", id: "ordinary-answer", text: "Ordinary test answer", moderation: null },

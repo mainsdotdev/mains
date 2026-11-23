@@ -35,7 +35,7 @@ import { emit } from "../../ipc-kit";
 import type { TurnFileChange } from "./runs.dto";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { CHANNELS } from "@mains/contracts/channels";
-import type { RunPullRequestCreatedEvent } from "@mains/contracts/runs";
+import type { RunEphemeralEvent, RunPullRequestCreatedEvent } from "@mains/contracts/runs";
 import { createdPullRequestUrl, pullRequestCreationCommand } from "./created-pull-request";
 
 export type { RunSessionResult } from "./run-lifecycle";
@@ -181,8 +181,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     if (!workspaceId) return;
     broadcastToWindows("runs:diffUpdated", { runId, workspaceId, ts: Date.now() });
   }
-  function broadcastEphemeralEvent(event: unknown): void {
-    broadcastToWindows("runs:ephemeralEvent", { runId, event, ts: Date.now() });
+  function broadcastEphemeralEvent({ type, kind, content, metadata, streamId }: RunEphemeralEvent["event"]): void {
+    broadcastToWindows(CHANNELS.runs.ephemeralEvent, { runId, event: { type, kind, content, metadata, streamId }, ts: Date.now() });
   }
   function broadcastContextUsage(event: Extract<WorkRunEvent, { type: "context_usage" }>): void {
     broadcastToWindows("runs:contextUsage", { runId, event, ts: Date.now() });
@@ -557,14 +557,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     if (event.ephemeral) {
       // A queued prompt boundary may still be preparing. Let ordered final
       // projection assign a new stream's turn instead of freezing the old one.
-      event = reports.stream(event, eventProjections.size ? null : turns.id);
-      broadcastEphemeralEvent({
-        type: event.type,
-        kind: event.kind,
-        content: event.content,
-        metadata: event.metadata,
-        streamId: event.streamId,
-      });
+      broadcastEphemeralEvent(reports.stream(event, eventProjections.size ? null : turns.id));
       return false;
     }
 
@@ -572,6 +565,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     event = reports.prepare(event);
     if (reports.completed(event)) return false;
     event = { ...event, metadata: { ...event.metadata, turnId: event.metadata?.turnId ?? turns.id } };
+    const completedPreview = reports.completedPreview(event);
+    if (completedPreview) broadcastEphemeralEvent(completedPreview);
     // A Claude send that missed the previous native turn can already have
     // started a new one. Deduplicate it before opening its boundary, and stamp
     // the accepted prompt with the new turn rather than the one it just closed.
@@ -761,7 +756,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       // Accepted events own their writes until settlement, including tools and
       // logs. Cleanup must see them before closing orphan calls or the run row.
       await Promise.allSettled([...eventProjections]);
-      for (const report of reports.pending()) {
+      const { recoverable, discarded } = reports.settle();
+      for (const preview of discarded) broadcastEphemeralEvent(preview);
+      for (const report of recoverable) {
         if (!report.content?.trim()) continue;
         try {
           await projectArtifact({

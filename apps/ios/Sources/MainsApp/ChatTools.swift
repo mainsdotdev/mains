@@ -49,7 +49,7 @@ struct ChatToolBlock: View {
                             toolChevron(expanded)
                         }
                         .font(.footnote).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading).contentShape(.rect)
+                        .frame(maxWidth: .infinity, minHeight: TranscriptRowMetrics.summaryHeight, alignment: .leading).contentShape(.rect)
                     }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("toolBlock-\(calls[0].id)")
                         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
                 }
@@ -95,7 +95,14 @@ private struct ChatToolRow: View {
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 6) {
-                    RegistryIcon(token: view.icon, size: 16, tint: tint).frame(width: 16)
+                    Group {
+                        if view.running {
+                            let run = session.conversations.first { $0.id == session.viewingRunID }
+                            AgentAsciiSpinner(providerID: run?.providerId ?? "", animated: session.isConnected && run?.isActive == true)
+                        } else {
+                            RegistryIcon(token: view.icon, size: 16, tint: tint)
+                        }
+                    }.frame(width: 16)
                     Text(view.verb).fontWeight(.medium).foregroundStyle(tint).lineLimit(1).layoutPriority(1)
                     if statFirst { stat(view.stat) }
                     if !view.detail.isEmpty {

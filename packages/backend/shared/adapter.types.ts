@@ -162,6 +162,8 @@ export interface WorkRunArtifactEvent {
   metadata?: Record<string, unknown>;
   /** When true, pushed to renderer but NOT persisted to DB */
   ephemeral?: boolean;
+  /** A live preview whose content cannot be recovered as a final artifact. */
+  requiresCompletedItem?: boolean;
   /** Identifies the streaming source — renderer uses this to accumulate deltas */
   streamId?: string;
   ts?: number;

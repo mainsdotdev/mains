@@ -4,6 +4,29 @@ import UIKit
 /// Run alongside scripts/mock-backend.mjs. No AI provider or real workspace is contacted.
 @MainActor
 final class MainsUITests: XCTestCase {
+    func testEmptyConversationCentersBetweenNavigationAndComposer() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        pairFixture(app, code: "ios-test-empty-conversation").tap()
+
+        let state = app.descendants(matching: .any)["conversationEmptyState"].firstMatch
+        let composer = app.descendants(matching: .any)["messageComposer"].firstMatch
+        let navigation = app.navigationBars.firstMatch
+        XCTAssertTrue(state.waitForExistence(timeout: 10))
+        XCTAssertTrue(composer.exists && navigation.exists)
+        XCTAssertEqual(state.frame.midY, (navigation.frame.maxY + composer.frame.minY) / 2, accuracy: 12)
+        attachScreenshot(app, name: "Centered empty conversation")
+
+        app.textViews["messageInput"].tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        XCTAssertEqual(state.frame.midY, (navigation.frame.maxY + composer.frame.minY) / 2, accuracy: 12)
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: state.frame.midX, dy: navigation.frame.maxY + 12)).tap()
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5))
+        forgetFixture(app)
+    }
+
     func testInterruptedReplyNoticeAlignsWithComposerWhileTyping() {
         continueAfterFailure = false
         let app = makeApplication()
@@ -2347,6 +2370,31 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["The latest response arrived."].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["The latest response arrived."].isHittable)
         XCTAssertFalse(app.buttons["Load newer messages"].exists)
+        forgetFixture(app)
+    }
+
+    func testThinkingUsesTheSameSpacingAsMessagesAndToolGroups() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        pairFixture(app, code: "ios-test-live-spacing").tap()
+
+        let activity = app.descendants(matching: .any).matching(identifier: "agentActivity").firstMatch
+        XCTAssertTrue(activity.waitForExistence(timeout: 10))
+        XCTAssertEqual(activity.label, "Thinking")
+        let tools = app.buttons["toolBlock-7"]
+        XCTAssertTrue(tools.waitForExistence(timeout: 5)); tools.tap()
+        XCTAssertEqual(tools.value as? String, "Collapsed")
+
+        let first = app.staticTexts["Hello from the computer."]
+        let second = app.staticTexts["Reviewing the layout."]
+        let last = app.staticTexts["The files are ready."]
+        XCTAssertTrue(first.exists && second.exists && last.exists)
+        let messageGap = second.frame.minY - first.frame.maxY
+        XCTAssertGreaterThan(messageGap, 0)
+        XCTAssertEqual(tools.frame.minY - second.frame.maxY, messageGap, accuracy: 2)
+        XCTAssertEqual(last.frame.minY - tools.frame.maxY, messageGap, accuracy: 2)
+        // The button exposes its tap frame, while the activity exposes its label.
+        XCTAssertEqual(activity.frame.midY - last.frame.maxY, tools.frame.midY - second.frame.maxY, accuracy: 2)
         forgetFixture(app)
     }
 

@@ -8,7 +8,8 @@ struct RunDecisionCards: View {
     let runID: String
     let providerID: String
     var body: some View {
-        if session.viewingRunID == runID, let run = session.conversations.first(where: { $0.id == runID }), run.isReplica != true {
+        if session.viewingRunID == runID, let run = session.conversations.first(where: { $0.id == runID }), run.isReplica != true,
+           session.waitingForDecision || session.pendingQuestions != nil {
             TimelineView(.periodic(from: .now, by: 1)) { clock in
                 let approvals = session.pendingApprovals.filter { $0.runId == runID && $0.expiresAt > clock.date }
                 VStack(spacing: 16) {

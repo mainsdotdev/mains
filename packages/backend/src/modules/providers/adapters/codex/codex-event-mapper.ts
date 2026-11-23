@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { readAsyncQuestions as normalizeAsyncQuestions, type AsyncQuestion } from "@mains/contracts/async-questions";
 import type {
+  WorkRunArtifactEvent,
   WorkRunEvent,
   WorkRunPlanStep,
   WorkRunPlanUpdateEvent,
@@ -398,7 +399,9 @@ export interface CodexEventRunState extends CodexRuntimeStatusState {
   /** Survives usage flushing until this projection state is released. */
   reportedErrors?: Set<string>;
   completedFileChangeItems?: Set<string>;
+  /** Require completed items for durable output when Codex supports answer display decisions. */
   requireCompletedAgentMessages?: boolean;
+  agentMessagePreviews?: Map<string, string>;
   currentMessageItemId: string | null;
   agentMessageBuffer: string;
   /** Prevents completed-item replay from duplicating persisted assistant text. */
@@ -1475,14 +1478,7 @@ export function createCodexEventMapper(
     if (documentText.length === 0) {
       // A message containing only suggestions or rich content has no report
       // to replace its preview. Clear it so run-end recovery cannot save it.
-      events.push({
-        type: "artifact",
-        kind: "report",
-        content: "",
-        metadata: { source: "agent_message_streaming" },
-        ephemeral: true,
-        streamId,
-      });
+      events.push(agentMessagePreview(runId, itemId, ""));
     }
 
     // After the message: the chips belong under the answer they follow.
@@ -1496,6 +1492,18 @@ export function createCodexEventMapper(
       emitted = true;
     }
     return emitted;
+  }
+
+  function agentMessagePreview(runId: string, itemId: string | null, text: string, requiresCompletedItem = false): WorkRunArtifactEvent {
+    return {
+      type: "artifact",
+      kind: "report",
+      content: projectFileCitations(stripAnnotationMarkers(text), false),
+      metadata: { source: "agent_message_streaming" },
+      ephemeral: true,
+      streamId: `codex-msg-${runId}-${itemId ?? "default"}`,
+      ...(requiresCompletedItem ? { requiresCompletedItem: true } : {}),
+    };
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -1789,6 +1797,7 @@ export function createCodexEventMapper(
           ) {
             clearReasoning(events, runId);
             runState.reasoningBuffers.clear();
+            if (runState.turnId !== turnId) runState.agentMessagePreviews?.clear();
             runState.turnId = turnId;
             runState.lastPlanSnapshot = null;
           } else if (runState && threadId) {
@@ -1939,6 +1948,7 @@ export function createCodexEventMapper(
         // Flush any remaining agent message buffer
         const runState = getRunState(runId);
         if (runState) {
+          runState.agentMessagePreviews?.clear();
           // Emit any pending flushed messages first
           events.push(...runState.pendingFlush);
           runState.pendingFlush = [];
@@ -2132,58 +2142,36 @@ export function createCodexEventMapper(
 
       // Streaming delta: accumulate agent message text per itemId
       case "item/agentMessage/delta": {
-        // The display decision arrives with the completed item. Earlier
-        // deltas must never enter a preview or the end-of-turn fallback.
-        if (runState?.requireCompletedAgentMessages) break;
-
-        // Skip sub-thread deltas — they would garble the parent's streaming buffer
-        const deltaThreadId = (p?.threadId ?? p?.thread_id) as string | undefined;
-        const parentForDelta = getRunState(runId);
-        if (
-          deltaThreadId !== undefined &&
-          parentForDelta?.threadId !== undefined &&
-          parentForDelta.threadId !== null &&
-          deltaThreadId !== parentForDelta.threadId
-        ) {
-          break;
-        }
+        if (!runState || (threadId && parentThreadId && threadId !== parentThreadId) ||
+          (providerTurnId && runState.turnId && providerTurnId !== runState.turnId)) break;
+        const delta = p?.delta;
+        const itemId = optionalString(p?.itemId);
+        if (typeof delta !== "string" || !delta || (itemId && runState.emittedAgentMessageItemIds.has(itemId))) break;
         clearReasoning(events, runId);
 
-        const delta = p?.delta as string | undefined;
-        const itemId = p?.itemId as string | undefined;
-        if (delta) {
-          const runState = getRunState(runId);
-          if (runState) {
-            // New message item started — flush previous one
-            if (itemId && runState.currentMessageItemId && itemId !== runState.currentMessageItemId) {
-              const text = runState.agentMessageBuffer.trim();
-              if (text) {
-                const completedItemId = runState.currentMessageItemId;
-                emitAgentMessageContent(
-                  runState.pendingFlush,
-                  runId,
-                  text,
-                  completedItemId,
-                  ts,
-                );
-                runState.emittedAgentMessageItemIds.add(completedItemId);
-              }
-              runState.agentMessageBuffer = "";
-            }
-            runState.currentMessageItemId = itemId ?? runState.currentMessageItemId;
-            runState.agentMessageBuffer += delta;
-
-            // Emit ephemeral event with accumulated text so far (for streaming UI)
-            events.push({
-              type: "artifact",
-              kind: "report",
-              content: projectFileCitations(stripAnnotationMarkers(runState.agentMessageBuffer), false),
-              metadata: { source: "agent_message_streaming" },
-              ephemeral: true,
-              streamId: `codex-msg-${runId}-${runState.currentMessageItemId ?? "default"}`,
-            });
-          }
+        if (runState.requireCompletedAgentMessages) {
+          // Keep overlapping previews keyed to their own completions. Neither a
+          // competing item nor a missing completion authorizes a durable report.
+          if (!itemId) break;
+          const previews = runState.agentMessagePreviews ??= new Map();
+          const text = (previews.get(itemId) ?? "") + delta;
+          previews.set(itemId, text);
+          events.push(agentMessagePreview(runId, itemId, text, true));
+          break;
         }
+
+        const previousId = runState.currentMessageItemId;
+        if (itemId && previousId && itemId !== previousId) {
+          const text = runState.agentMessageBuffer.trim();
+          if (text) {
+            emitAgentMessageContent(runState.pendingFlush, runId, text, previousId, ts);
+            runState.emittedAgentMessageItemIds.add(previousId);
+          }
+          runState.agentMessageBuffer = "";
+        }
+        runState.currentMessageItemId = itemId ?? previousId;
+        runState.agentMessageBuffer += delta;
+        events.push(agentMessagePreview(runId, runState.currentMessageItemId, runState.agentMessageBuffer));
         break;
       }
 
@@ -2812,7 +2800,9 @@ export function createCodexEventMapper(
             const itemText = typeof item.text === "string"
               ? item.text.trim()
               : "";
-            const { text: messageText, questions } = projectAgentMessage(item, bufferedText || itemText);
+            const hadPreview = rs.agentMessagePreviews?.delete(item.id);
+            const { text: messageText, questions } = projectAgentMessage(item,
+              rs.requireCompletedAgentMessages ? itemText : bufferedText || itemText);
             const messagePhase = typeof item.phase === "string"
               ? item.phase
               : undefined;
@@ -2833,6 +2823,9 @@ export function createCodexEventMapper(
                   ...(questions.length > 0 ? { questions } : {}),
                 },
               );
+              rs.emittedAgentMessageItemIds.add(item.id);
+            } else if (rs.requireCompletedAgentMessages && !messageText) {
+              if (hadPreview) events.push(agentMessagePreview(runId, item.id, ""));
               rs.emittedAgentMessageItemIds.add(item.id);
             }
             if (

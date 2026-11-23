@@ -463,15 +463,29 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method === 'POST' && request.url === '/pair') {
     const body = JSON.parse(Buffer.concat(parts).toString());
-    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-mate-voice', 'ios-test-reply-interrupted', 'ios-test-goal-controls'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
+    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-mate-voice', 'ios-test-reply-interrupted', 'ios-test-goal-controls', 'ios-test-live-spacing', 'ios-test-empty-conversation'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
       response.writeHead(403); response.end(JSON.stringify({ error: 'Invalid pairing code' })); return;
     }
     const paging = body.code.startsWith('ios-test-paging');
     reset(body.code === 'ios-test-chat' || paging, body.code === 'ios-test-home', body.code === 'ios-test-design', body.code === 'ios-test-workspace', body.code === 'ios-test-media', paging, body.code === 'ios-test-paging-disjoint');
     goalControlsFixture = body.code === 'ios-test-goal-controls';
+    if (body.code === 'ios-test-empty-conversation') artifacts.set(runs[0].id, []);
     if (body.code === 'ios-test-reply-interrupted') {
       runs[0].status = 'failed';
       runs[0].lastError = 'The provider stopped responding before it could finish the reply. You can send a follow-up to continue.';
+    }
+    if (body.code === 'ios-test-live-spacing') {
+      const run = runs[0];
+      const at = delta => new Date(run.createdAt.getTime() + delta);
+      run.status = 'running';
+      artifacts.get(run.id).push(
+        { id: 3, runId: run.id, kind: 'report', content: 'Reviewing the layout.', createdAt: at(2000) },
+        { id: 4, runId: run.id, kind: 'report', content: 'The files are ready.', createdAt: at(5000) },
+      );
+      tools.set(run.id, [
+        { id: 7, toolName: 'Read', status: 'done', input: { file_path: 'index.html' }, createdAt: at(3000) },
+        { id: 8, toolName: 'Glob', status: 'done', input: { pattern: '*.css' }, createdAt: at(4000) },
+      ]);
     }
     if (['ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-restore-mate', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll'].includes(body.code)) descriptor.capabilities.push('mateInfo', 'mateModelEditing');
     if (body.code === 'ios-test-mate-scroll') descriptor.backendId = 'ios-fixture-mate-scroll';
