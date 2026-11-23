@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct MatesView: View {
     #if DEBUG && targetEnvironment(simulator)
@@ -81,6 +82,7 @@ private struct MateDirectoryView: View {
     let archived: Bool
     let openMate: (String) -> Void
     var newMate: (([MateTeam]) -> Void)? = nil
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var directory: MateDirectory?
     @State private var error: String?
     @State private var reload = 0
@@ -90,6 +92,7 @@ private struct MateDirectoryView: View {
         newMate != nil && directory != nil && session.isConnected && !session.mateCommandPending
     }
     private var disconnectedWithoutMates: Bool { !session.isConnected && directory?.mates.isEmpty != false }
+    private var canChangeMatePin: Bool { session.isConnected && session.supportsMatePinning && !session.mateCommandPending }
 
     var body: some View {
         let matches = directory.map(matchingMates)
@@ -222,10 +225,27 @@ private struct MateDirectoryView: View {
 
     @ViewBuilder private func mateSections(_ directory: MateDirectory, matches: [Mate], activity: [String: MateActivity]) -> some View {
         let teamNames = Dictionary(directory.teams.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
-        let members = Dictionary(grouping: matches, by: \.teamId)
+        let pinned = archived ? [] : matches.filter { $0.pinnedAt != nil }.sorted { first, second in
+            let firstDate = first.pinnedAt ?? .distantPast
+            let secondDate = second.pinnedAt ?? .distantPast
+            return firstDate == secondDate ? first.id < second.id : firstDate > secondDate
+        }
+        let regular = archived ? matches : matches.filter { $0.pinnedAt == nil }
+        let members = Dictionary(grouping: regular, by: \.teamId)
         var seen: Set<String> = []
         let teamIDs = directory.mates.compactMap(\.teamId).filter { seen.insert($0).inserted }
 
+        if !pinned.isEmpty {
+            Section {
+                if dynamicTypeSize.isAccessibilitySize {
+                    mateRows(pinned, activity: activity)
+                } else {
+                    pinnedMateGrid(pinned, activity: activity)
+                }
+            } header: {
+                MateSectionHeading("Pinned")
+            }
+        }
         ForEach(teamIDs.filter { members[$0] != nil }, id: \.self) { teamID in
             Section {
                 mateRows(members[teamID] ?? [], activity: activity)
@@ -236,6 +256,56 @@ private struct MateDirectoryView: View {
         if let unassigned = members[nil] {
             if teamIDs.isEmpty { mateRows(unassigned, activity: activity) }
             else { Section { mateRows(unassigned, activity: activity) } header: { MateSectionHeading("No team") } }
+        }
+    }
+
+    private func pinnedMateGrid(_ mates: [Mate], activity: [String: MateActivity]) -> some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top), count: 3), spacing: 14) {
+            ForEach(mates) { mate in
+                let status = activity[mate.id]
+                PinnedMateTile(mate: mate, activityText: status.map(mateActivityText),
+                               canUnpin: canChangeMatePin, onOpen: { openMate(mate.id) },
+                               onUnpin: session.supportsMatePinning ? { setMatePinned(mate, pinned: false) } : nil) {
+                    VStack(spacing: 5) {
+                        MateRobotThumbnail(preset: MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id))
+                            .frame(width: Self.avatarSize, height: Self.avatarSize)
+                        Text(mate.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                        if mate.needsSetup {
+                            Text("Finish setup").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        } else if let status {
+                            mateActivityLabel(status).lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 12, trailing: 0))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+    }
+
+    @ViewBuilder private func matePinAction(_ mate: Mate) -> some View {
+        if !archived, session.supportsMatePinning {
+            let pin = mate.pinnedAt == nil
+            Button(pin ? "Pin \(mate.name)" : "Unpin \(mate.name)", systemImage: pin ? "pin" : "pin.slash") {
+                setMatePinned(mate, pinned: pin)
+            }
+            .disabled(!canChangeMatePin)
+        }
+    }
+
+    private func setMatePinned(_ mate: Mate, pinned: Bool) {
+        guard canChangeMatePin else { return }
+        let owner = session.ownership
+        Task {
+            guard owner == session.ownership else { return }
+            do {
+                try await session.manageMate(mate.id, change: .setPinned(pinned))
+                if owner == session.ownership { error = nil }
+            } catch {
+                if owner == session.ownership { self.error = error.localizedDescription }
+            }
         }
     }
 
@@ -271,6 +341,7 @@ private struct MateDirectoryView: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .contextMenu { matePinAction(mate) }
             .overlay(alignment: .bottom) {
                 if mate.id != mates.last?.id {
                     Divider()
@@ -285,11 +356,13 @@ private struct MateDirectoryView: View {
         }
     }
 
+    private func mateActivityText(_ status: MateActivity) -> String { status == .needsYou ? "Needs you" : "Working" }
+
     private func mateActivityLabel(_ status: MateActivity) -> some View {
         HStack(spacing: 5) {
             Circle().fill(status == .needsYou ? Color.orange : .blue)
                 .frame(width: 6, height: 6).accessibilityHidden(true)
-            Text(status == .needsYou ? "Needs you" : "Working")
+            Text(mateActivityText(status))
                 .font(.caption.weight(.medium))
         }
     }
@@ -305,6 +378,82 @@ private struct MateDirectoryView: View {
         } catch {
             if !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription }
         }
+    }
+}
+
+// SwiftUI merges context menus inside a single List row. The native button
+// owns the interaction and previews only the tile it hosts.
+private struct PinnedMateTile<Label: View>: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let mate: Mate
+    let activityText: String?
+    let canUnpin: Bool
+    let onOpen: () -> Void
+    let onUnpin: (() -> Void)?
+    @ViewBuilder let label: () -> Label
+
+    struct MenuState: Equatable {
+        let title: String
+        let isEnabled: Bool
+    }
+
+    @MainActor final class Coordinator {
+        var hostedLabel: (UIView & UIContentView)?
+        var onOpen: (() -> Void)?
+        var onUnpin: (() -> Void)?
+        var menuState: MenuState?
+    }
+
+    private var labelConfiguration: UIHostingConfiguration<Label, EmptyView> {
+        UIHostingConfiguration(content: label).margins(.all, 0).minSize(width: 0, height: 0)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .custom)
+        let hostedLabel = labelConfiguration.makeContentView()
+        context.coordinator.hostedLabel = hostedLabel
+        hostedLabel.isUserInteractionEnabled = false
+        hostedLabel.accessibilityElementsHidden = true
+        hostedLabel.translatesAutoresizingMaskIntoConstraints = false
+        button.addSubview(hostedLabel)
+        NSLayoutConstraint.activate([
+            hostedLabel.topAnchor.constraint(equalTo: button.topAnchor),
+            hostedLabel.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+            hostedLabel.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+            hostedLabel.bottomAnchor.constraint(equalTo: button.bottomAnchor),
+        ])
+        button.addAction(UIAction { [weak coordinator = context.coordinator] _ in coordinator?.onOpen?() }, for: .touchUpInside)
+        return button
+    }
+
+    func updateUIView(_ button: UIButton, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.hostedLabel?.configuration = labelConfiguration
+        coordinator.onOpen = onOpen
+        coordinator.onUnpin = onUnpin
+        button.accessibilityIdentifier = "mate-\(mate.id)"
+        button.accessibilityLabel = mate.name
+        button.accessibilityValue = mate.needsSetup ? "Finish setup" : activityText
+
+        let menu = onUnpin.map { _ in MenuState(title: "Unpin \(mate.name)", isEnabled: canUnpin) }
+        if menu != coordinator.menuState {
+            coordinator.menuState = menu
+            button.menu = menu.map { state in
+                UIMenu(children: [UIAction(title: state.title, image: UIImage(systemName: "pin.slash"), attributes: state.isEnabled ? [] : .disabled) { [weak coordinator] _ in
+                    coordinator?.onUnpin?()
+                }])
+            }
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIButton, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, let label = context.coordinator.hostedLabel else { return nil }
+        let fittingSize = CGSize(width: width, height: UIView.layoutFittingCompressedSize.height)
+        return label.systemLayoutSizeFitting(fittingSize, withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
     }
 }
 

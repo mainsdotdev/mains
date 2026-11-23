@@ -158,6 +158,7 @@ public final class BackendSession {
     public var supportsMates: Bool { connectedDescriptor?.capabilities.contains("assistants") == true && !isDemo }
     public var supportsMateInfo: Bool { supportsMates && connectedDescriptor?.capabilities.contains("mateInfo") == true }
     public var supportsMateModelEditing: Bool { supportsMateInfo && connectedDescriptor?.capabilities.contains("mateModelEditing") == true }
+    public var supportsMatePinning: Bool { supportsMateInfo && connectedDescriptor?.capabilities.contains("matePinning") == true }
     public var supportsMobileGoalSummary: Bool { connectedDescriptor?.capabilities.contains("mobileGoalSummary") == true }
     public var supportsMobileGoalControls: Bool { connectedDescriptor?.capabilities.contains("mobileGoalControls") == true }
     public var goalChangeNeedsCheck: Bool { pendingGoalChange?.uncertain == true }
@@ -1011,6 +1012,8 @@ public final class BackendSession {
         switch change {
         case .updateProfile(_, _, _, _, .some) where !supportsMateModelEditing:
             throw MainsError.server("Update Mains on your computer to change the model and effort.")
+        case .setPinned where !supportsMatePinning:
+            throw MainsError.server("Update Mains on your computer to pin Mates.")
         case .assign, .runRoutine:
             // Both commands target the Mate whose identity the backend validates.
             recipientMateID = id
@@ -1177,6 +1180,11 @@ public final class BackendSession {
         return try await beginAtlasSave("atlas:setMobileTrash", fields: ["id": .string(item.id), "trashed": .bool(false)], label: item.title)
     }
 
+    public func deleteAtlasTrashItem(_ item: AtlasTrashItem, owner: Int) async throws -> AtlasSavedItem {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        return try await beginAtlasSave("atlas:deleteMobileTrash", fields: ["id": .string(item.id), "expectedTrashedAt": .string(item.trashedAt)], label: item.title)
+    }
+
     public func readAtlasBookmark(_ id: String) async throws -> AtlasBookmarkDocument {
         let item = try await atlasRead("atlas:readMobileBookmark", fields: ["id": .string(id)]).decode(AtlasBookmarkDocument.self)
         guard item.requestedId == id, !item.id.isEmpty, item.id.utf8.count <= 256, item.kind == "bookmark",
@@ -1270,6 +1278,8 @@ public final class BackendSession {
                       value["revision"].string?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw MainsError.invalidReply }
             } else if attempt.isTrashChange {
                 guard value["requestedId"] == attempt.payload["id"], value["trashed"] == attempt.payload["trashed"] else { throw MainsError.invalidReply }
+            } else if attempt.isTrashDeletion {
+                guard value["requestedId"] == attempt.payload["id"], value["id"] == attempt.payload["id"] else { throw MainsError.invalidReply }
             } else if attempt.isUpdate {
                 guard value["requestedId"] == attempt.payload["id"],
                       attempt.payload.objectValue["isFavorite"].map({ value["isFavorite"] == $0 }) ?? true,
@@ -1287,6 +1297,7 @@ public final class BackendSession {
                 else { attempt.status = .uncertain; pendingAtlasSave = attempt }
                 if refused, case .server(let message) = failure,
                    message.contains("not available to paired devices") || message.contains("No handler") || message.contains("Unknown channel") {
+                    if attempt.isTrashDeletion { throw MainsError.server("Update Mains on your computer to permanently delete Atlas items.") }
                     throw MainsError.server(attempt.isUpdate ? "Update Mains on your computer to organize Atlas items." : "Update Mains on your computer to save items to Atlas.")
                 }
             }

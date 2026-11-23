@@ -344,6 +344,13 @@
       "when": 1794950076682,
       "tag": "0048_assistant_optional_teams",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1795436979574,
+      "tag": "0049_assistant_pins",
+      "breakpoints": true
     }
   ]
 }

@@ -511,6 +511,12 @@ describe("archived Mate history", () => {
     it("keeps owned chats and task identity readable without admitting archived work", async () => {
         const mate = await makeAssistant("Release");
         const accountId = mate.accountId;
+        const pin = { accountId, id: mate.id, pinned: true };
+        expect(mate.pinnedAt).toBeNull();
+        assistantsService.setPinned(pin);
+        const pinnedAt = assistantsService.get(mate.id, accountId)?.pinnedAt;
+        expect(pinnedAt).toBeInstanceOf(Date);
+        expect(() => assistantsService.setPinned({ ...pin, pinned: "true" })).toThrow("Choose a valid pin state");
         const source = createRun(db, { status: "succeeded" });
         const worker = createRun(db, { assistantId: mate.id, status: "succeeded", mode: "work", title: "Release check" });
         assistantsRepo.enqueue({
@@ -519,6 +525,7 @@ describe("archived Mate history", () => {
             workerRunId: worker.id, result: "Release checked",
         }, { id: "historical-request", assignmentId: "historical", kind: "request", content: "Check release", status: "delivered" });
         assistantsService.archive(mate.id, accountId, true);
+        expect(() => assistantsService.setPinned({ ...pin, pinned: false })).toThrow("Assistant is unavailable");
 
         expect((await assistantsMobile.directory(accountId)).mates).toEqual([]);
         const identity = { id: mate.id, name: mate.name, avatar: mate.avatar, isArchived: true };
@@ -533,7 +540,7 @@ describe("archived Mate history", () => {
         await expect(assistantsMobile.directory("foreign", mate.id)).rejects.toThrow("Account is unavailable");
         expect(() => assistantsService.require(mate.id, accountId)).toThrow("Assistant is unavailable");
         assistantsService.archive(mate.id, accountId, false);
-        expect((await assistantsMobile.directory(accountId)).mates).toMatchObject([{ ...identity, isArchived: false }]);
+        expect((await assistantsMobile.directory(accountId)).mates).toMatchObject([{ ...identity, isArchived: false, pinnedAt }]);
     });
 });
 

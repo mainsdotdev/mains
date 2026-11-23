@@ -6,7 +6,7 @@ import type { AtlasMobileEntry, AtlasMobileFile, AtlasMobileFileRead, AtlasMobil
   AtlasMobilePageImageRequest, AtlasMobilePageImage,
   AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileSavedItem, AtlasMobileUpdateItem, AtlasMobileItemState,
   AtlasMobileBookmarkIdentity, AtlasMobileBookmark, AtlasMobileEditBookmark, AtlasMobileBookmarkEditResult,
-  AtlasMobileTrashOptions, AtlasMobileTrashPage, AtlasMobileSetTrash, AtlasMobileTrashState,
+  AtlasMobileTrashOptions, AtlasMobileTrashPage, AtlasMobileSetTrash, AtlasMobileTrashState, AtlasMobileDeleteTrash, AtlasMobileDeleteTrashResult,
   AtlasMobileTagsOptions, AtlasMobileTagsPage, AtlasMobileItemTags, AtlasMobileSetTags, AtlasMobileTagsResult } from "@mains/contracts/atlas-mobile";
 import { MOBILE_OUTPUT_MAX_BYTES, outputFileType, type RunOutputChunk } from "@mains/contracts/run-outputs";
 import { readRunFileChunk } from "../../../shared/file-chunks";
@@ -119,7 +119,7 @@ export const atlasMobile = {
     if (!Number.isSafeInteger(page) || page < 1 || page > 100_000) throw new Error("Invalid Trash page");
     const rows = atlasService.list({ accountId, trashed: true, offset: (page - 1) * 50, limit: 51 });
     return { items: rows.slice(0, 50).map((item) => ({ id: item.id, title: item.title, kind: item.kind, collectionId: item.collectionId, trashedAt: item.trashedAt! })),
-      page, hasNext: rows.length > 50 };
+      page, hasNext: rows.length > 50, canDeletePermanently: true };
   },
 
   async setTrash(input: AtlasMobileSetTrash): Promise<AtlasMobileTrashState> {
@@ -132,6 +132,18 @@ export const atlasMobile = {
       if (!atlasService.get({ accountId, id })) throw new Error("Atlas item not found");
     });
     return { id: item.id, requestedId: id, title: item.title, kind: item.kind, trashed: !!item.trashedAt };
+  },
+
+  async deleteTrash(input: AtlasMobileDeleteTrash): Promise<AtlasMobileDeleteTrashResult> {
+    const accountId = required(input?.accountId), id = required(input?.id);
+    if (typeof input.expectedTrashedAt !== "string" || !input.expectedTrashedAt || input.expectedTrashedAt.length > 64
+      || Object.keys(input).some(key => !["accountId", "id", "expectedTrashedAt"].includes(key))) throw new Error("Invalid Atlas Trash deletion");
+    const item = atlasService.get({ accountId, id });
+    if (!item || item.id !== id || !isAtlasLibraryItem(item)) throw new Error("Atlas item not found");
+    if (item.trashedAt !== input.expectedTrashedAt) throw new Error("This item’s Trash status changed. Refresh Trash and try again.");
+    // The shared removal checks Trash and commits the database deletion before awaiting file cleanup.
+    await atlasService.remove({ accountId, id });
+    return { id, requestedId: id, title: item.title, kind: item.kind };
   },
 
   readBookmark(input: AtlasMobileBookmarkIdentity): AtlasMobileBookmark {

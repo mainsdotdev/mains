@@ -35,8 +35,8 @@ export const CLAUDE_PERMISSION_MODES: readonly ModeOption<ClaudePermissionMode>[
   },
   {
     value: "acceptEdits",
-    label: "Auto accept edits",
-    shortLabel: "Edit",
+    label: "Accept edits",
+    shortLabel: "Accept edits",
     description: "Accept all edits",
   },
   {

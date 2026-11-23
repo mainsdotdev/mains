@@ -82,7 +82,7 @@ struct MessageComposer: View {
     private var optionsLabel: String? {
         if context.mode == "developer" {
             let value = settings.permission(provider: context.providerId)
-            return PermissionChoice.title(for: value, provider: context.providerId) ?? "Options"
+            return PermissionChoice.shortTitle(for: value, provider: context.providerId) ?? "Options"
         }
         return context.mode == "work" && context.supportsGoalMode || speed != nil
             ? "Options" : nil

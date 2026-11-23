@@ -1862,6 +1862,7 @@ export const assistants = sqliteTable("assistants", {
   settings: text("settings").notNull(), spaceSnapshot: text("space_snapshot").notNull(),
   workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "set null" }),
   isArchived: integer("is_archived", { mode: "boolean" }).notNull().default(false),
+  pinnedAt: integer("pinned_at", { mode: "timestamp_ms" }),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 }, (t) => [index("idx_assistants_account_team").on(t.accountId, t.teamId), check("check_assistants_avatar_json", sql`json_valid(${t.avatar})`), check("check_assistants_settings_json", sql`json_valid(${t.settings})`), check("check_assistants_space_json", sql`json_valid(${t.spaceSnapshot})`)]);

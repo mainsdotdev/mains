@@ -1,6 +1,12 @@
 import SwiftUI
 
 struct AtlasTrashView: View {
+    private enum Operation: Equatable { case restore, delete }
+    private struct Confirmation {
+        let item: AtlasTrashItem
+        let operation: Operation
+    }
+
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
@@ -12,10 +18,12 @@ struct AtlasTrashView: View {
     @State private var result: AtlasTrashPage?
     @State private var loading = false
     @State private var error: String?
-    @State private var restoreError: String?
+    @State private var actionError: String?
+    @State private var confirmation: Confirmation?
     @State private var reload = 0
     @State private var readID = UUID()
-    @State private var restoring: String?
+    @State private var changingItemID: String?
+    private var canChange: Bool { session.canSaveToAtlas && owner == session.ownership && changingItemID == nil }
     private var key: String { "\(page):\(session.connection):\(session.atlasRevision):\(reload)" }
     var body: some View {
         NavigationStack {
@@ -26,7 +34,7 @@ struct AtlasTrashView: View {
                             DisconnectedState(message: "Connect to your computer to see what’s in Trash.")
                         } else {
                             EmptyStateView(artwork: .trash, title: "Trash is empty",
-                                           description: Text("Items moved to Trash can be restored here."))
+                                           description: Text("Items moved to Trash appear here."))
                                 .accessibilityIdentifier("atlasTrashEmpty")
                         }
                     }
@@ -46,7 +54,25 @@ struct AtlasTrashView: View {
             .task(id: key) { await load() }
             .pullToRefresh { await load() }
             .accessibilityIdentifier("atlasTrash")
-            .alert("Couldn’t restore item", isPresented: Binding(get: { restoreError != nil }, set: { if !$0 { restoreError = nil } })) { Button("OK", role: .cancel) {} } message: { Text(restoreError ?? "") }
+            .alert(confirmation?.operation == .delete ? "Delete permanently?" : "Restore item?",
+                   isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }),
+                   presenting: confirmation) { selection in
+                if selection.operation == .delete {
+                    Button("Delete Permanently", role: .destructive) { perform(selection) }
+                } else {
+                    Button("Restore") { perform(selection) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { selection in
+                if selection.operation == .delete {
+                    Text("“\(selection.item.title)” will be permanently deleted from Atlas. This can’t be undone.")
+                } else {
+                    Text("“\(selection.item.title)” will return to your Atlas library.")
+                }
+            }
+            .alert("Couldn’t update item", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(actionError ?? "") }
         }
         .onChange(of: session.ownership) { _, _ in readID = UUID(); dismiss() }
         .onDisappear { readID = UUID() }
@@ -81,14 +107,28 @@ struct AtlasTrashView: View {
                                     .accessibilityLabel([trashedAt.map { "Trashed on " + $0.formatted(date: .abbreviated, time: .shortened) }, project].compactMap { $0 }.joined(separator: ", "))
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                        Button("Restore", systemImage: "arrow.uturn.backward") { restore(item) }
-                            .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
-                            .opacity(restoring == item.id ? 0.5 : 1)
-                            .accessibilityLabel("Restore " + item.title).accessibilityIdentifier("atlasRestore-" + item.id)
-                            .accessibilityValue(restoring == item.id ? "Restoring" : "")
-                            .disabled(!session.canSaveToAtlas || owner != session.ownership || restoring != nil)
+                        HStack(spacing: 0) {
+                            Button { confirmation = Confirmation(item: item, operation: .restore) } label: {
+                                Image(systemName: "arrow.uturn.backward")
+                                    .frame(width: 44, height: 44).contentShape(.rect)
+                            }
+                            .accessibilityLabel("Restore " + item.title)
+                            .accessibilityIdentifier("atlasRestore-" + item.id)
+                            if result.canDeletePermanently == true {
+                                Button(role: .destructive) { confirmation = Confirmation(item: item, operation: .delete) } label: {
+                                    Image(systemName: "trash").foregroundStyle(.red)
+                                        .frame(width: 44, height: 44).contentShape(.rect)
+                                }
+                                .accessibilityLabel("Delete " + item.title + " permanently")
+                                .accessibilityIdentifier("atlasDelete-" + item.id)
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(!canChange)
+                        .opacity(changingItemID == item.id ? 0.5 : 1)
                     }.frame(minHeight: AppListStyle.minimumContentHeight)
                         .listRowInsets(AppListStyle.rowInsets)
+                        .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("atlasTrashItem-" + item.id)
                 }
                 if result.page > 1 || result.hasNext {
@@ -104,12 +144,19 @@ struct AtlasTrashView: View {
         }
         .listStyle(.insetGrouped)
     }
-    private func restore(_ item: AtlasTrashItem) {
-        restoring = item.id
+    private func perform(_ selection: Confirmation) {
+        guard canChange else { return }
+        changingItemID = selection.item.id
         Task {
-            defer { if owner == session.ownership { restoring = nil } }
-            do { _ = try await session.restoreAtlasItem(item, owner: owner) }
-            catch { if owner == session.ownership { restoreError = error.localizedDescription } }
+            defer { changingItemID = nil }
+            do {
+                switch selection.operation {
+                case .restore: _ = try await session.restoreAtlasItem(selection.item, owner: owner)
+                case .delete: _ = try await session.deleteAtlasTrashItem(selection.item, owner: owner)
+                }
+            } catch {
+                if owner == session.ownership { actionError = error.localizedDescription }
+            }
         }
     }
     private func load() async {

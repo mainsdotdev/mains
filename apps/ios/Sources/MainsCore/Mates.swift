@@ -54,6 +54,7 @@ public struct Mate: Decodable, Identifiable, Sendable {
     public let providerId: String
     public let model: String
     public let isArchived: Bool?
+    public let pinnedAt: Date?
     public let needsSetup: Bool
     public let welcome: MateWelcome?
     public let details: MateDetails?
@@ -259,6 +260,7 @@ public enum MateChange: Sendable {
     case updateProfile(MateEditableProfile, original: MateEditableProfile, teamID: String?, originalTeamID: String?,
                        modelChange: MateModelChange? = nil)
     case archive(Bool)
+    case setPinned(Bool)
     case saveMemory(MateMemoryNote, expectedTeamID: String?)
     case deleteMemory(id: String, revision: Int)
     case assign(title: String, prompt: String)
@@ -280,6 +282,8 @@ public enum MateChange: Sendable {
             if let modelChange { fields["modelChange"] = try .encode(modelChange) }
         case .archive(let archived):
             fields = ["action": .string("archive"), "archived": .bool(archived)]
+        case .setPinned(let pinned):
+            fields = ["action": .string("setPinned"), "pinned": .bool(pinned)]
         case let .saveMemory(note, expectedTeamID):
             fields = ["action": .string("saveMemory"), "note": try .encode(note),
                       "expectedTeamId": expectedTeamID.map(JSONValue.string) ?? .null]

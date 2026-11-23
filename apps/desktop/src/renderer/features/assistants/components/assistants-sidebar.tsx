@@ -1,20 +1,21 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { Assistant } from "@mains/contracts/assistants";
-import { Button, Text } from "@/components/ui";
-import { AssistantSteps, Warning } from "@/components/ui/icons";
+import { Button, Text, toast } from "@/components/ui";
+import { AssistantSteps, Info, Pin, PinFilled, Warning } from "@/components/ui/icons";
 import NewButton from "@/components/layout/sidebar/new-button";
 import SearchBar from "@/components/layout/sidebar/search-bar";
 import { SidebarGroupSection } from "@/components/layout/sidebar/sidebar-group-section";
 import { SidebarItemHoverCard } from "@/components/layout/sidebar/sidebar-item-hover-card";
 import { SidebarTopRows } from "@/components/layout/sidebar/sidebar-top-rows";
 import { useGetAccountQuery } from "@/lib/redux/api";
-import { useAssistantOverviewQuery } from "@/lib/redux/api/assistantsApi";
+import { useAssistantOverviewQuery, useSetAssistantPinnedMutation } from "@/lib/redux/api/assistantsApi";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setSidebarCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import { useIsMobile } from "@/lib/platform";
 import { assistantHref, assistantTeamGroupKey } from "../lib/assistant-navigation";
 import { AssistantMonogram } from "./assistant-monogram";
+import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantArchiveMenu } from "./assistant-archive-menu";
 import { assistantIdsWithPendingSetup, errorText, isAssistantWorking } from "../lib/assistant-ui";
 
@@ -22,6 +23,7 @@ export function AssistantsSidebar() {
   const backendId = useAppSelector(state => state.backends.activeBackendId);
   const { data: account } = useGetAccountQuery();
   const { currentData: overview, error, refetch } = useAssistantOverviewQuery(account?.id ?? "", { skip: !account });
+  const [setPinned, { isLoading: changingPin }] = useSetAssistantPinnedMutation();
   const [searchExpanded, setSearchExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [params, setParams] = useSearchParams();
@@ -33,21 +35,37 @@ export function AssistantsSidebar() {
     if (mobile) dispatch(setSidebarCollapsed(true));
   };
   const query = searchQuery.trim().toLocaleLowerCase();
+  const matches = (mate: Assistant) => !query || `${mate.name} ${mate.description}`.toLocaleLowerCase().includes(query);
   const pendingSetup = assistantIdsWithPendingSetup(overview?.welcomes);
+  const pinned: Array<Assistant & { pinnedAt: Date }> = [];
   const groupsByTeam = new Map<string | null, Assistant[]>();
   for (const assistant of overview?.assistants.slice().reverse() ?? []) {
     if (assistant.isArchived) continue;
+    if (assistant.pinnedAt != null) {
+      if (matches(assistant)) pinned.push({ ...assistant, pinnedAt: assistant.pinnedAt });
+      continue;
+    }
     const members = groupsByTeam.get(assistant.teamId);
     if (members) members.push(assistant);
     else groupsByTeam.set(assistant.teamId, [assistant]);
   }
+  pinned.sort((a, b) => new Date(b.pinnedAt).getTime() - new Date(a.pinnedAt).getTime() || a.id.localeCompare(b.id));
   const showTeamHeadings = groupsByTeam.size > 1 || !groupsByTeam.has(null);
   const teamNames = new Map(overview?.teams.map(team => [team.id, team.name]));
   const visibleGroups = Array.from(groupsByTeam, ([teamId, members]) => ({
     teamId,
     label: teamId === null ? "No team" : teamNames.get(teamId) ?? "Unavailable team",
-    members: query ? members.filter(a => `${a.name} ${a.description}`.toLocaleLowerCase().includes(query)) : members,
+    members: members.filter(matches),
   })).filter(group => group.members.length > 0);
+  const changePin = async (assistant: Assistant) => {
+    try { await setPinned({ accountId: assistant.accountId, id: assistant.id, pinned: assistant.pinnedAt == null }).unwrap(); }
+    catch (error) { toast.error(errorText(error)); }
+  };
+  const renderMate = (assistant: Assistant) => <AssistantItem key={assistant.id} assistant={assistant}
+    needsSetup={pendingSetup.has(assistant.id)}
+    working={isAssistantWorking(overview, assistant.id)} active={params.get("new") !== "1" && params.get("assistant") === assistant.id}
+    open={open} onOpenDetails={() => open(`${assistantHref(assistant.id, params.get("assistant") === assistant.id ? params.get("run") : null)}&tab=profile`)}
+    onTogglePin={assistant.pinnedAt !== undefined ? () => void changePin(assistant) : undefined} changingPin={changingPin} />;
   return (
     <div className="flex h-full flex-col text-primary-900 dark:text-primary-100">
       <SidebarTopRows header={<Text as="h2" size="base" weight="medium" className="px-2">Mates</Text>}>
@@ -61,13 +79,16 @@ export function AssistantsSidebar() {
       <nav aria-label="Mates" className="scroll-bounce min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-4 select-none noscrollbar">
         {!!error && <div className="px-2 py-3 text-xs text-danger">{errorText(error)}<Button variant="ghost" onClick={() => void refetch()}>Retry</Button></div>}
         {!overview && !error && <p className="px-2 py-3 text-xs text-primary-500">Loading mates…</p>}
-        {overview && !visibleGroups.length && <p className="px-2 py-3 text-xs text-primary-500">{query ? "No matching mates" : "Your mates will appear here."}</p>}
+        {overview && !pinned.length && !visibleGroups.length && <p className="px-2 py-3 text-xs text-primary-500">{query ? "No matching mates" : "Your mates will appear here."}</p>}
+        {pinned.length > 0 && <section aria-label="Pinned">
+          <SidebarGroupSection key={query ? "search" : "browse"} groupKey={query ? undefined : JSON.stringify([backendId ?? "local", account?.id ?? "", "mate-pins"])}
+            label="Pinned" labelWeight="medium" count={pinned.length}>
+            <div className="grid grid-cols-3 gap-1.5 pt-1">{pinned.map(renderMate)}</div>
+          </SidebarGroupSection>
+        </section>}
         {visibleGroups.map(({ teamId, label, members }) => {
           const groupKey = assistantTeamGroupKey(backendId, account?.id ?? "", teamId);
-          const rows = members.map(assistant => <AssistantItem key={assistant.id} assistant={assistant}
-            needsSetup={pendingSetup.has(assistant.id)}
-            working={isAssistantWorking(overview, assistant.id)} active={params.get("new") !== "1" && params.get("assistant") === assistant.id}
-            open={open} onOpenDetails={() => open(`${assistantHref(assistant.id, params.get("assistant") === assistant.id ? params.get("run") : null)}&tab=profile`)} />);
+          const rows = members.map(renderMate);
           if (!showTeamHeadings) return <div key={groupKey} className="space-y-1.5">{rows}</div>;
 
           return (
@@ -91,23 +112,50 @@ export function AssistantsSidebar() {
   );
 }
 
-function AssistantItem({ assistant, needsSetup, working, active, open, onOpenDetails }: {
+function AssistantItem({ assistant, needsSetup, working, active, open, onOpenDetails, onTogglePin, changingPin }: {
   assistant: Assistant; needsSetup: boolean; working: boolean; active: boolean; open(href: string): void; onOpenDetails(): void;
+  onTogglePin?: () => void; changingPin: boolean;
 }) {
+  const pinned = assistant.pinnedAt != null;
+  const pinLabel = pinned ? "Unpin mate" : "Pin mate";
+  const PinIcon = pinned ? PinFilled : Pin;
+  const select = () => open(assistantHref(assistant.id));
+  const pinVisibility = "opacity-0 group-hover/assistant:opacity-100 group-focus-within/assistant:opacity-100 pointer-coarse:opacity-100";
   return (
-    <div>
-      <SidebarItemHoverCard title={assistant.name} description={assistant.description} updatedAt={assistant.updatedAt} actions={[]}>
-        <div className={`group/assistant flex items-center gap-2 rounded-2xl px-2.5 py-2.5 transition-colors ${active ? "glass-outline-soft glass-outline bg-primary/50 dark:bg-primary/5" : "hover:bg-primary/50 dark:hover:bg-primary/5"}`}>
-          <AssistantMonogram avatar={assistant.avatar} name={assistant.name} providerId={assistant.providerId} working={working} onClick={onOpenDetails} />
-          <Button variant="bare" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" aria-current={active ? "page" : undefined} onClick={() => open(assistantHref(assistant.id))}>
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <Text as="span" size="s" weight="medium" className="truncate">{assistant.name}</Text>
-              {needsSetup ? <span className="flex min-w-0 items-center gap-1.5 text-xs text-primary-500">
-                <span className="truncate">Finish setup</span>
+    <div className="min-w-0">
+      <SidebarItemHoverCard title={assistant.name} description={assistant.description} updatedAt={assistant.updatedAt}
+        actions={[
+          ...(pinned ? [{ label: `About ${assistant.name}`, icon: <Info className="size-4" />, onSelect: onOpenDetails }] : []),
+          ...(onTogglePin && !changingPin ? [{ label: pinLabel, icon: <PinIcon className="size-4" />, pressed: pinned, onSelect: onTogglePin }] : []),
+        ]}>
+        <div className={`group/assistant rounded-2xl transition-colors ${pinned ? "relative" : "flex items-center gap-2 px-2.5 py-2.5"} ${active ? "glass-outline-soft glass-outline bg-primary/50 dark:bg-primary/5" : "hover:bg-primary/50 dark:hover:bg-primary/5"}`}>
+          {pinned ? <Button variant="bare" role="button" title={assistant.name} aria-label={`Open ${assistant.name}${needsSetup ? ", finish setup" : ""}`}
+            aria-current={active ? "page" : undefined} onClick={select}
+            className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl px-1 py-2.5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent">
+            <AssistantAvatar avatar={assistant.avatar} working={working} seed={assistant.name} className="size-11 max-w-full shrink-0" />
+            <span className="flex w-full min-w-0 items-center justify-center gap-1">
+              <Text as="span" size="xs" weight="medium" className="min-w-0 truncate">{assistant.name}</Text>
+              {needsSetup && (
                 <Warning aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
-              </span> : <span className="truncate text-xs text-primary-500">{assistant.description || assistant.spaceSnapshot.name}</span>}
+              )}
             </span>
-          </Button>
+          </Button> : <>
+            <AssistantMonogram avatar={assistant.avatar} name={assistant.name} providerId={assistant.providerId} working={working} onClick={onOpenDetails} />
+            <Button variant="bare" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" aria-current={active ? "page" : undefined} onClick={select}>
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <Text as="span" size="s" weight="medium" className="truncate">{assistant.name}</Text>
+                {needsSetup ? <span className="flex min-w-0 items-center gap-1.5 text-xs text-primary-500">
+                  <span className="truncate">Finish setup</span>
+                  <Warning aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
+                </span> : <span className="truncate text-xs text-primary-500">{assistant.description || assistant.spaceSnapshot.name}</span>}
+              </span>
+            </Button>
+          </>}
+          {onTogglePin && <Button variant="icon" iconSize="xs" aria-label={`${pinLabel} ${assistant.name}`} aria-pressed={pinned}
+            tooltip={pinLabel} onClick={onTogglePin} disabled={changingPin}
+            className={pinned ? `absolute top-1 right-1 ${pinVisibility}` : `shrink-0 ${pinVisibility}`}>
+            <PinIcon className="size-3.5" />
+          </Button>}
         </div>
       </SidebarItemHoverCard>
     </div>

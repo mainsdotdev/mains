@@ -35,6 +35,7 @@ export function registerAssistantsIpc() {
     })));
     ipcMain.handle(CHANNELS.assistants.changeTeam, handle((payload: unknown) => changed(() => assistantsService.changeTeam(payload))));
     ipcMain.handle(CHANNELS.assistants.updateProfile, handle((payload: unknown) => changed(() => assistantsService.updateProfile(payload, assistantWork.guard()))));
+    ipcMain.handle(CHANNELS.assistants.setPinned, handle((payload: unknown) => changed(() => assistantsService.setPinned(payload))));
     ipcMain.handle(CHANNELS.assistants.create, handleWithContext((ctx, payload: unknown) => changed(async () => {
         if (ctx?.deviceId) await assistantsMobile.assertAccount(text(object(payload).accountId, "Account"));
         const assistant = await assistantsService.create(payload, assistantWork.guard());

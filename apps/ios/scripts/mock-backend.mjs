@@ -46,6 +46,7 @@ const createdMateTeams = new Map();
 let editedFixtureMate = null;
 const mateAssignments = new Map();
 const mateMemory = new Map();
+const matePins = new Map();
 const fixtureInfoTask = { id: 'fixture-info-task', title: 'Release handoff', status: 'completed', brief: 'Check the changelog.',
   result: 'Changelog checked.', error: null, workerRunId: 'fixture-mate-chat-0', evidence: ['Release checklist'],
   assignee: { id: fixtureMate.id, name: fixtureMate.name, avatar: fixtureMate.avatar, isArchived: false } };
@@ -95,7 +96,7 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
   receipts.clear(); pendingDecisions.clear(); storedTurns.clear(); storedDiffs.clear(); observations.length = 0; nextID = 10;
   createdMates.clear(); mateAssignments.clear();
   createdMateTeams.clear(); editedFixtureMate = null;
-  mateMemory.clear();
+  mateMemory.clear(); matePins.clear();
   goals.clear();
   goalControlsFixture = false;
   descriptor.backendId = 'ios-fixture';
@@ -463,7 +464,7 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method === 'POST' && request.url === '/pair') {
     const body = JSON.parse(Buffer.concat(parts).toString());
-    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-mate-voice', 'ios-test-reply-interrupted', 'ios-test-goal-controls', 'ios-test-live-spacing', 'ios-test-empty-conversation'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
+    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-mate-voice', 'ios-test-mate-pinning', 'ios-test-reply-interrupted', 'ios-test-goal-controls', 'ios-test-live-spacing', 'ios-test-empty-conversation'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
       response.writeHead(403); response.end(JSON.stringify({ error: 'Invalid pairing code' })); return;
     }
     const paging = body.code.startsWith('ios-test-paging');
@@ -488,6 +489,12 @@ const server = http.createServer(async (request, response) => {
       ]);
     }
     if (['ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-restore-mate', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll'].includes(body.code)) descriptor.capabilities.push('mateInfo', 'mateModelEditing');
+    if (body.code === 'ios-test-mate-pinning') {
+      descriptor.capabilities.push('mateInfo', 'matePinning');
+      matePins.set('fixture-planner', new Date('2026-11-09T09:00:00Z'));
+      matePins.set('fixture-reviewer', new Date('2026-11-09T08:00:00Z'));
+      matePins.set('fixture-solo', new Date('2026-11-09T07:00:00Z'));
+    }
     if (body.code === 'ios-test-mate-scroll') descriptor.backendId = 'ios-fixture-mate-scroll';
     if (body.code === 'ios-test-mate-team') descriptor.capabilities.push('mateTeamCreation');
     if (body.code === 'ios-test-mate-consent') descriptor.backendId = `ios-fixture-mate-consent-${randomUUID()}`;
@@ -592,9 +599,10 @@ wss.on('connection', socket => {
         }
         case CHANNELS.assistants.mobileDirectory: {
           const creatingTeams = descriptor.capabilities.includes('mateTeamCreation');
+          const canPin = descriptor.capabilities.includes('matePinning');
           const initialMates = fixtureMates.map(mate => {
-            if (mate.id === editedFixtureMate?.id) return editedFixtureMate;
-            return creatingTeams ? { ...mate, teamId: null } : mate;
+            const profile = mate.id === editedFixtureMate?.id ? editedFixtureMate : creatingTeams ? { ...mate, teamId: null } : mate;
+            return canPin ? { ...profile, pinnedAt: matePins.get(mate.id) ?? null } : profile;
           });
           const mates = [...initialMates, ...createdMates.values()].map(mate => mateArchived && mate.id === fixtureMate.id
             ? { ...mate, isArchived: true } : mate);
@@ -656,7 +664,9 @@ wss.on('connection', socket => {
           break;
         case CHANNELS.assistants.mobileManage: {
           const [account, mateID, change] = args;
-          if (account !== 'fixture-account' || mateID !== fixtureMate.id || !commandId) {
+          const pinChange = change.action === 'setPinned' && descriptor.capabilities.includes('matePinning') &&
+            typeof change.pinned === 'boolean' && fixtureMates.some(mate => mate.id === mateID);
+          if (account !== 'fixture-account' || !commandId || (mateID !== fixtureMate.id && !pinChange)) {
             throw new Error('Invalid fixture Mate change');
           }
           if (change.action === 'archive' && change.archived === false && mateArchived && descriptor.capabilities.includes('mateInfo')) {
@@ -667,6 +677,9 @@ wss.on('connection', socket => {
           }
           if (change.action === 'archive' && change.archived === true && !mateArchived && descriptor.capabilities.includes('mateInfo')) {
             mateArchived = true;
+          } else if (pinChange) {
+            if (change.pinned && !matePins.has(mateID)) matePins.set(mateID, new Date());
+            if (!change.pinned) matePins.delete(mateID);
           } else if (change.action === 'saveMemory') {
             mateMemory.set(change.note.id, { ...change.note, revision: change.note.revision + 1 });
           } else if (change.action === 'updateProfile' && descriptor.capabilities.includes('mateInfo')) {
@@ -838,6 +851,7 @@ wss.on('connection', socket => {
         case CHANNELS.atlas.editMobileBookmark:
         case CHANNELS.atlas.setMobileTags:
         case CHANNELS.atlas.setMobileTrash:
+        case CHANNELS.atlas.deleteMobileTrash:
           if (!commandId) throw new Error('Atlas saves require a command identity');
           result = atlasFixture(channel, args[0], { pdfBytes, outputBytes, imageBase64, version: outputVersion });
           receipts.set(commandId, { success: true, data: result }); broadcast(CHANNELS.atlas.changed, {}); break;

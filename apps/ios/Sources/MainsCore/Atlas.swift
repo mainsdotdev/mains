@@ -120,6 +120,7 @@ public struct AtlasTrashPage: Decodable, Sendable {
     public let items: [AtlasTrashItem]
     public let page: Int
     public let hasNext: Bool
+    public let canDeletePermanently: Bool?
 }
 public struct AtlasPageOrganization: Decodable, Sendable {
     public let collectionId: String?

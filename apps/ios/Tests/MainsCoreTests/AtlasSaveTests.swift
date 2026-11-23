@@ -217,6 +217,30 @@ import Testing
         #expect(try await session.atlasTrash().items.isEmpty)
     }
 
+    @Test @MainActor func permanentDeletionRecoversTheOriginalReceiptWithoutRestoringTheItem() async throws {
+        let backend = try DemoBackend(), probe = AtlasSaveProbe()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.kind == "page" })
+        _ = try await session.trashAtlasItem(entry, owner: session.ownership)
+        let trash = try await session.atlasTrash()
+        #expect(trash.canDeletePermanently == true)
+        let item = try #require(trash.items.first)
+        probe.loseACK = true
+        await #expect(throws: MainsError.self) { try await session.deleteAtlasTrashItem(item, owner: session.ownership) }
+        let pending = try #require(session.pendingAtlasSave)
+        #expect(pending.isUpdate && !session.canSaveToAtlas)
+        #expect(try await session.checkAtlasSaveDelivery().id == item.id)
+        #expect(session.pendingAtlasSave == nil)
+        let deletes = probe.calls.filter { $0.0 == "atlas:deleteMobileTrash" }
+        #expect(deletes.count == 2 && deletes.allSatisfy { $0.2 == pending.id && $0.1.first?["expectedTrashedAt"].string == item.trashedAt })
+        #expect(try await session.atlasTrash().items.isEmpty)
+        #expect(try await session.atlasLibrary(AtlasQuery()).items.allSatisfy { $0.id != item.id })
+        await #expect(throws: MainsError.self) { try await session.atlasPage(item.id) }
+    }
+
     @Test @MainActor func bookmarkEditsKeepUnchangedFieldsAndAllowDescriptionAndNoteToBeCleared() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in AtlasSaveTransport(backend, probe) })
@@ -463,10 +487,20 @@ extension SessionIntegrationTests {
         _ = try await session.restoreAtlasItem(item, owner: session.ownership)
         #expect(try await session.atlasTrash().items.isEmpty)
         #expect(try await session.atlasLibrary(query).items.map(\.id) == [entry.id])
+        _ = try await session.trashAtlasItem(entry, owner: session.ownership)
+        let trash = try await session.atlasTrash()
+        #expect(trash.canDeletePermanently == true)
+        let toDelete = try #require(trash.items.first { $0.id == entry.id })
+        _ = try await session.deleteAtlasTrashItem(toDelete, owner: session.ownership)
+        #expect(try await session.atlasTrash().items.isEmpty)
+        #expect(try await session.atlasLibrary(query).items.isEmpty)
         let (data, _) = try await URLSession.shared.data(from: URL(string: endpoint + "/observations")!)
         let calls = try JSONDecoder().decode([JSONValue].self, from: data)
         let changes = calls.filter { $0["channel"].string == "atlas:setMobileTrash" }
-        #expect(changes.count == 2 && changes.allSatisfy { $0["commandId"].string?.isEmpty == false })
+        #expect(changes.count == 3 && changes.allSatisfy { $0["commandId"].string?.isEmpty == false })
+        let deletion = try #require(calls.first { $0["channel"].string == "atlas:deleteMobileTrash" })
+        #expect(deletion["commandId"].string?.isEmpty == false)
+        #expect(deletion["args"].array.first?["expectedTrashedAt"].string == toDelete.trashedAt)
         #expect(!calls.contains { $0["channel"].string == "atlas:remove" || $0["channel"].string == "atlas:update" })
         #expect(session.viewingRunID == nil && session.transcript.rows.isEmpty)
     }
@@ -558,7 +592,8 @@ extension SessionIntegrationTests {
     func close() { base.close() }
     func perform(_ channel: String, args: [JSONValue], commandId: String?, timeout: TimeInterval) async throws -> JSONValue {
         probe.calls.append((channel, args, commandId))
-        let mutation = channel.hasPrefix("atlas:save") || channel == "atlas:updateMobileItem" || channel == "atlas:editMobileBookmark" || channel == "atlas:setMobileTrash" || channel == "atlas:setMobileTags"
+        let mutation = channel.hasPrefix("atlas:save") || ["atlas:updateMobileItem", "atlas:editMobileBookmark", "atlas:setMobileTrash",
+            "atlas:deleteMobileTrash", "atlas:setMobileTags"].contains(channel)
         if mutation, probe.reject { probe.reject = false; throw MainsError.server("Invalid bookmark URL") }
         let value = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
         if mutation, probe.loseACK { probe.loseACK = false; throw MainsError.timeout }

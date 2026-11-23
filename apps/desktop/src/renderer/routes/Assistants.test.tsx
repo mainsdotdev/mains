@@ -5,7 +5,7 @@ import { Provider } from "react-redux";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Assistant, AssistantConversation, AssistantTeam, AssistantWelcome, UpdateAssistantProfile } from "@mains/contracts/assistants";
+import type { Assistant, AssistantConversation, AssistantTeam, AssistantWelcome, SetAssistantPinned, UpdateAssistantProfile } from "@mains/contracts/assistants";
 import type { Pulse } from "@/lib/redux/api/pulseApi";
 import type { ModelInfo } from "@/lib/redux/api/providersApi";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
@@ -24,6 +24,7 @@ const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 const createTeam = vi.hoisted(() => vi.fn());
 const createMate = vi.hoisted(() => vi.fn());
 const archiveMate = vi.hoisted(() => vi.fn());
+const setPinned = vi.hoisted(() => vi.fn());
 const removeMate = vi.hoisted(() => vi.fn());
 const updateProfile = vi.hoisted(() => vi.fn());
 const welcomes = vi.hoisted(() => [] as AssistantWelcome[]);
@@ -37,6 +38,7 @@ vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantOverviewQuery: () => ({ currentData: { assistants: mocks.assistants, teams: mocks.teams, assignments: [], memories: [], welcomes }, refetch: vi.fn() }),
   useAssistantConversationsQuery: ({ id }: { id: string }) => ({ currentData: mocks.loadingChats ? undefined : id === "website" ? mocks.websiteChats : mocks.chats, error: mocks.chatsError, refetch: mocks.refetchChats }),
   useArchiveAssistantMutation: () => [archiveMate, {}],
+  useSetAssistantPinnedMutation: () => [setPinned, {}],
   useRemoveAssistantMutation: () => [removeMate, {}],
   useUpdateAssistantProfileMutation: () => [updateProfile, { isLoading: mocks.savingProfile }],
   useCreateAssistantMutation: () => [createMate, {}],
@@ -83,12 +85,15 @@ function setup(initial = "/assistants?assistant=release&run=first", openPreview?
   } });
   if (openPreview) store.dispatch(openPreviewTab({ ownerKey: releaseChatOwner, tab: openPreview }));
   const Wrapper = ({ children }: { children: ReactNode }) => <Provider store={store}><MemoryRouter initialEntries={[initial]}><MainHeaderProvider>{children}</MainHeaderProvider></MemoryRouter></Provider>;
-  return { store, ...render(<Wrapper><AssistantsSidebar /><AssistantsPage /><HeaderOutlet /><Location /></Wrapper>) };
+  const tree = () => <Wrapper><AssistantsSidebar /><AssistantsPage /><HeaderOutlet /><Location /></Wrapper>;
+  const view = render(tree());
+  return { store, ...view, refresh: () => view.rerender(tree()) };
 }
 beforeEach(() => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
   createMate.mockReset();
   archiveMate.mockReset().mockReturnValue({ unwrap: async () => undefined });
+  setPinned.mockReset().mockReturnValue({ unwrap: async () => undefined });
   removeMate.mockReset().mockReturnValue({ unwrap: async () => undefined });
   welcomes.length = 0;
   createTeam.mockReset().mockImplementation((input: Pick<AssistantTeam, "accountId" | "name">) =>
@@ -127,6 +132,36 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView; else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
 
 describe("assistant profile and conversation", () => {
+  it("puts pinned mates first by pin date and returns an unpinned mate to its team", async () => {
+    const [release, website] = mocks.assistants;
+    release.pinnedAt = null;
+    website.pinnedAt = new Date(1);
+    mocks.assistants.push({ ...release, id: "retired", name: "Retired", isArchived: true, pinnedAt: new Date(3) });
+    setPinned.mockImplementation(({ pinned }: SetAssistantPinned) => ({ unwrap: async () => {
+      release.pinnedAt = pinned ? new Date(2) : null;
+    } }));
+    const { refresh } = setup();
+    const sidebar = within(screen.getByRole("navigation", { name: "Mates" }));
+    const group = within(sidebar.getByRole("region", { name: "Pinned" }));
+    const names = () => group.getAllByRole("button", { name: /^Open / }).map(button => button.getAttribute("aria-label"));
+    expect(names()).toEqual(["Open Website"]);
+
+    await act(async () => fireEvent.click(sidebar.getByRole("button", { name: "Pin mate Release" })));
+    expect(setPinned).toHaveBeenLastCalledWith({ id: "release", accountId: "account", pinned: true });
+    refresh();
+    expect(names()).toEqual(["Open Release", "Open Website"]);
+    expect(sidebar.queryByRole("region", { name: "Mains" })).toBeNull();
+    fireEvent.click(group.getByRole("button", { name: "Open Website" }));
+    await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("website-first"));
+    expect(group.getByRole("button", { name: "Open Website" }).getAttribute("aria-current")).toBe("page");
+
+    await act(async () => fireEvent.click(group.getByRole("button", { name: "Unpin mate Release" })));
+    expect(setPinned).toHaveBeenLastCalledWith({ id: "release", accountId: "account", pinned: false });
+    refresh();
+    expect(names()).toEqual(["Open Website"]);
+    expect(within(sidebar.getByRole("region", { name: "Mains" })).getByRole("button", { name: "About Release" })).toBeTruthy();
+  });
+
   it("opens a searchable archive from the sidebar and restores a mate from its row", async () => {
     mocks.assistants[1].isArchived = true;
     setup();

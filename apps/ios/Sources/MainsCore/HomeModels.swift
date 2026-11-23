@@ -240,23 +240,48 @@ public struct PermissionChoice: Identifiable, Equatable, Sendable {
     public let id: String
     public let title: String
     public let detail: String
+    public var shortTitle: String? = nil
     public var disabledReason: String? = nil
-    public static func title(for value: String, provider: String) -> String? {
+
+    public static func shortTitle(for value: String, provider: String) -> String? {
         let mode = provider == "codex" ? CodexPermissions.builtinProfiles.first { "profile:" + $0.value == value }?.key ?? value : value
-        if let choice = choices(provider: provider).first(where: { $0.id == mode }) { return choice.title }
+        if let choice = choices(provider: provider).first(where: { $0.id == mode }) { return choice.shortTitle ?? choice.title }
         if provider == "codex", value.hasPrefix("profile:"), value.count > 8 { return String(value.dropFirst(8)) }
         return nil
     }
+
     public static func choices(provider: String) -> [Self] {
-        let rows: [(String, String, String)] = switch provider {
-        case "claude_code": [("default", "Ask permissions", "Ask before changes"), ("auto", "Auto", "Claude decides when to ask"), ("acceptEdits", "Auto accept edits", "Accept all edits"), ("plan", "Plan mode", "Plan before changes"), ("bypassPermissions", "Bypass permissions", "Bypass all permissions"), ("dontAsk", "Don’t ask", "Deny unapproved tools silently")]
-        case "copilot_cli": [("default", "Ask permissions", "Ask before changes"), ("acceptEdits", "Auto accept edits", "Accept all edits"), ("plan", "Plan mode", "Plan before changes"), ("bypassPermissions", "Bypass permissions", "Bypass all permissions")]
-        case "codex": [("read-only", "Read Only", "Read files without making changes"), ("workspace-write", "Auto", "Edit files in this workspace"), ("danger-full-access", "Full Access", "No restrictions")]
-        case "cursor": [("ask", "Ask", "Ask before changes"), ("agent", "Agent", "Autonomous agent mode"), ("plan", "Plan", "Plan before executing")]
-        case "opencode": [("build", "Build", "Default coding agent"), ("plan", "Plan", "Plan before changing files")]
+        switch provider {
+        case "claude_code": [
+            Self(id: "default", title: "Ask permissions", detail: "Ask before changes", shortTitle: "Ask"),
+            Self(id: "auto", title: "Auto", detail: "Claude decides when to ask"),
+            Self(id: "acceptEdits", title: "Accept edits", detail: "Accept all edits"),
+            Self(id: "plan", title: "Plan mode", detail: "Plan before changes", shortTitle: "Plan"),
+            Self(id: "bypassPermissions", title: "Bypass permissions", detail: "Bypass all permissions", shortTitle: "Bypass"),
+            Self(id: "dontAsk", title: "Don’t ask", detail: "Deny unapproved tools silently"),
+        ]
+        case "copilot_cli": [
+            Self(id: "default", title: "Ask permissions", detail: "Ask before changes", shortTitle: "Ask"),
+            Self(id: "acceptEdits", title: "Auto accept edits", detail: "Accept all edits", shortTitle: "Accept edits"),
+            Self(id: "plan", title: "Plan mode", detail: "Plan before changes", shortTitle: "Plan"),
+            Self(id: "bypassPermissions", title: "Bypass permissions", detail: "Bypass all permissions", shortTitle: "Bypass"),
+        ]
+        case "codex": [
+            Self(id: "read-only", title: "Read Only", detail: "Read files without making changes"),
+            Self(id: "workspace-write", title: "Auto", detail: "Edit files in this workspace"),
+            Self(id: "danger-full-access", title: "Full Access", detail: "No restrictions"),
+        ]
+        case "cursor": [
+            Self(id: "ask", title: "Ask", detail: "Ask before changes"),
+            Self(id: "agent", title: "Agent", detail: "Autonomous agent mode"),
+            Self(id: "plan", title: "Plan", detail: "Plan before executing"),
+        ]
+        case "opencode": [
+            Self(id: "build", title: "Build", detail: "Default coding agent"),
+            Self(id: "plan", title: "Plan", detail: "Plan before changing files"),
+        ]
         default: []
         }
-        return rows.map { Self(id: $0.0, title: $0.1, detail: $0.2) }
     }
 }
 

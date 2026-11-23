@@ -1,5 +1,5 @@
 import { CHANNELS } from "@mains/contracts/channels";
-import type { Assistant, AssistantTeam, AssistantOverview, CreateAssistant, ChangeAssistantTeam, UpdateAssistantProfile, SaveAssistantMemory, AssistantMemory, AssistantAssignment, AssignAssistantTask, AssistantConversation, SendAssistantMessage, AssistantExecution, AssistantProfileSetupAction, AssistantPullRequestReview, ReviewPullRequestWithAssistant } from "@mains/contracts/assistants";
+import type { Assistant, AssistantTeam, AssistantOverview, CreateAssistant, ChangeAssistantTeam, UpdateAssistantProfile, SaveAssistantMemory, AssistantMemory, AssistantAssignment, AssignAssistantTask, AssistantConversation, SendAssistantMessage, AssistantExecution, AssistantProfileSetupAction, AssistantPullRequestReview, ReviewPullRequestWithAssistant, SetAssistantPinned } from "@mains/contracts/assistants";
 import type { PrRefInput } from "@mains/contracts/pull-requests";
 import { baseApi } from "./baseApi";
 export const assistantsApi = baseApi.injectEndpoints({
@@ -21,6 +21,10 @@ export const assistantsApi = baseApi.injectEndpoints({
         updateAssistantProfile: b.mutation<Assistant, UpdateAssistantProfile>({
             query: input => ({ handler: CHANNELS.assistants.updateProfile, args: [input] }),
             invalidatesTags: (_result, _error, { teamChange }) => teamChange ? ["Assistants", "AssistantChats"] : ["Assistants"],
+        }),
+        setAssistantPinned: b.mutation<void, SetAssistantPinned>({
+            query: input => ({ handler: CHANNELS.assistants.setPinned, args: [input] }),
+            invalidatesTags: (_result, error) => error ? [] : ["Assistants"],
         }),
         archiveAssistant: b.mutation<void, {
             accountId: string;
@@ -70,4 +74,4 @@ export const assistantsApi = baseApi.injectEndpoints({
     }),
 });
 export const { useSetupAssistantProfileMutation, useAssistantAssignmentQuery, usePrepareAssistantWelcomeMutation, useRespondAssistantWelcomeMutation, useAssistantOverviewQuery, useCreateAssistantTeamMutation, useCreateAssistantMutation, useChangeAssistantTeamMutation, useUpdateAssistantProfileMutation, useArchiveAssistantMutation, useSaveAssistantMemoryMutation, useRemoveAssistantMemoryMutation, useAssistantConversationsQuery, useSendAssistantMessageMutation, useAssignAssistantTaskMutation, useReconcileAssistantTaskMutation, useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation } = assistantsApi;
-export const { useReviewPullRequestWithAssistantMutation, useAssistantPullRequestReviewsQuery, useRemoveAssistantMutation } = assistantsApi;
+export const { useReviewPullRequestWithAssistantMutation, useAssistantPullRequestReviewsQuery, useRemoveAssistantMutation, useSetAssistantPinnedMutation } = assistantsApi;

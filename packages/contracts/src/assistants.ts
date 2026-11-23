@@ -72,6 +72,7 @@ export interface Assistant {
     model: string;
     effort: string;
     isArchived: boolean;
+    pinnedAt?: Date | null;
     conversationSettings: ConversationSettings;
     spaceSnapshot: {
         id: string;
@@ -84,6 +85,7 @@ export interface Assistant {
     createdAt: Date;
     updatedAt: Date;
 }
+export interface SetAssistantPinned { accountId: string; id: string; pinned: boolean }
 export interface CreateAssistant {
     accountId: string;
     name: string;
@@ -294,7 +296,7 @@ export interface AssistantWelcome {
 export type MobileMateIdentity = Pick<Assistant, "id" | "name" | "avatar" | "isArchived">;
 
 export interface MobileMateDirectory {
-    mates: Array<MobileMateIdentity & Pick<Assistant, "description" | "teamId" | "providerId" | "model"> & {
+    mates: Array<MobileMateIdentity & Pick<Assistant, "description" | "teamId" | "providerId" | "model" | "pinnedAt"> & {
         needsSetup: boolean;
         welcome: Pick<AssistantWelcome, "runId" | "state" | "question" | "error"> | null;
         details?: Pick<Assistant, "effort" | "instructions"> & { spaceName: string };
@@ -310,6 +312,7 @@ export type MobileMateAssignment = Pick<AssistantAssignment, "id" | "title" | "s
 export const MOBILE_MATE_INFO_CAPABILITY = "mateInfo";
 export const MOBILE_MATE_TEAM_CREATION_CAPABILITY = "mateTeamCreation";
 export const MOBILE_MATE_MODEL_EDITING_CAPABILITY = "mateModelEditing";
+export const MOBILE_MATE_PINNING_CAPABILITY = "matePinning";
 
 /** List responses carry a content preview. A selected id returns the entire note. */
 export type MobileMateMemory = Pick<AssistantMemory, "id" | "title" | "content" | "pinned" | "revision"> & { shared: boolean };
@@ -355,6 +358,7 @@ export interface MobileMateRoutines {
 export type MobileMateChange =
     | ({ action: "updateProfile" } & Pick<UpdateAssistantProfile, "profile" | "expectedProfile" | "teamChange" | "modelChange">)
     | { action: "archive"; archived: boolean }
+    | { action: "setPinned"; pinned: boolean }
     | { action: "saveMemory"; note: MobileMateMemory; expectedTeamId: string | null }
     | { action: "deleteMemory"; id: string; revision: number }
     | { action: "assign"; title: string; prompt: string }

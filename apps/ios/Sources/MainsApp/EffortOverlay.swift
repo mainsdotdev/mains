@@ -191,13 +191,15 @@ private struct EffortOverlayView: View {
         }
     }
     private var controls: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
+            ComposerPickerHeader(title: "Model & effort", closeID: "closeEffortOverlay", close: close)
+                .padding(.horizontal, 20)
             ModelEffortPicker(providerID: context.providerId, models: models, model: presentedModel,
                               settings: presentedSettings, loading: context.modelsLoading(session),
                               enabled: !modelSelectionBlocked, saving: context.saving(session),
                               showingModelSave: showingModelSave, error: session.modelErrors[context.providerId],
                               canRetry: session.isConnected, retry: { Task { await session.loadModels(context.providerId, force: true) } },
-                              close: close, selectModel: chooseModel,
+                              selectModel: chooseModel,
                               updateEffort: { context.save($0, session: session) })
             SettingsRecoveryNotice(session: session, runID: context.runID)
         }
@@ -234,7 +236,6 @@ struct ModelEffortPicker: View {
     var error: String?
     let canRetry: Bool
     let retry: () -> Void
-    var close: (() -> Void)? = nil
     let selectModel: (ModelChoice) -> Void
     let updateEffort: (ComposerSettings) -> Void
     @State private var preview: String?
@@ -260,19 +261,12 @@ struct ModelEffortPicker: View {
     var body: some View {
         let rowHeight = compactWheel ? modelRowHeight * 0.75 : modelRowHeight
         VStack(spacing: 10) {
-            HStack(spacing: 4) {
-                ComposerModelWheel(models: models, selectedID: model?.id ?? settings.model,
-                                   pendingModel: model, providerID: providerID, loading: loading, enabled: enabled,
-                                   rowHeight: rowHeight, reduceMotion: reduceMotion, onSelect: selectModel)
-                    .frame(maxWidth: .infinity).frame(height: rowHeight * (dynamicTypeSize.isAccessibilitySize ? 1.8 : 3))
-                    .composerWheelFade()
-                if let close {
-                    Button(action: close) {
-                        Image(systemName: "xmark").font(.body).foregroundStyle(.secondary)
-                            .frame(width: 44, height: 44).contentShape(.circle)
-                    }.buttonStyle(ChatPressStyle()).accessibilityLabel("Close").accessibilityIdentifier("closeEffortOverlay")
-                }
-            }.padding(.leading, close == nil ? 16 : 28).padding(.trailing, 16)
+            ComposerModelWheel(models: models, selectedID: model?.id ?? settings.model,
+                               pendingModel: model, providerID: providerID, loading: loading, enabled: enabled,
+                               rowHeight: rowHeight, reduceMotion: reduceMotion, onSelect: selectModel)
+                .frame(maxWidth: .infinity).frame(height: rowHeight * (dynamicTypeSize.isAccessibilitySize ? 1.8 : 3))
+                .composerWheelFade()
+                .padding(.horizontal, 16)
             if let error {
                 HStack {
                     Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2)

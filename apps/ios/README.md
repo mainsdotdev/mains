@@ -312,14 +312,16 @@ underlying tooling.
   removals retain the desktop's exclusions against later automatic tagging.
   Unsaved projections must be saved first. Demo uses only in-memory tags.
 - Saved Pages, documents, images and bookmarks support **Move to Trash** from
-  the row's long-press menu or swipe actions. Atlas's **Trash** button opens a
-  separate paginated list with **Restore** for each item. Restoring preserves
-  content, project, favorites and the source conversation. Unsaved projections
-  must be saved first; permanent deletion is unavailable. `atlas:mobileTrash`
-  returns only 50 metadata entries, and receipt-backed `atlas:setMobileTrash`
-  accepts only the saved identity and desired Trash state. Unknown outcomes use
-  the shared **Check change** recovery; checking an older receipt reads current
-  state without undoing a newer Restore. Demo supports both actions in memory.
+  the row's long-press menu or swipe actions, with a confirmation alert.
+  The Trash list has separate **Restore** and **Delete Permanently** buttons.
+  Each asks for confirmation, and tapping the title leaves the item in Trash.
+  Restoring preserves content, project, favorites and source conversation.
+  Permanent deletion removes the saved Atlas item and preserves conversation
+  originals. It requires a computer that advertises support in `atlas:mobileTrash`.
+  The receipt-backed `atlas:setMobileTrash` command uses the saved identity and
+  desired Trash state. `atlas:deleteMobileTrash` also checks the Trash timestamp
+  from the confirmed row. Unknown outcomes use **Check change** and refresh the
+  current state. Demo keeps these changes in memory.
 - Saved bookmarks expose **Edit** in their detail sheet and **Edit bookmark** in
   the row's long-press menu. The editor loads fresh title/description/note data,
   validates the existing 240/2,000/10,000 UTF-16 limits, and submits only dirty

@@ -52,6 +52,59 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
+    func testPinMateMovesItToTheAvatarGridAndUnpinReturnsItToItsTeam() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        let port = ProcessInfo.processInfo.environment["MAINS_MATE_PIN_TEST_PORT"].flatMap(Int.init) ?? 18787
+        _ = pairFixture(app, code: "ios-test-mate-pinning", port: port)
+        app.buttons["openMates"].tap()
+        XCTAssertTrue(app.staticTexts["Pinned"].waitForExistence(timeout: 5))
+        let mate = app.buttons["mate-fixture-mate"]
+        let planner = app.buttons["mate-fixture-planner"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5) && planner.exists)
+        XCTAssertGreaterThan(mate.frame.minY, planner.frame.maxY)
+
+        mate.press(forDuration: 0.8)
+        let pin = app.buttons["Pin Fixture Mate"]
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        pin.tap()
+        let inGrid = NSPredicate { _, _ in
+            mate.exists && planner.exists && abs(mate.frame.minY - planner.frame.minY) < 2 && mate.frame.minX < planner.frame.minX
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: inGrid, object: nil)], timeout: 5), .completed)
+        let reviewer = app.buttons["mate-fixture-reviewer"]
+        let solo = app.buttons["mate-fixture-solo"]
+        XCTAssertTrue(reviewer.exists && solo.exists)
+        XCTAssertEqual(reviewer.frame.minY, mate.frame.minY, accuracy: 2)
+        XCTAssertGreaterThan(reviewer.frame.minX, planner.frame.minX)
+        XCTAssertGreaterThan(solo.frame.minY, reviewer.frame.maxY)
+        attachScreenshot(app, name: "Pinned Mates")
+
+        planner.tap()
+        let openedMate = app.staticTexts["mateChatsName"]
+        XCTAssertTrue(openedMate.waitForExistence(timeout: 5))
+        XCTAssertEqual(openedMate.label, "Fixture Planner")
+        app.navigationBars.buttons["BackButton"].tap()
+        XCTAssertTrue(planner.waitForExistence(timeout: 5))
+
+        planner.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).press(forDuration: 0.8)
+        let unpinPlanner = app.buttons["Unpin Fixture Planner"]
+        XCTAssertTrue(unpinPlanner.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Unpin Fixture Mate"].exists)
+        attachScreenshot(app, name: "Pinned Mate context menu")
+        unpinPlanner.tap()
+        let plannerInTeam = NSPredicate { _, _ in planner.exists && planner.frame.minY > reviewer.frame.maxY }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: plannerInTeam, object: nil)], timeout: 5), .completed)
+
+        mate.press(forDuration: 0.8)
+        let unpin = app.buttons["Unpin Fixture Mate"]
+        XCTAssertTrue(unpin.waitForExistence(timeout: 5))
+        unpin.tap()
+        let inTeam = NSPredicate { _, _ in mate.exists && mate.frame.minY > reviewer.frame.maxY }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: inTeam, object: nil)], timeout: 5), .completed)
+        forgetFixture(app)
+    }
+
     func testArchivedMateKeepsItsIdentityInAnOldRequestAndChat() {
         continueAfterFailure = false
         let app = makeApplication()
@@ -509,6 +562,7 @@ final class MainsUITests: XCTestCase {
 
         item.press(forDuration: 0.7)
         app.buttons["Move to Trash"].tap()
+        app.alerts["Move to Trash?"].buttons["Move to Trash"].tap()
         assertRetainedPage()
         XCTAssertTrue(item.exists)
         XCTAssertTrue(item.waitForNonExistence(timeout: 9))
@@ -516,6 +570,75 @@ final class MainsUITests: XCTestCase {
 
         app.navigationBars.buttons["BackButton"].tap()
         forgetFixture(app)
+    }
+
+    func testAtlasTrashTitleIsInertAndActionsRequireConfirmation() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        openSidebar(app)
+        app.buttons["openAtlas"].tap()
+
+        let id = "demo-atlas-page"
+        let libraryItem = app.buttons["atlasItem-" + id]
+        XCTAssertTrue(libraryItem.waitForExistence(timeout: 8))
+        let moveAlert = app.alerts["Move to Trash?"]
+        func moveToTrash() {
+            libraryItem.press(forDuration: 0.7)
+            app.buttons["Move to Trash"].tap()
+            XCTAssertTrue(moveAlert.waitForExistence(timeout: 5))
+        }
+        moveToTrash()
+        moveAlert.buttons["Cancel"].tap()
+        XCTAssertTrue(libraryItem.exists)
+        moveToTrash()
+        moveAlert.buttons["Move to Trash"].tap()
+        XCTAssertTrue(libraryItem.waitForNonExistence(timeout: 8))
+
+        let trash = app.navigationBars["Trash"]
+        func openTrash() {
+            app.buttons["atlasOptions"].tap()
+            app.buttons["openAtlasTrash"].tap()
+            XCTAssertTrue(trash.waitForExistence(timeout: 5))
+        }
+        openTrash()
+        let restore = app.buttons["Restore Explore Atlas"]
+        let delete = app.buttons["Delete Explore Atlas permanently"]
+        XCTAssertTrue(restore.waitForExistence(timeout: 8))
+        XCTAssertTrue(delete.exists)
+        XCTAssertGreaterThan(delete.frame.minX, restore.frame.minX)
+        let titleSide = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: app.frame.width * 0.3, dy: restore.frame.midY - app.frame.minY))
+        titleSide.tap()
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        XCTAssertTrue(restore.exists)
+
+        let restoreAlert = app.alerts["Restore item?"]
+        restore.tap()
+        restoreAlert.buttons["Cancel"].tap()
+        XCTAssertTrue(restore.exists)
+        restore.tap()
+        restoreAlert.buttons["Restore"].tap()
+        XCTAssertTrue(app.staticTexts["Trash is empty"].waitForExistence(timeout: 8))
+        trash.buttons["Close"].tap()
+        XCTAssertTrue(libraryItem.waitForExistence(timeout: 8))
+
+        libraryItem.swipeLeft()
+        app.buttons["Trash"].tap()
+        moveAlert.buttons["Move to Trash"].tap()
+        XCTAssertTrue(libraryItem.waitForNonExistence(timeout: 8))
+        openTrash()
+        XCTAssertTrue(delete.waitForExistence(timeout: 8))
+        let deleteAlert = app.alerts["Delete permanently?"]
+        delete.tap()
+        deleteAlert.buttons["Cancel"].tap()
+        XCTAssertTrue(delete.exists)
+        delete.tap()
+        deleteAlert.buttons["Delete Permanently"].tap()
+        XCTAssertTrue(app.staticTexts["Trash is empty"].waitForExistence(timeout: 8))
+        trash.buttons["Close"].tap()
+        XCTAssertFalse(libraryItem.exists)
     }
 
     func testAtlasMoveToProjectUsesWorkChatPicker() async {
@@ -2666,6 +2789,25 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["startDemo"].waitForExistence(timeout: 5))
     }
 
+    func testDemoCodexOffersUltrafast() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        XCTAssertTrue(app.buttons["connectionPill"].waitForExistence(timeout: 10), app.debugDescription)
+
+        let options = app.buttons["runOptions"]
+        XCTAssertTrue(options.waitForExistence(timeout: 10)); options.tap()
+        let tiers = app.buttons["runServiceTier"]
+        assertControl(tiers, value: "Default")
+        tiers.tap()
+        let ultrafast = app.buttons["Ultrafast"]
+        XCTAssertTrue(ultrafast.waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "Demo Ultrafast menu")
+        ultrafast.tap()
+        assertControl(tiers, value: "Ultrafast")
+    }
+
     /// Runs entirely on-device; no mock server or external service is required.
     func testDemoModeEntryReplayMediaAndExit() throws {
         continueAfterFailure = false
@@ -3909,12 +4051,25 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(closeEffort.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.buttons["chooseModel"].label.contains("Deep Thinker"))
         XCTAssertTrue(app.buttons["chooseModel"].label.contains("High"))
-        app.buttons["runOptions"].tap()
+        let options = app.buttons["runOptions"]
+        options.tap()
         _ = permissionWheel("Auto", in: app)
-        stepPermission("Auto accept edits", below: true, in: app)
+        stepPermission("Accept edits", below: true, in: app)
+        closeRunOptions(in: app)
+        XCTAssertEqual(options.label, "Accept edits")
+        options.tap()
         stepPermission("Plan mode", below: true, in: app)
+        stepPermission("Bypass permissions", below: true, in: app)
+        closeRunOptions(in: app)
+        XCTAssertEqual(options.label, "Bypass")
+        XCTAssertTrue(options.isHittable)
+        XCTAssertTrue(app.buttons["chooseModel"].isHittable)
+        attachScreenshot(app, name: "Native composer – compact permission label")
+        options.tap()
+        stepPermission("Plan mode", below: false, in: app)
         attachScreenshot(app, name: "Native run options")
         closeRunOptions(in: app)
+        XCTAssertEqual(options.label, "Plan")
 
         let input = app.textViews["homeMessageInput"]
         input.tap(); input.typeText("Build from the native composer")
@@ -4067,13 +4222,13 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
-    private func pairFixture(_ app: XCUIApplication, code: String, search: Bool = false) -> XCUIElement {
+    private func pairFixture(_ app: XCUIApplication, code: String, search: Bool = false, port: Int = 18787) -> XCUIElement {
         prepareUnpaired(app)
         app.buttons["scanPairingCode"].tap()
         let field = app.textFields["pairingLink"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
-        field.typeText(fixtureLink(code))
+        field.typeText(fixtureLink(code, port: port))
         app.buttons["reviewConnection"].tap()
         let confirm = app.buttons["confirmPairing"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
@@ -4090,8 +4245,8 @@ final class MainsUITests: XCTestCase {
         return conversation
     }
 
-    private func fixtureLink(_ code: String) -> String {
-        "mains://pair#code=\(code)&name=Test%20Mac&endpoint=http%3A%2F%2F127.0.0.1%3A18787"
+    private func fixtureLink(_ code: String, port: Int = 18787) -> String {
+        "mains://pair#code=\(code)&name=Test%20Mac&endpoint=http%3A%2F%2F127.0.0.1%3A\(port)"
     }
 
     private func prepareUnpaired(_ app: XCUIApplication) {

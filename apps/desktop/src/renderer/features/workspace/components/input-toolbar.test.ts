@@ -36,6 +36,20 @@ function nativeToolbarProps(): Parameters<typeof InputToolbar>[0] {
 beforeEach(() => { mocks.mode = "developer"; mocks.requiresNamedProfile = false; });
 
 describe("floating composer controls", () => {
+  it("distinguishes Claude Auto from Accept edits in the composer", () => {
+    const props = { ...nativeToolbarProps(), variant: "claude" as const, permissionMode: "auto" };
+    const { rerender } = render(createElement(InputToolbar, props));
+    const permission = screen.getByRole("button", { name: "Permission mode" });
+
+    fireEvent.click(permission);
+    expect(screen.getByRole("menuitemradio", { name: /^Auto\s*Claude decides when to ask$/ }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Accept edits\s*Accept all edits$/ }));
+    expect(props.onPermissionModeChange).toHaveBeenCalledExactlyOnceWith("acceptEdits");
+
+    rerender(createElement(InputToolbar, { ...props, permissionMode: "acceptEdits" }));
+    expect(permission.textContent).toBe("Accept edits");
+  });
+
   it("does not duplicate built-in permissions returned as native profiles", () => {
     render(createElement(InputToolbar, nativeToolbarProps()));
     fireEvent.click(screen.getByRole("button", { name: "Permission mode" }));

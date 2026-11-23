@@ -59,6 +59,9 @@ export const assistantsRepo = {
             .where(and(eq(assistantMemories.assistantId, id), eq(assistantMemories.accountId, accountId))).run();
     },
     archive(id: string, archived: boolean) { getDb().update(assistants).set({ isArchived: archived, updatedAt: new Date() }).where(eq(assistants.id, id)).run(); },
+    setPinned(id: string, accountId: string, pinnedAt: Date | null) {
+        getDb().update(assistants).set({ pinnedAt }).where(and(eq(assistants.id, id), eq(assistants.accountId, accountId))).run();
+    },
     deleteArchived(id: string, accountId: string): void {
         const db = getDb();
         db.transaction(() => {

@@ -638,6 +638,50 @@ describe("Atlas phone library", { timeout: 15000 }, () => {
     expect(fs.readFileSync(copy.path!, "utf8")).toBe("original contents");
   });
 
+  it("deletes only the confirmed saved copy in mobile Trash and preserves its conversation original", async () => {
+    const source = output("delete.pdf", "delete-source");
+    const copy = await atlasService.saveFile({ accountId: "default", runId: "delete-source", path: source });
+    const identity = { accountId: "default", id: copy.id };
+    const trashDate = "2026-11-13T10:00:00.000Z";
+    await expect(atlasMobile.deleteTrash({ ...identity, expectedTrashedAt: trashDate })).rejects.toThrow("Trash status changed");
+
+    atlasRepo.update(copy.id, identity.accountId, { trashedAt: new Date(trashDate) });
+    const trash = atlasMobile.trash({ accountId: identity.accountId });
+    expect(trash.canDeletePermanently).toBe(true);
+    const request = { ...identity, expectedTrashedAt: trash.items[0].trashedAt };
+    await expect(atlasMobile.deleteTrash({ ...request, accountId: "other" })).rejects.toThrow("not found");
+    await expect(atlasMobile.deleteTrash({ ...request, path: source } as never)).rejects.toThrow("Invalid");
+
+    await atlasMobile.setTrash({ ...identity, trashed: false });
+    atlasRepo.update(copy.id, identity.accountId, { trashedAt: new Date("2026-11-13T10:00:05.000Z") });
+    await expect(atlasMobile.deleteTrash(request)).rejects.toThrow("Trash status changed");
+    expect(fs.existsSync(copy.path!)).toBe(true);
+
+    await expect(atlasMobile.deleteTrash({ ...identity, expectedTrashedAt: "2026-11-13T10:00:05.000Z" }))
+      .resolves.toEqual({ id: copy.id, requestedId: copy.id, title: copy.title, kind: copy.kind });
+    expect(atlasMobile.trash({ accountId: identity.accountId }).items).toEqual([]);
+    expect(atlasService.get(identity)).toBeNull();
+    expect(fs.existsSync(copy.path!)).toBe(false);
+    expect(fs.readFileSync(source, "utf8")).toBe("original contents");
+  });
+
+  it("keeps trashed Page assets protected from mobile permanent deletion", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Page with a cover" });
+    const identity = { accountId: "default", id: page.item.id };
+    const cover = await atlasService.uploadFile({ accountId: identity.accountId, pageId: identity.id,
+      fileName: "cover.png", data: Buffer.from("image").toString("base64") });
+    await atlasService.update({ ...identity, metadata: { coverFileId: cover.id } });
+    const file = { ...identity, id: cover.id };
+    await atlasMobile.setTrash({ ...file, trashed: true });
+    const trashedAt = atlasService.get(file)!.trashedAt!;
+    await expect(atlasMobile.deleteTrash({ ...file, expectedTrashedAt: trashedAt })).rejects.toThrow("not found");
+    await atlasMobile.setTrash({ ...file, trashed: false });
+    await atlasService.saveFile({ accountId: identity.accountId, itemId: cover.id });
+    await atlasMobile.setTrash({ ...file, trashed: true });
+    await expect(atlasMobile.deleteTrash({ ...file, expectedTrashedAt: atlasService.get(file)!.trashedAt! })).rejects.toThrow("used by a Page");
+    expect(fs.existsSync(cover.path!)).toBe(true);
+  });
+
   it("rejects foreign, missing and generated-only Trash targets and all wider mutations", async () => {
     atlasRepo.insert({ id: "trash-safe", accountId: "default", kind: "file", title: "Keep" });
     const identity = { accountId: "default", id: "trash-safe", trashed: true };

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import DatabaseClient from "./db/client";
 import { databaseOwnershipPath } from "./db/database-ownership";
 import { configureIpcMainAdapter } from "./ipc-kit/ipc-main";
-import { registeredChannels } from "./ipc-kit/handler-registry";
+import { invokeHandler, registeredChannels } from "./ipc-kit/handler-registry";
 import { installTestBackendRuntime } from "../test/backend-runtime";
 import { startBackendServer, type BackendServer, type ServeOptions } from "./serve";
 import { withWorkspaceIntake } from "./modules/workspace/workspace-intake-lifecycle";
@@ -20,7 +20,7 @@ import { execFileSync } from "node:child_process";
 import WebSocket from "ws";
 import { buildSubprotocols } from "@mains/contracts/ws-protocol";
 import { CHANNELS } from "@mains/contracts/channels";
-import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY, type MobileMateChange, type MobileMateDirectory, type MobileMateRoutines } from "@mains/contracts/assistants";
+import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_PINNING_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY, type MobileMateChange, type MobileMateDirectory, type MobileMateRoutines } from "@mains/contracts/assistants";
 import { getDb } from "./db/client";
 import { providers as providerTable } from "./db/schema";
 import { eq } from "drizzle-orm";
@@ -117,7 +117,7 @@ describe("backend host acquisition and shutdown", () => {
       execFileSync("git", ["init", "--quiet", repo]);
       const workspace = createWorkspace(db, { id: "mate-test-repo", accountId, rootPath: repo });
       expect(await invoke(CHANNELS.backend.describe, [])).toMatchObject({
-        success: true, data: { capabilities: expect.arrayContaining(["assistants", MOBILE_MATE_TEAM_CREATION_CAPABILITY]) },
+        success: true, data: { capabilities: expect.arrayContaining(["assistants", MOBILE_MATE_TEAM_CREATION_CAPABILITY, MOBILE_MATE_PINNING_CAPABILITY]) },
       });
       expect(await invoke(CHANNELS.assistants.overview, [accountId])).toMatchObject({ success: false });
       expect(await invoke(CHANNELS.assistants.mobileDirectory, ["foreign"])).toMatchObject({ success: false });
@@ -203,6 +203,16 @@ describe("backend host acquisition and shutdown", () => {
       const manage = (id: string, change: MobileMateChange, key: string) =>
         invoke(CHANNELS.assistants.mobileManage, [accountId, id, change, key], key);
       const accepted = { success: true, data: { accepted: true } };
+      const pin = { accountId, id: reviewer.id, pinned: true };
+      expect(await invoke(CHANNELS.assistants.setPinned, [pin], "direct-pin")).toMatchObject({ success: false });
+      expect(await invokeHandler(CHANNELS.assistants.setPinned, [{ ...pin, accountId: "foreign" }])).toMatchObject({ success: false });
+      expect(await invokeHandler(CHANNELS.assistants.setPinned, [pin])).toMatchObject({ success: true });
+      const pinnedOnDesktop = await invoke(CHANNELS.assistants.mobileDirectory, [accountId, reviewer.id]);
+      expect(pinnedOnDesktop).toMatchObject({ success: true, data: { mates: [{ id: reviewer.id, pinnedAt: { $date: expect.any(String) } }] } });
+      expect(await manage(reviewer.id, { action: "setPinned", pinned: false }, "remove-pin")).toEqual(accepted);
+      expect(await invokeHandler(CHANNELS.assistants.overview, [accountId])).toMatchObject({ success: true, data: {
+        assistants: expect.arrayContaining([expect.objectContaining({ id: reviewer.id, pinnedAt: null })]),
+      } });
       const note = { id: "mobile-note", title: "Release checklist", content: "Note ".repeat(300).trim(), revision: 0, pinned: true, shared: true };
       const saveNote: MobileMateChange = { action: "saveMemory", note, expectedTeamId: team.id };
       expect(await invoke(CHANNELS.assistants.mobileManage, [accountId, reviewer.id, saveNote, "note-key"])).toMatchObject({ success: false, error: expect.stringContaining("commandId") });

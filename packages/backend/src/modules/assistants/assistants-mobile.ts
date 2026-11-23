@@ -96,12 +96,12 @@ export const assistantsMobile = {
         return {
             teams: assistantsRepo.teams(accountId).map(({ id, name }) => ({ id, name })),
             mates: profiles.map(profile => {
-                const { id, description, teamId, providerId, model, spaceSnapshot, effort, instructions, isArchived } = profile;
+                const { id, description, teamId, providerId, model, spaceSnapshot, effort, instructions, isArchived, pinnedAt } = profile;
                 const row = isArchived ? undefined : welcomes.get(id);
                 const question = row?.question ? JSON.parse(row.question) as AssistantWelcomeQuestion : null;
                 const needsSetup = !!question?.profileSetup && !question.profileSetup.saved;
                 const welcome = row && selected ? { runId: row.runId, state: row.state, question, error: row.error } : null;
-                const mate = { ...mateIdentity(profile), description, teamId, providerId, model, needsSetup, welcome };
+                const mate = { ...mateIdentity(profile), description, teamId, providerId, model, pinnedAt, needsSetup, welcome };
                 if (!selected || (isArchived && !archived)) return mate;
                 return { ...mate, details: { spaceName: spaceSnapshot.name, effort, instructions } };
             }),
@@ -170,6 +170,11 @@ export const assistantsMobile = {
             if (typeof value.archived !== "boolean") throw new Error("Choose an archive state");
             assistantsService.archive(mate.id, accountId, value.archived);
             if (!value.archived) assistantWelcome.prepare(mate.id);
+            return;
+        }
+        if (action === "setPinned") {
+            onlyKeys(value, ["action", "pinned"]);
+            assistantsService.setPinned({ accountId, id: mate.id, pinned: value.pinned });
             return;
         }
         assistantsService.requireForWork(mate.id, accountId);

@@ -474,6 +474,29 @@ struct ComposerSpeed {
     }
 }
 
+struct ComposerPickerHeader: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let title: LocalizedStringKey
+    let closeID: String
+    let close: () -> Void
+
+    var body: some View {
+        Text(title).font(.headline.width(.expanded))
+            .padding(.horizontal, 48).frame(maxWidth: .infinity, minHeight: 44)
+            .accessibilityAddTraits(.isHeader)
+            .overlay(alignment: .trailing) {
+                Button(action: close) {
+                    Image(systemName: "xmark").font(.body).foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44).contentShape(.circle)
+                }
+                .buttonStyle(ChatPressStyle())
+                .accessibilityLabel("Close").accessibilityIdentifier(closeID)
+            }
+    }
+}
+
 struct RunOptionsSheet: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -498,17 +521,7 @@ struct RunOptionsSheet: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("Run options").font(.headline.width(.expanded))
-                .padding(.horizontal, 48).frame(maxWidth: .infinity, minHeight: 44)
-                .accessibilityAddTraits(.isHeader)
-                .overlay(alignment: .trailing) {
-                    Button(action: close) {
-                        Image(systemName: "xmark").font(.body).foregroundStyle(.secondary)
-                            .frame(width: 44, height: 44).contentShape(.circle)
-                    }
-                    .buttonStyle(ChatPressStyle())
-                    .accessibilityLabel("Close").accessibilityIdentifier("closeRunOptions")
-                }
+            ComposerPickerHeader(title: "Run options", closeID: "closeRunOptions", close: close)
             VStack(spacing: 14) {
                 if context.mode == "developer" { permissionPicker }
                 VStack(spacing: 0) {

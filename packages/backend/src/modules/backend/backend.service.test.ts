@@ -187,6 +187,7 @@ describe("backendService", () => {
         "assistants:respondWelcome",
         "assistants:send",
         "assistants:setupProfile",
+        "atlas:deleteMobileTrash",
         "atlas:editMobileBookmark",
         "atlas:saveMobileBookmark",
         "atlas:saveMobileFile",

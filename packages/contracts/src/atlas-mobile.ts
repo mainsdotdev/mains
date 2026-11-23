@@ -94,9 +94,11 @@ export interface AtlasMobileEditBookmark extends AtlasMobileBookmarkIdentity {
 export interface AtlasMobileBookmarkEditResult extends AtlasMobileSavedItem { requestedId: string; revision: string }
 export interface AtlasMobileTrashOptions { accountId: string; page?: number }
 export interface AtlasMobileTrashItem extends AtlasMobileSavedItem { collectionId: string | null; trashedAt: string }
-export interface AtlasMobileTrashPage { items: AtlasMobileTrashItem[]; page: number; hasNext: boolean }
+export interface AtlasMobileTrashPage { items: AtlasMobileTrashItem[]; page: number; hasNext: boolean; canDeletePermanently?: boolean }
 export interface AtlasMobileSetTrash { accountId: string; id: string; trashed: boolean }
 export interface AtlasMobileTrashState extends AtlasMobileSavedItem { requestedId: string; trashed: boolean }
+export interface AtlasMobileDeleteTrash { accountId: string; id: string; expectedTrashedAt: string }
+export interface AtlasMobileDeleteTrashResult extends AtlasMobileSavedItem { requestedId: string }
 export interface AtlasMobileTagsOptions { accountId: string; query?: string; page?: number }
 export interface AtlasMobileTagsPage { items: AtlasTag[]; page: number; hasNext: boolean }
 export interface AtlasMobileItemTags extends AtlasMobileSavedItem { requestedId: string; tags: AtlasItemTag[]; revision: string }

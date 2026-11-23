@@ -199,6 +199,14 @@ export const assistantsService = {
             return this.require(id, accountId);
         });
     },
+    setPinned(payload: unknown): void {
+        const value = object(payload);
+        onlyKeys(value, ["accountId", "id", "pinned"]);
+        if (typeof value.pinned !== "boolean") throw new Error("Choose a valid pin state");
+        const mate = this.require(text(value.id, "Assistant"), text(value.accountId, "Account"));
+        if ((mate.pinnedAt != null) === value.pinned) return;
+        assistantsRepo.setPinned(mate.id, mate.accountId, value.pinned ? new Date() : null);
+    },
     archive(id: string, accountId: string, archived: boolean): void {
         if (typeof archived !== "boolean")
             throw new Error("Choose an archive state");

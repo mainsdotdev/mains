@@ -1,10 +1,11 @@
 import { CHANNELS } from '../../../packages/contracts/src/channels.ts';
 import { createHash } from 'node:crypto';
 
-const saved = new Map(), sources = new Map(), edits = new Map();
+const saved = new Map(), sources = new Map(), edits = new Map(), deleted = new Set();
+let nextSavedID = 0;
 const initialTags = () => [['fixture-tag-research', 'Research'], ['fixture-tag-work', 'Work']];
 const tags = new Map(initialTags());
-export function resetAtlasFixture() { saved.clear(); sources.clear(); edits.clear(); tags.clear(); for (const [id, name] of initialTags()) tags.set(id, name); }
+export function resetAtlasFixture() { saved.clear(); sources.clear(); edits.clear(); deleted.clear(); nextSavedID = 0; tags.clear(); for (const [id, name] of initialTags()) tags.set(id, name); }
 const normalizeTag = name => name.normalize('NFKC').trim().replace(/\s+/g, ' ');
 const tagDocument = (row, accountId) => ({ id: row.key, requestedId: row.key, title: row.title, kind: row.kind, tags: row.tags,
   revision: createHash('sha256').update(JSON.stringify([accountId, row.key, [...row.tags].sort((a, b) => a.id.localeCompare(b.id))])).digest('hex') });
@@ -22,7 +23,7 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
     icon: index === 0 ? 'emoji:🗺️' : null, url: index === 3 ? 'https://example.com' : null,
     description: index === 3 ? 'A saved bookmark' : null, note: null,
     tags: [0, 3].includes(index) ? [{ id: 'fixture-tag-research', name: 'Research', source: 'user' }] : index === 1 ? [{ id: 'fixture-tag-work', name: 'Work', source: 'user' }] : [],
-  }));
+  })).filter(row => !deleted.has(row.key));
   rows.push(...saved.values());
   for (const row of rows) {
     Object.assign(row, edits.get(row.key));
@@ -56,13 +57,21 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
     case CHANNELS.atlas.mobileTrash: {
       const trashed = rows.filter(row => row.trashedAt).sort((left, right) => right.trashedAt.localeCompare(left.trashedAt) || right.key.localeCompare(left.key));
       const page = input.page ?? 1;
-      return { items: trashed.slice((page - 1) * 50, page * 50).map(row => ({ id: row.key, title: row.title, kind: row.kind, collectionId: row.collectionId, trashedAt: row.trashedAt })), page, hasNext: page * 50 < trashed.length };
+      return { items: trashed.slice((page - 1) * 50, page * 50).map(row => ({ id: row.key, title: row.title, kind: row.kind, collectionId: row.collectionId, trashedAt: row.trashedAt })), page, hasNext: page * 50 < trashed.length, canDeletePermanently: true };
     }
     case CHANNELS.atlas.setMobileTrash: {
       const item = rows.find(row => row.key === input.id);
       if (!item || typeof input.trashed !== 'boolean') throw new Error('Atlas item not found');
       if (!!item.trashedAt !== input.trashed) edits.set(input.id, { ...edits.get(input.id), trashedAt: input.trashed ? new Date().toISOString() : null });
       return { id: item.key, requestedId: input.id, title: item.title, kind: item.kind, trashed: input.trashed };
+    }
+    case CHANNELS.atlas.deleteMobileTrash: {
+      const item = rows.find(row => row.key === input.id);
+      if (!item?.trashedAt || item.trashedAt !== input.expectedTrashedAt) throw new Error('Trash status changed');
+      if (!saved.delete(item.key)) deleted.add(item.key);
+      edits.delete(item.key);
+      for (const [source, id] of sources) if (id === item.key) sources.delete(source);
+      return { id: item.key, requestedId: input.id, title: item.title, kind: item.kind };
     }
     case CHANNELS.atlas.readMobileBookmark:
     case CHANNELS.atlas.editMobileBookmark: {
@@ -104,8 +113,8 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
       }
       let key = sources.get(source);
       if (!key) {
-        key = `fixture-saved-${saved.size}`;
-        saved.set(key, { ...rows[1], key, title, kind, isFavorite: false, sourceRunId: kind === 'file' ? input.runId : null,
+        key = `fixture-saved-${nextSavedID++}`;
+        saved.set(key, { date: new Date().toISOString(), origin: 'saved', key, title, kind, isFavorite: false, sourceRunId: kind === 'file' ? input.runId : null,
           collectionId: input.collectionId ?? null, file: kind === 'file' ? { itemId: key } : null, url });
         sources.set(source, key);
       }
@@ -128,7 +137,7 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
     case CHANNELS.atlas.readMobileImage:
     case CHANNELS.atlas.readMobileFile: {
       const id = input.reference?.itemId;
-      if (rows.find(row => row.key === id)?.trashedAt) throw new Error('Atlas file not found');
+      if (!rows.some(row => row.key === id && !row.trashedAt)) throw new Error('Atlas file not found');
       if (!['fixture-atlas-doc', 'fixture-atlas-image'].includes(id) && saved.get(id)?.kind !== 'file') throw new Error('Atlas file not found');
       const image = id === 'fixture-atlas-image', bytes = image ? Buffer.from(imageBase64, 'base64') : saved.get(id)?.title === 'report.pdf' ? pdfBytes : outputBytes;
       if (channel === CHANNELS.atlas.readMobileImage) {

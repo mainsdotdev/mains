@@ -116,6 +116,7 @@ const api = {
     createTeam: (payload: { accountId: string; name: string }) => ipcRenderer.invoke(CHANNELS.assistants.createTeam, payload),
     changeTeam: (payload: import("@mains/contracts/assistants").ChangeAssistantTeam) => ipcRenderer.invoke(CHANNELS.assistants.changeTeam, payload),
     updateProfile: (payload: import("@mains/contracts/assistants").UpdateAssistantProfile) => ipcRenderer.invoke(CHANNELS.assistants.updateProfile, payload),
+    setPinned: (payload: import("@mains/contracts/assistants").SetAssistantPinned) => ipcRenderer.invoke(CHANNELS.assistants.setPinned, payload),
     archive: (accountId: string, id: string, archived: boolean) => ipcRenderer.invoke(CHANNELS.assistants.archive, accountId, id, archived),
     remove: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.remove, accountId, id),
     conversations: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.conversations, accountId, id),
