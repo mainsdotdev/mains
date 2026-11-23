@@ -2801,6 +2801,7 @@ final class MainsUITests: XCTestCase {
     func testDemoMateOpensItsChecklistAndRepliesOnDevice() throws {
         continueAfterFailure = false
         let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
         prepareUnpaired(app)
         app.buttons["startDemo"].tap()
         XCTAssertTrue(app.buttons["demoSuggestedPrompt"].waitForExistence(timeout: 10))
@@ -2809,6 +2810,11 @@ final class MainsUITests: XCTestCase {
         let mate = app.buttons["mate-demo-release-mate"]
         XCTAssertTrue(mate.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["newMate"].exists)
+        let title = app.staticTexts["pageTitle"]
+        let team = app.staticTexts["Release team"]
+        XCTAssertTrue(title.exists && team.exists)
+        XCTAssertEqual(team.frame.minX, title.frame.minX, accuracy: 1)
+        attachScreenshot(app, name: "Mates – aligned team heading")
         mate.tap()
 
         let chat = app.staticTexts["Release readiness review"]
@@ -2895,8 +2901,13 @@ final class MainsUITests: XCTestCase {
         let task = app.staticTexts["Review release handoff"]
         XCTAssertTrue(task.waitForExistence(timeout: 10)); task.tap()
         XCTAssertTrue(app.staticTexts["Status, Completed"].waitForExistence(timeout: 15))
+        let report = app.staticTexts["Report"]
+        XCTAssertTrue(report.exists)
         let openChat = app.buttons["Open Chat"]
-        XCTAssertTrue(openChat.exists); openChat.tap()
+        XCTAssertTrue(openChat.isHittable)
+        XCTAssertGreaterThan(openChat.frame.minY, report.frame.maxY)
+        attachScreenshot(app, name: "Assignment – Open Chat footer")
+        openChat.tap()
         let output = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
             "transcriptMedia-output:", "mate-assignment-report.md")).firstMatch
         XCTAssertTrue(output.waitForExistence(timeout: 10)); output.tap()
@@ -3267,6 +3278,23 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(panel.waitForExistence(timeout: 5))
         app.buttons["closeAttachmentPanel"].tap()
         forgetFixture(app)
+    }
+
+    func testSettingsShowsBridgeBeforeAtlasInTheAppIconPicker() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        openSidebar(app); app.buttons["openSettings"].tap()
+
+        let icons = ["default", "bridge", "atlas", "mate"].map { app.buttons["appIcon-\($0)"] }
+        scrollTo(icons[0], in: app)
+        for icon in icons { XCTAssertTrue(icon.isHittable) }
+        for (left, right) in zip(icons, icons.dropFirst()) {
+            XCTAssertLessThan(left.frame.midX, right.frame.midX)
+        }
+        attachScreenshot(app, name: "Settings – App Icon order")
     }
 
     func testSettingsChangesTheHomeScreenAppIcon() async throws {

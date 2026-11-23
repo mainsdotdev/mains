@@ -367,7 +367,7 @@ private struct AppIconSettings: View {
     @State private var changeError: String?
 
     private enum Choice: String, CaseIterable {
-        case `default`, atlas, bridge, mate
+        case `default`, bridge, atlas, mate
 
         var title: String { rawValue.capitalized }
         var alternateName: String? { self == .default ? nil : rawValue }

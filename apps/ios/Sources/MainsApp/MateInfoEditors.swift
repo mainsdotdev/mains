@@ -569,9 +569,6 @@ struct MateTaskDetail: View {
                     .accessibilityAddTraits(.isHeader)
                 LabeledContent("Status", value: mateTaskStatus(task.status))
                 if let assignee = task.assignee { LabeledContent("Assigned to", value: assignee.name) }
-                if let id = task.workerRunId {
-                    Button("Open Chat", systemImage: "bubble.left") { openChat(id) }.disabled(!session.isConnected)
-                }
             }
             if !task.brief.isEmpty {
                 Section { MateInfoMarkdown(text: task.brief) } header: { MateSectionHeading("Task brief") }
@@ -600,6 +597,21 @@ struct MateTaskDetail: View {
             }
         }
         .listStyle(.insetGrouped)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let id = task.workerRunId {
+                Button {
+                    openChat(id)
+                } label: {
+                    Label("Open Chat", systemImage: "bubble.left")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.glass)
+                .controlSize(.large)
+                .disabled(!session.isConnected)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            }
+        }
         .expandedNavigationTitle("Assignment")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { MateRecordDoneButton(checkmark: true) }

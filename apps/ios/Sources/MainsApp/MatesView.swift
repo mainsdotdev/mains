@@ -243,20 +243,24 @@ private struct MateDirectoryView: View {
                     pinnedMateGrid(pinned, activity: activity)
                 }
             } header: {
-                MateSectionHeading("Pinned")
+                directorySectionHeading("Pinned")
             }
         }
         ForEach(teamIDs.filter { members[$0] != nil }, id: \.self) { teamID in
             Section {
                 mateRows(members[teamID] ?? [], activity: activity)
             } header: {
-                MateSectionHeading(teamNames[teamID] ?? "Unavailable team")
+                directorySectionHeading(teamNames[teamID] ?? "Unavailable team")
             }
         }
         if let unassigned = members[nil] {
             if teamIDs.isEmpty { mateRows(unassigned, activity: activity) }
-            else { Section { mateRows(unassigned, activity: activity) } header: { MateSectionHeading("No team") } }
+            else { Section { mateRows(unassigned, activity: activity) } header: { directorySectionHeading("No team") } }
         }
+    }
+
+    private func directorySectionHeading(_ title: String) -> some View {
+        MateSectionHeading(title).listRowInsets(.horizontal, 0)
     }
 
     private func pinnedMateGrid(_ mates: [Mate], activity: [String: MateActivity]) -> some View {

@@ -231,8 +231,6 @@ struct SidebarView: View {
                 .contentMargins(.horizontal, 8, for: .scrollContent)
                 .scrollClipDisabled()
                 .frame(width: max(0, width - 52), height: 48)
-                // Keep horizontal overflow bounded, with room for native press feedback.
-                .mask { Rectangle().padding(.vertical, -12) }
                 .modifier(SidebarScrollFade(axis: .horizontal))
                 .accessibilityIdentifier("sidebarProviderStrip")
                 .transition(.opacity)
@@ -383,7 +381,6 @@ private struct SidebarScrollFade: ViewModifier {
         var end = false
     }
     @State private var edges = Edges()
-    @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func body(content: Content) -> some View {
         content
@@ -396,22 +393,22 @@ private struct SidebarScrollFade: ViewModifier {
                 let overflows = end > start + 1
                 return Edges(start: overflows && offset > start + 1, end: overflows && offset < end - 1)
             } action: { _, next in edges = next }
-            .overlay(alignment: axis == .vertical ? .top : layoutDirection == .leftToRight ? .leading : .trailing) {
-                fade(start: true).opacity(edges.start ? 1 : 0)
-            }
-            .overlay(alignment: axis == .vertical ? .bottom : layoutDirection == .leftToRight ? .trailing : .leading) {
-                fade(start: false).opacity(edges.end ? 1 : 0)
+            .mask {
+                GeometryReader { geometry in
+                    let horizontal = axis == .horizontal
+                    let length = horizontal ? geometry.size.width : geometry.size.height
+                    let fade = min((horizontal ? 16 : 24) / max(length, 1), 0.5)
+                    LinearGradient(stops: [
+                        .init(color: edges.start ? .clear : .white, location: 0),
+                        .init(color: .white, location: fade),
+                        .init(color: .white, location: 1 - fade),
+                        .init(color: edges.end ? .clear : .white, location: 1)
+                    ], startPoint: horizontal ? .leading : .top, endPoint: horizontal ? .trailing : .bottom)
+                    // Keep horizontal overflow bounded, with room for native press feedback.
+                    .padding(.vertical, horizontal ? -12 : 0)
+                }
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: edges)
-    }
-    private func fade(start: Bool) -> some View {
-        let background = Color(.systemBackground)
-        let leading = start == (layoutDirection == .leftToRight)
-        let from: UnitPoint = axis == .vertical ? (start ? .top : .bottom) : (leading ? .leading : .trailing)
-        let to: UnitPoint = axis == .vertical ? (start ? .bottom : .top) : (leading ? .trailing : .leading)
-        return LinearGradient(colors: [background, background.opacity(0)], startPoint: from, endPoint: to)
-            .frame(width: axis == .horizontal ? 16 : nil, height: axis == .vertical ? 24 : nil)
-            .allowsHitTesting(false).accessibilityHidden(true)
     }
 }
 
