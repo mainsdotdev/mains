@@ -62,7 +62,7 @@ export interface ReadRunHistoryPayload {
 
 export interface ReadRunHistoryContentPayload {
   runId: string;
-  source: "artifact" | "tool-input" | "tool-output" | "turn-diff";
+  source: "artifact" | "tool-input" | "tool-output" | "turn-diff" | "plan";
   id: number;
   /** SQLite character offset, returned by the previous page. */
   offset?: number;

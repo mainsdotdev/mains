@@ -1,6 +1,7 @@
 import Foundation
 
 public struct TranscriptRow: Identifiable, Equatable, Sendable {
+    public var plan: PlanProposal? { tool.flatMap(PlanProposal.init) }
     public enum Kind: String, Sendable { case prompt, response, tool, notice, media, subagents }
     public let id: String
     public let kind: Kind
@@ -268,9 +269,10 @@ public struct Transcript: Sendable {
                       mention["token"].string == "@assistant-" + id else { return nil }
                 return .mate(id: id, name: name)
             }
+            let files = kind == .prompt ? metadata["files"].array.compactMap { WorkspaceFileMatch.read($0, history: true) }.map(ContextSkill.workspaceFile) : []
             return TranscriptRow(id: id, kind: kind, text: text, date: date, live: false,
                                  deferredArtifactID: mateTask == nil && questions.isEmpty && (metadata["mobileContentDeferred"].bool || metadata["mobileContentDeferred"]["chars"].number != nil) ? artifact.id : nil, media: media,
-                                 turnID: Self.turnID(metadata), contextSkills: mates + ((try? metadata["skills"].decode([ContextSkill].self)) ?? []),
+                                 turnID: Self.turnID(metadata), contextSkills: mates + files + ((try? metadata["skills"].decode([ContextSkill].self)) ?? []),
                                  delivery: identity == nil ? nil : .accepted,
                                  voiceTask: VoiceTaskLink.read(metadata["voiceTask"]), mateTask: mateTask, voice: metadata["voice"].bool,
                                  mateQuestions: questions, mateSetupTurns: setupTurns, sourceID: artifact.id)

@@ -5,6 +5,8 @@ import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_MODEL_EDITING_CAPABILITY, MOBI
 import { CHANNELS } from "@mains/contracts/channels";
 import { MOBILE_GOAL_CONTROLS_CAPABILITY, MOBILE_GOAL_SUMMARY_CAPABILITY } from "@mains/contracts/provider-goals";
 import { MATE_REALTIME_CONVERSATION_CAPABILITY } from "@mains/contracts/realtime";
+import { WORKSPACE_FILE_SEARCH_CAPABILITY } from "@mains/contracts/search";
+import { MOBILE_PLAN_DECISION_CAPABILITY } from "@mains/contracts/plan-decision";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { assertAuthActive, createAuthFence, createAuthGrants } from "@mains/contracts/auth-lifecycle";
 import { registeredChannels } from "../../ipc-kit";
@@ -33,6 +35,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.backend.describe,
   CHANNELS.account.get,
   CHANNELS.search.conversations,
+  CHANNELS.search.workspaceFiles,
   CHANNELS.assistants.mobileDirectory,
   CHANNELS.assistants.mobileAssignment,
   CHANNELS.assistants.mobileMemory,
@@ -133,6 +136,7 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   CHANNELS.runs.startRealtime,
   CHANNELS.runs.stopRealtime,
   CHANNELS.runs.toolApprovalResponse,
+  CHANNELS.runs.decidePlan,
   CHANNELS.runs.continue,
   CHANNELS.runs.execute,
   // Branching a run reaches no further than continuing one: the fork inherits
@@ -311,6 +315,8 @@ export const backendService = {
       namespaces.push(MATE_REALTIME_CONVERSATION_CAPABILITY);
     }
     if (reachable.includes(CHANNELS.providers.getMobileGoalSummary)) namespaces.push(MOBILE_GOAL_SUMMARY_CAPABILITY);
+    if (reachable.includes(CHANNELS.search.workspaceFiles)) namespaces.push(WORKSPACE_FILE_SEARCH_CAPABILITY);
+    if (reachable.includes(CHANNELS.runs.decidePlan)) namespaces.push(MOBILE_PLAN_DECISION_CAPABILITY);
     if (reachable.includes(CHANNELS.providers.getMobileGoalSummary) && reachable.includes(CHANNELS.providers.changeMobileGoal)) {
       namespaces.push(MOBILE_GOAL_CONTROLS_CAPABILITY);
     }

@@ -14,7 +14,9 @@ struct RunDecisionCards: View {
                 let approvals = session.pendingApprovals.filter { $0.runId == runID && $0.expiresAt > clock.date }
                 VStack(spacing: 16) {
                     ForEach(approvals) { approval in
-                        PendingApprovalCard(session: session, approval: approval, providerID: providerID, now: clock.date)
+                        if !session.showsPlanApprovalInline(approval) {
+                            PendingApprovalCard(session: session, approval: approval, providerID: providerID, now: clock.date)
+                        }
                     }
                     if approvals.isEmpty, let questions = session.pendingQuestions {
                         AsyncQuestionCard(session: session, pending: questions, providerID: providerID)

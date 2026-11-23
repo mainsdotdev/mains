@@ -1,5 +1,112 @@
 import SwiftUI
 
+struct ChatPlanCard: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let runID: String
+    let plan: PlanProposal
+    let providerID: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expanded: Bool?
+    @State private var fullPlan = false
+    @State private var consent: ConsentContext?
+    @State private var consentOwner: Int?
+    @State private var error: String?
+    private var status: PlanProposal.Status { session.planStatus(plan, runID: runID) }
+    private var open: Bool { expanded ?? (status == .pending) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded = !open }
+            } label: {
+                HStack(spacing: 8) {
+                    RegistryIcon(token: "tool-enter-plan", size: 16)
+                    Text("Plan").fontWeight(.medium)
+                    if status != .pending {
+                        Text(status.rawValue.capitalized).font(.caption)
+                            .foregroundStyle(status == .failed ? Color.red : Color.secondary)
+                            .accessibilityIdentifier("planStatus-\(plan.id)")
+                    }
+                    Spacer()
+                    toolChevron(open).accessibilityHidden(true)
+                }.font(.subheadline).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16).frame(minHeight: 44).contentShape(.rect)
+            }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("planDisclosure-\(plan.id)")
+                .accessibilityValue(open ? "Expanded" : "Collapsed")
+            if open {
+                if !plan.text.isEmpty {
+                    ViewThatFits(in: .vertical) {
+                        ChatMessageBody(text: plan.text).fixedSize(horizontal: false, vertical: true)
+                        ScrollView { ChatMessageBody(text: plan.text) }
+                    }.frame(maxWidth: .infinity, maxHeight: 360, alignment: .leading)
+                        .padding(.horizontal, 16).padding(.bottom, 14)
+                }
+                if plan.fullContentSource != nil {
+                    Button("Read full plan", systemImage: "text.alignleft") { fullPlan = true }
+                        .font(.footnote.weight(.medium)).padding(.horizontal, 16).padding(.bottom, 12)
+                        .disabled(!session.isConnected).accessibilityIdentifier("readFullPlan-\(plan.id)")
+                }
+                if let error {
+                    Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal, 16).padding(.bottom, 10)
+                }
+                if session.offersPlanDecision(plan, runID: runID) {
+                    Divider()
+                    HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+                        Button("Apply Plan") { beginApply() }.buttonStyle(.borderedProminent)
+                            .tint(Provider.accent(providerID)).accessibilityIdentifier("applyPlan-\(plan.id)")
+                        Button("Dismiss") { decide(.dismiss) }.buttonStyle(.bordered)
+                            .accessibilityIdentifier("dismissPlan-\(plan.id)")
+                    }.controlSize(.regular).padding(.horizontal, 12).padding(.vertical, 8)
+                        .disabled(!session.canDecidePlan(plan, runID: runID))
+                }
+            }
+        }
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(.primary.opacity(0.09)) }
+        .accessibilityElement(children: .contain).accessibilityIdentifier("planCard-\(plan.id)")
+        .onChange(of: status) { _, status in if status != .pending { expanded = false; error = nil } }
+        .sheet(isPresented: $fullPlan) {
+            if let source = plan.fullContentSource {
+                NavigationStack { FullMessageView(session: session, artifactID: plan.id, source: source, expectedRunID: runID) }
+            }
+        }
+        .sheet(item: $consent) { context in
+            ConsentView(context: context) {
+                guard consentOwner == session.ownership, session.viewingRunID == runID,
+                      session.pairing?.descriptor.backendId == context.backendID else { return }
+                session.grantConsent(providerID: context.providerID, backendID: context.backendID)
+                decide(.apply)
+            }
+        }
+    }
+
+    private func beginApply() {
+        if session.hasConsent(providerID: providerID) { decide(.apply) }
+        else if let backendID = session.pairing?.descriptor.backendId {
+            consentOwner = session.ownership
+            consent = ConsentContext(backendID: backendID, providerID: providerID, isDemo: session.isDemo)
+        }
+    }
+
+    private func decide(_ decision: PlanProposal.Decision) {
+        let owner = session.ownership
+        error = nil
+        Task {
+            guard session.ownership == owner, session.viewingRunID == runID else { return }
+            do { try await session.decidePlan(plan, runID: runID, decision: decision) }
+            catch {
+                if session.ownership == owner, session.viewingRunID == runID, session.pendingPlanDecision?.uncertain != true {
+                    self.error = error.localizedDescription
+                }
+            }
+        }
+    }
+}
+
 struct ChatToolBlock: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload

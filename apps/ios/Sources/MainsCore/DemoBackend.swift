@@ -124,11 +124,11 @@ final class DemoBackend {
 
     private let mutationChannels: Set<String> = ["assistants:create", "assistants:setupProfile", "assistants:send", "assistants:mobileManage",
         "runs:execute", "runs:continue", "runs:fork", "runs:archive", "runs:delete", "runs:moveToCollection", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings", "providers:changeMobileGoal",
-        "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:editMobileBookmark", "atlas:setMobileTrash", "atlas:deleteMobileTrash", "atlas:setMobileTags"]
+        "runs:toolApprovalResponse", "runs:decidePlan", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:editMobileBookmark", "atlas:setMobileTrash", "atlas:deleteMobileTrash", "atlas:setMobileTags"]
 
     var pairing: PairedBackend {
         PairedBackend(descriptor: BackendDescriptor(backendId: Self.backendID, name: "Demo Mac",
-                      appVersion: "Demo", protocolVersion: Wire.protocolVersion, capabilities: ["runs","workspace","providers","space","projects","collections","mobileGoalSummary","mobileGoalControls","assistants"],
+                      appVersion: "Demo", protocolVersion: Wire.protocolVersion, capabilities: ["runs","workspace","providers","space","projects","collections","mobileGoalSummary","mobileGoalControls","workspaceFileSearch","mobilePlanDecision","assistants"],
                       serverTime: Date().ISO8601Format()),
                       endpoints: [Self.endpoint], deviceId: "native-demo-device", deviceToken: "on-device-demo", pairedAt: Date())
     }
@@ -373,6 +373,11 @@ final class DemoBackend {
         case "runs:getById": return runs.first { $0["id"]?.string == runID }.map(JSONValue.object) ?? .null
         case "runs:getQueue": return .object(["queues": .array([])])
         case "search:conversations": return searchConversations(first)
+        case "search:workspaceFiles":
+            guard let workspaceID = first["workspaceId"].string,
+                  seed["workspaces"].array.contains(where: { $0["id"].string == workspaceID && !$0["isArchived"].bool }),
+                  let query = first["query"].string, !query.isEmpty else { return .array([]) }
+            return .array(DemoContext.workspaceFiles(query, includeDirectories: first["includeDirectories"].bool))
         case "runs:readTextFile":
             try requireRun(runID)
             guard runs.first(where: { $0["id"]?.string == runID })?["mode"]?.string != "developer",
@@ -382,6 +387,7 @@ final class DemoBackend {
             expireApprovals()
             return .array(approvals.values.filter { runID.isEmpty || $0["runId"].string == runID }.sorted { ($0["timestamp"].number ?? 0) < ($1["timestamp"].number ?? 0) })
         case "runs:toolApprovalResponse": return try respondToApproval(first)
+        case "runs:decidePlan": return try decidePlan(first)
         case "runs:answerAsyncQuestions": return try answerQuestions(first)
         case "runs:dismissAsyncQuestions":
             try requireRun(runID)
@@ -412,7 +418,7 @@ final class DemoBackend {
             try requireRun(runID)
             guard !isRunning(runID) else { throw MainsError.server("Wait for the demo reply, or stop it first.") }
             try start(runID, prompt: first["message"].string ?? "", files: first["attachments"].array,
-                      promptMetadata: ["skills": first["contextSkills"], "clientUserMessageId": first["clientUserMessageId"], "delivery": .string("queue")])
+                      promptMetadata: ["skills": first["contextSkills"], "files": first["contextFiles"], "clientUserMessageId": first["clientUserMessageId"], "delivery": .string("queue")])
             return .object(["runId": .string(runID), "resumed": .bool(true)])
         case "runs:inputStatus":
             try requireRun(runID)
@@ -428,7 +434,7 @@ final class DemoBackend {
                 throw MainsError.server("There is no active turn to steer. The message stays queued.")
             }
             try recordPrompt(runID, prompt: first["message"].string ?? "", files: first["attachments"].array,
-                             promptMetadata: ["skills": first["contextSkills"], "clientUserMessageId": .string(messageID), "delivery": .string("steer"), "turnId": turnID])
+                             promptMetadata: ["skills": first["contextSkills"], "files": first["contextFiles"], "clientUserMessageId": .string(messageID), "delivery": .string("steer"), "turnId": turnID])
             return .object(["runId": .string(runID), "turnId": .string("demo-turn-\(Int(turnID.number ?? 0))")])
         case "runs:abort":
             try requireRun(runID); finish(runID, status: "canceled")
@@ -650,7 +656,7 @@ final class DemoBackend {
             "lastError": .null, "createdAt": Self.now, "updatedAt": Self.now,
         ]
         runs.append(run); artifacts[id] = []; tools[id] = []; turns[id] = []
-        do { try start(id, prompt: payload["goal"].string ?? "", files: payload["attachments"].array, promptMetadata: ["skills": payload["contextSkills"]]) }
+        do { try start(id, prompt: payload["goal"].string ?? "", files: payload["attachments"].array, promptMetadata: ["skills": payload["contextSkills"], "files": payload["contextFiles"]]) }
         catch { runs.removeAll { $0["id"]?.string == id }; artifacts[id] = nil; tools[id] = nil; turns[id] = nil; throw error }
         trimRuns()
         return .object(["runId": .string(id)])
@@ -717,7 +723,12 @@ final class DemoBackend {
         }
         let contextNames = promptMetadata["skills"]?.array.compactMap { $0["displayName"].string ?? $0["name"].string } ?? []
         let steps: [Step]
-        if assignments.contains(where: { $0.runID == runID && $0.status == .running }) {
+        if let run = runs.first(where: { $0["id"]?.string == runID }), run["providerId"]?.string == "codex",
+           run["configSnapshot"]?["conversationSettings"]["config"]["planMode"].bool == true {
+            steps = [.tool("Read", .object(["file_path": .string("Sources/MainsApp/HomeView.swift")]), .string("Read bundled demo source.")),
+                .tool("Plan", .object(["plan": .string("## Review the sample workspace\n\n1. Inspect `HomeView.swift`.\n2. Review the shared composer.\n3. Verify the conversation flow.")]),
+                      .object(["planStatus": .string("pending")])), .finish]
+        } else if assignments.contains(where: { $0.runID == runID && $0.status == .running }) {
             steps = [
                 .thinking("Reviewing the assignment brief"),
                 .tool("Read", .object(["file_path": .string("/Demo/mains/demo-notes.md")]), .string("Reviewed bundled sample notes.")),
@@ -798,6 +809,31 @@ final class DemoBackend {
             .text("## Demo result\n\nFor **\(request)**, the sample workspace shows how Mains keeps conversations, model settings and tool activity together.\n\n- **\(issue ? "Investigation" : "Review"):** inspected bundled sample files.\n- **Privacy:** no computer, external account or AI service was contacted.\n\(hasAttachments ? "- **Attachments:** your files are available in this conversation for on-device preview.\n" : "")\nYou can continue this conversation, change providers, or open the sample image and PDF in **Explore Mains**. This is a prepared demonstration, not an AI-generated answer."),
             .finish,
         ]
+    }
+
+    private func decidePlan(_ request: JSONValue) throws -> JSONValue {
+        guard let runID = request["runId"].string, let runIndex = runs.firstIndex(where: { $0["id"]?.string == runID }),
+              runs[runIndex]["accountId"] == request["accountId"], let decision = request["decision"].string.flatMap(PlanProposal.Decision.init),
+              let planIndex = tools[runID]?.lastIndex(where: { $0["toolName"]?.string == "Plan" }),
+              tools[runID]?[planIndex]["id"] == request["toolCallId"] else { throw MainsError.invalidReply }
+        var metadata = tools[runID]?[planIndex]["metadata"]?.objectValue ?? [:]
+        let status = decision.status.rawValue
+        if metadata["planStatus"]?.string == status { return .object(["status": .string(status)]) }
+        guard !request["checkOnly"].bool else { throw MainsError.server("Plan delivery has not been confirmed yet.") }
+        guard metadata["planStatus"] == nil, !isRunning(runID) else { throw MainsError.server("This demo plan is no longer pending.") }
+        if decision == .apply {
+            let before = runs[runIndex]["configSnapshot"]
+            var snapshot = before?.objectValue ?? [:]
+            var settings = snapshot["conversationSettings"]?.objectValue ?? [:]
+            var config = settings["config"]?.objectValue ?? [:]
+            config["planMode"] = .bool(false); settings["config"] = .object(config)
+            snapshot["conversationSettings"] = .object(settings); runs[runIndex]["configSnapshot"] = .object(snapshot)
+            do { try start(runID, prompt: "Execute the plan above.", files: []) }
+            catch { runs[runIndex]["configSnapshot"] = before; throw error }
+        }
+        metadata["planStatus"] = .string(status); tools[runID]![planIndex]["metadata"] = .object(metadata)
+        push("runs:eventPersisted", ["runId": .string(runID)])
+        return .object(["status": .string(status)])
     }
 
     private func resume(_ runID: String) {
@@ -1359,8 +1395,9 @@ final class DemoBackend {
             value = patches[runID]?[Int(id)].map(JSONValue.string) ?? .null
         }
         else if source == "artifact" { value = artifacts[runID]?.first { $0["id"]?.number == id }?["content"] ?? .null }
-        else if ["tool-input","tool-output"].contains(source) {
-            value = tools[runID]?.first { $0["id"]?.number == id }?[source == "tool-input" ? "input" : "output"] ?? .null
+        else if ["tool-input","tool-output", "plan"].contains(source) {
+            let tool = tools[runID]?.first { $0["id"]?.number == id }
+            value = source == "plan" ? tool?["input"]?["plan"] ?? .null : tool?[source == "tool-input" ? "input" : "output"] ?? .null
         } else { throw MainsError.invalidReply }
         guard value != .null else { throw MainsError.server("Demo content not found in this conversation.") }
         let chars = Array(Self.text(value).unicodeScalars)

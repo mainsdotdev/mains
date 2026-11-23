@@ -424,7 +424,8 @@ public struct TranscriptGroup: Identifiable, Sendable {
     public static func build(_ rows: [TranscriptRow]) -> [Self] {
         var groups: [Self] = []
         for row in rows {
-            if let last = groups.last, (row.kind == .tool || row.kind == .media), last.rows.first?.kind == row.kind {
+            if let last = groups.last, (row.kind == .tool || row.kind == .media), last.rows.first?.kind == row.kind,
+               row.plan == nil, last.rows.first?.plan == nil {
                 groups[groups.count - 1] = Self(rows: last.rows + [row])
             } else { groups.append(Self(rows: [row])) }
         }

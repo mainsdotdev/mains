@@ -3782,6 +3782,25 @@ describe("runsService", () => {
       return createRun(db, { status: "succeeded", ...overrides });
     }
 
+    it("applies a Codex plan as an execution turn while preserving its sandbox settings", async () => {
+      createProvider(db, { id: "codex" });
+      const workspace = createWorkspace(db);
+      const run = createContinuableRun({ providerId: "codex", accountId: "default", mode: "developer", workspaceId: workspace.id,
+        configSnapshot: JSON.stringify({ conversationSettings: { model: "gpt-5", config: { planMode: true, sandboxMode: "workspace-write" } } }) });
+      const plan = createToolCall(db, { runId: run.id, toolName: "Plan", input: JSON.stringify({ plan: "Review code" }), status: "done" });
+      const continueRun = vi.fn(async ({ onInputAccepted }: { onInputAccepted: () => Promise<void> }) => {
+        await onInputAccepted();
+        return { status: "succeeded" };
+      });
+      setupContinueAdapter({ continueRun });
+      await expect(runsService.decidePlan({ runId: run.id, accountId: "default", toolCallId: plan.id, decision: "apply" })).resolves.toEqual({ status: "applied" });
+      expect(continueRun).toHaveBeenCalledWith(expect.objectContaining({
+        clientUserMessageId: `plan-decision-${plan.id}`, configSnapshot: expect.objectContaining({ planMode: false, sandboxMode: "workspace-write" }),
+      }), expect.any(Function));
+      expect((await runsService.getRunById(run.id))?.configSnapshot?.conversationSettings).toMatchObject({ config: { planMode: false, sandboxMode: "workspace-write" } });
+      await flushBackground();
+    });
+
     it.each(["question", "plan"] as const)("does not deliver a %s stopped during continuation preparation", async (kind) => {
       createProvider(db, { id: "codex" });
       const run = createContinuableRun({ providerId: "codex", accountId: "default", mode: "chat" });

@@ -18,6 +18,7 @@ import { CopilotStatic, Codex, Cursor, OpenCode } from "@/components/ui/icons";
 import { Claude } from "@/components/ui/icons/space";
 import { DEFAULT_CLAUDE_PERMISSION_MODE } from "../../shared/claude-permission-modes";
 import { PROVIDER_IDS, type ProviderId } from "../../shared/provider-ids";
+import { PLAN_EXIT_SETTINGS, type PlanExitConfig } from "@mains/contracts/plan-decision";
 
 export type ProviderVariant = "claude" | "copilot" | "codex" | "cursor" | "opencode";
 
@@ -32,17 +33,6 @@ export type WorkspaceVariant = ProviderVariant | "default";
 export type FastModeStyle =
   | { kind: "boolean"; key: "fastMode" }
   | { kind: "serviceTier"; key: "serviceTier"; on: string; match: string[] };
-
-/**
- * Config write performed when the user leaves plan mode: set `key` (currently
- * holding `planValue`) to `nextValue`. Note codex uses a dedicated `planMode`
- * boolean here, distinct from its `permissionKey` (`sandboxMode`).
- */
-export interface PlanExitConfig {
-  key: string;
-  planValue: string | boolean;
-  nextValue: string | boolean;
-}
 
 export interface ProviderVariantDescriptor {
   variant: ProviderVariant;
@@ -144,7 +134,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsMcpAppExtensions: false,
     supportsTurnSteer: true,
     supportsRealtime: false,
-    planExit: { key: "permissionMode", planValue: "plan", nextValue: "acceptEdits" },
+    planExit: PLAN_EXIT_SETTINGS[PROVIDER_IDS.claude],
     enableForkRun: true,
     enableSuggestions: true,
   },
@@ -172,7 +162,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsMcpAppExtensions: false,
     supportsTurnSteer: false,
     supportsRealtime: false,
-    planExit: { key: "permissionMode", planValue: "plan", nextValue: "acceptEdits" },
+    planExit: PLAN_EXIT_SETTINGS[PROVIDER_IDS.copilot],
     enableForkRun: false,
     enableSuggestions: false,
   },
@@ -200,7 +190,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsMcpAppExtensions: true,
     supportsTurnSteer: true,
     supportsRealtime: true,
-    planExit: { key: "planMode", planValue: true, nextValue: false },
+    planExit: PLAN_EXIT_SETTINGS[PROVIDER_IDS.codex],
     enableForkRun: true,
     enableSuggestions: true,
   },
@@ -228,7 +218,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsMcpAppExtensions: false,
     supportsTurnSteer: false,
     supportsRealtime: false,
-    planExit: { key: "mode", planValue: "plan", nextValue: "agent" },
+    planExit: PLAN_EXIT_SETTINGS[PROVIDER_IDS.cursor],
     enableForkRun: true,
     enableSuggestions: true,
   },
@@ -256,7 +246,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsMcpAppExtensions: false,
     supportsTurnSteer: false,
     supportsRealtime: false,
-    planExit: { key: "agent", planValue: "plan", nextValue: "build" },
+    planExit: PLAN_EXIT_SETTINGS[PROVIDER_IDS.opencode],
     enableForkRun: true,
     enableSuggestions: false,
   },

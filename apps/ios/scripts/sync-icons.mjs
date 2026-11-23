@@ -43,6 +43,7 @@ try {
         .map(([name, Icon]) => ['tool-' + name, Icon]));
       const files = require('./src/renderer/components/ui/icons/file-icons');
       const toolFileIcons = {
+        'workspace-folder': files.FolderIcon,
         'tool-file-swift': files.SwiftFileIcon,
         'tool-file-typescript': files.TsFileIcon,
         'tool-file-javascript': files.JsFileIcon,

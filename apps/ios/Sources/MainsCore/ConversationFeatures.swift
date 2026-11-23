@@ -84,8 +84,11 @@ public struct TranscriptSection: Identifiable, Equatable, Sendable {
             let responses = turn.indices.filter { turn[$0].kind == .response && turn[$0].mateTask == nil }
             if foldsResponses, responses.count > 1, let cut = responses.last {
                 let earlier = Array(turn[..<cut])
-                result.append(Self(id: first.id, rows: turn, previous: earlier.filter { $0.kind != .notice && $0.kind != .media && $0.kind != .subagents && !$0.voice && $0.voiceTask == nil && $0.mateTask == nil },
-                                   breakout: earlier.filter { $0.kind == .notice || $0.kind == .media || $0.kind == .subagents || $0.voice || $0.voiceTask != nil || $0.mateTask != nil }, last: Array(turn[cut...])))
+                let breakout = earlier.filter { row in
+                    row.kind == .notice || row.kind == .media || row.kind == .subagents || row.voice || row.voiceTask != nil || row.mateTask != nil || row.plan != nil
+                }
+                let ids = Set(breakout.map(\.id))
+                result.append(Self(id: first.id, rows: turn, previous: earlier.filter { !ids.contains($0.id) }, breakout: breakout, last: Array(turn[cut...])))
             } else { result.append(Self(id: first.id, rows: turn, previous: [], breakout: [], last: turn)) }
             turn = []
         }

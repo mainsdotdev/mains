@@ -74,6 +74,38 @@ describe("conversation history pages", () => {
     expect(JSON.stringify(page)).not.toContain("private-padding");
   });
 
+  it("retains bounded file and folder mentions in compact mobile prompt metadata", () => {
+    const files = [{ path: "src/app.ts", type: "file" }, { path: "docs", type: "directory" }];
+    const prompt = createRunArtifact(db, {
+      runId: "r", kind: "user-prompt" as "report", content: "Compare @src/app.ts and @docs", createdAt: at(0),
+      metadata: JSON.stringify({ files, skills: [{ iconSmall: "a".repeat(17000) }] }),
+    });
+    const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    expect(page.artifacts.find(row => row.id === prompt.id)?.metadata).toMatchObject({ files });
+  });
+
+  it("retains a plan card and pages only its decoded Markdown inside the owning conversation", () => {
+    turn(0);
+    const body = "## Plan\n\n" + "Line with é and 💡.\n".repeat(1400);
+    const plan = createToolCall(db, { runId: "r", toolName: "Plan", createdAt: at(0, 4000),
+      input: JSON.stringify({ plan: body, secret: "other arguments" }), metadata: JSON.stringify({ planStatus: "applied" }) });
+    for (let index = 0; index < 205; index++) createToolCall(db, { runId: "r", toolName: "Read", createdAt: at(0, 5000 + index) });
+    const history = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    expect(history.toolCalls.find(call => call.id === plan.id)).toMatchObject({
+      input: { type: "mains/deferred-plan", preview: Array.from(body).slice(0, 4096).join("") }, metadata: { planStatus: "applied" },
+    });
+    const pages: string[] = [];
+    let offset: number | null = 0;
+    while (offset !== null) {
+      const page = runsRepo.findHistoryContent({ runId: "r", id: plan.id, source: "plan", offset });
+      expect(page).not.toBeNull();
+      pages.push(page!.text);
+      offset = page!.nextOffset;
+    }
+    expect(pages.join("")).toBe(body);
+    expect(runsRepo.findHistoryContent({ runId: "other", id: plan.id, source: "plan" })).toBeNull();
+  });
+
   it("uses desktop prompt boundaries and stable overlapping windows on native phones", () => {
     for (let i = 0; i < 85; i++) turn(i);
     let page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });

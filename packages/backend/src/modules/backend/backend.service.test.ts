@@ -142,6 +142,13 @@ describe("backendService", () => {
         (await backendService.describe({ pairedDevice: true })).capabilities,
       ).toEqual(["runs"]);
     });
+
+    it("advertises only the narrow workspace file search to paired devices", async () => {
+      registerHandler("fileExplorer:searchFiles", async () => ok([]));
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).toEqual([]);
+      registerHandler("search:workspaceFiles", async () => ok([]));
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).toEqual(["search", "workspaceFileSearch"]);
+    });
   });
 
   describe("PAIRED_DEVICE_CHANNELS", () => {
@@ -201,6 +208,7 @@ describe("backendService", () => {
         "runs:archive",
         "runs:continue",
         "runs:createRealtimeConversation",
+        "runs:decidePlan",
         "runs:delete",
         "runs:dismissAsyncQuestions",
         "runs:execute",
@@ -228,6 +236,8 @@ describe("backendService", () => {
       expect(
         (await backendService.describe({ pairedDevice: true })).capabilities,
       ).toEqual(["runs"]);
+      registerHandler("runs:decidePlan", async () => ok({ status: "dismissed" }));
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).toEqual(["mobilePlanDecision", "runs"]);
     });
   });
 

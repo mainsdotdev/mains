@@ -84,6 +84,56 @@ private final class DecisionFaultTransport: BackendTransport {
 
 @Suite(.serialized)
 struct DecisionTests {
+    @Test func planProposalsStayVisibleOutsideCollapsedWork() throws {
+        let date = Date(timeIntervalSince1970: 10)
+        let call = try JSONValue.object(["id": .number(3), "toolName": .string("Plan"), "status": .string("done"),
+            "createdAt": .number(10_000), "input": .object(["plan": .string("## Summary")])]).decode(ToolCall.self)
+        let rows = [
+            TranscriptRow(id: "intro", kind: .response, text: "Starting", date: date, live: false, deferredArtifactID: nil),
+            TranscriptRow(id: "plan", kind: .tool, text: "Plan", date: date, live: false, deferredArtifactID: nil, tool: call),
+            TranscriptRow(id: "reply", kind: .response, text: "Finished", date: date, live: false, deferredArtifactID: nil),
+        ]
+        let section = try #require(TranscriptSection.build(rows).first)
+        #expect(section.displayedRows(expanded: false).map(\.id) == ["plan", "reply"])
+        #expect(section.displayedRows(expanded: true).map(\.id) == ["intro", "plan", "reply"])
+    }
+
+    @Test(arguments: [PlanProposal.Decision.apply, .dismiss]) @MainActor
+    func demoPlanDecisionsKeepOneDurableOutcome(_ choice: PlanProposal.Decision) async throws {
+        let (session, backend, faults) = try makeSession()
+        defer { session.setActive(false); backend.shutdown() }
+        try await eventually { session.isConnected && session.supportsPlanDecisions }
+        var settings = session.settings(for: try #require(session.spaces.first { $0.id == "codex" }))
+        settings.config["planMode"] = .bool(true)
+        let id = try await session.send("Review the code", spaceID: "codex", workspaceID: session.homeTargets["codex"]?.workspaceID, settings: settings)
+        await session.selectConversation(id)
+        try await eventually {
+            session.transcript.rows.contains { $0.plan != nil } && session.conversations.first { $0.id == id }?.isActive == false
+        }
+        let plan = try #require(session.transcript.rows.compactMap(\.plan).first)
+        #expect(plan.text.contains("## Review the sample workspace"))
+        #expect(session.canDecidePlan(plan, runID: id))
+        faults.failAfter = choice == .apply ? "runs:decidePlan" : nil
+        if choice == .apply {
+            await #expect(throws: MainsError.timeout) { try await session.decidePlan(plan, runID: id, decision: choice) }
+            #expect(session.pendingPlanDecision?.uncertain == true)
+            await session.selectConversation(DemoBackend.tourID)
+            try await session.checkPlanDecision()
+        } else { try await session.decidePlan(plan, runID: id, decision: choice) }
+        #expect(session.pendingPlanDecision == nil)
+        await session.selectConversation(id)
+        try await eventually { session.transcript.rows.compactMap(\.plan).first?.status == choice.status }
+        let calls = faults.calls.filter { $0.channel == "runs:decidePlan" }
+        #expect(calls.count == (choice == .apply ? 2 : 1))
+        #expect(calls.first?.commandID != nil && calls.first?.args.first?["checkOnly"] != .bool(true))
+        if choice == .apply {
+            #expect(calls.last?.args.first?["checkOnly"] == .bool(true))
+            #expect(calls.first?.args.first?["toolCallId"] == calls.last?.args.first?["toolCallId"])
+            #expect(session.settings(forRunID: id)?.config["planMode"] == .bool(false))
+        }
+        #expect(session.transcript.rows.filter { $0.kind == .prompt && $0.text == "Execute the plan above." }.count == (choice == .apply ? 1 : 0))
+    }
+
     @Test func shellApprovalPreviewMatchesDesktopWithoutRewritingAmbiguousCommands() {
         let simple = ApprovalCommandPreview(command: #"/bin/zsh -lc "pwd && rg --files -g 'AGENTS.md'""#)
         #expect(simple.shell == "zsh -lc" && simple.command == "pwd && rg --files -g 'AGENTS.md'")

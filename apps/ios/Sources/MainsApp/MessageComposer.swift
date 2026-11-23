@@ -374,11 +374,16 @@ struct MessageComposer: View {
         guard session.isConnected, !draft.isSending, !attachmentsOpen, trigger != nil || pluginsOpen else { return nil }
         let scope = contextScope, owner = session.ownership
         let hasLocalWorkspace = session.workspaces.contains { $0.id == scope.workspaceID && $0.isReplica != true }
+        let match = trigger
         return ContextPickerRequest(id: contextPresentationID, frame: composerFrame, session: session, scope: scope, owner: owner,
-            trigger: trigger?.trigger, query: trigger?.filter ?? "", pluginsOnly: trigger == nil && pluginsOpen,
+            trigger: match?.trigger, query: match?.filter ?? "", pluginsOnly: match == nil && pluginsOpen,
             offersMates: Experience.allowsMateMentions(context.mode, isMateConversation: context.lockedProfile, hasLocalWorkspace: hasLocalWorkspace),
+            offersWorkspaceFiles: context.mode == "developer" && hasLocalWorkspace,
             pickSkill: { skill in
                 guard owner == session.ownership, scope == contextScope, !draft.isSending else { return }
+                if skill.workspaceFile != nil {
+                    guard trigger?.trigger == "@", trigger?.filter == match?.filter else { return }
+                }
                 let select = {
                     guard owner == session.ownership, scope == contextScope, !draft.isSending else { return }
                     draft.insert(skill, scope: scope); pluginsOpen = false; focused = true

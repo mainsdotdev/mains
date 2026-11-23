@@ -1,6 +1,6 @@
 import { prepareAssistantMentions, withAssistantMentionFiles, annotateAssistantTaskPrompts } from "../assistants";
 import { assistantsService } from "../assistants/assistants.service";
-import { assertNoPlanDecisionPatch } from "@mains/contracts/plan-decision";
+import { assertNoPlanDecisionPatch, PLAN_EXIT_SETTINGS } from "@mains/contracts/plan-decision";
 import { assertPlanContinuationCurrent, decidePlan } from "./plan-decision-lifecycle";
 import type { PlanDecisionPayload } from "@mains/contracts/plan-decision";
 import { retireAnswer } from "./async-answer-lifecycle";
@@ -2660,6 +2660,11 @@ export const runsService = {
               : undefined),
         );
 
+        const planExit = PLAN_EXIT_SETTINGS[run.providerId as keyof typeof PLAN_EXIT_SETTINGS];
+        if (assertPlanContinuationCurrent(runId, payload.clientUserMessageId) && planExit &&
+            conversationSettings.config[planExit.key] === planExit.planValue) {
+          conversationSettings.config = { ...conversationSettings.config, [planExit.key]: planExit.nextValue };
+        }
         const toolPolicy = composeToolPolicy(run.mode, run.toolPolicySnapshot);
         const configSnapshot = normalizeAdditionalDirectories(
           composeConfigSnapshot(run.mode, run.providerId, {

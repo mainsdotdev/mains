@@ -6,6 +6,34 @@ extension EnvironmentValues {
     @Entry var mateMentionAvatars: [String: MateAvatar] = [:]
 }
 
+@MainActor
+enum WorkspaceFileArtwork {
+    static func image(for file: WorkspaceFileMatch, tint: UIColor) -> UIImage {
+        if file.kind == .directory {
+            return (UIImage(named: "registry-workspace-folder") ?? UIImage(systemName: "folder.fill")!)
+                .withTintColor(.systemOrange, renderingMode: .alwaysOriginal)
+        }
+        let asset: String? = switch (file.name as NSString).pathExtension.lowercased() {
+        case "swift": "tool-file-swift"
+        case "ts", "mts", "cts": "tool-file-typescript"
+        case "js", "mjs", "cjs": "tool-file-javascript"
+        case "jsx", "tsx": "tool-file-react"
+        case "json", "jsonc", "json5": "tool-file-json"
+        case "py", "pyi", "pyw": "tool-file-python"
+        case "md", "mdx": "atlas-document-md"
+        case "txt", "text", "log", "rtf": "atlas-document-txt"
+        case "doc", "docx": "atlas-document-docx"
+        case "xls", "xlsx": "atlas-document-xlsx"
+        case "ppt", "pptx": "atlas-document-pptx"
+        case "pdf": "atlas-document-pdf"
+        default: nil
+        }
+        if let asset, let image = UIImage(named: "registry-" + asset) { return image.withRenderingMode(.alwaysOriginal) }
+        return (UIImage(named: "registry-tool-file") ?? UIImage(systemName: "doc.fill")!)
+            .withTintColor(tint, renderingMode: .alwaysOriginal)
+    }
+}
+
 /// Artwork stays scoped to visible mentions. Only bounded data/HTTPS images are
 /// accepted; absolute catalogue paths always use the bundled fallback.
 @MainActor @Observable
@@ -53,13 +81,21 @@ final class ContextArtwork {
         guard let id = skill.mateID, let avatar = skill.mateAvatar ?? avatars[id] else { return nil }
         return MateRobotAssets.catalogue?.preset(for: avatar, mateID: id)
     }
-    static func icon(_ image: UIImage?, skill: ContextSkill, size: CGFloat, tint: UIColor) -> UIImage {
-        UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in
-            let isSkill = skill.group == "Skills"
-            let asset = skill.mateID != nil ? "registry-assistant-steps" : isSkill ? "registry-sparkles" : "registry-box"
-            let source = image ?? UIImage(named: asset)?.withTintColor(tint, renderingMode: .alwaysOriginal)
-                ?? UIImage(systemName: isSkill ? "sparkles" : "cube")!.withTintColor(tint, renderingMode: .alwaysOriginal)
-            let scale = min(size / max(1, source.size.width), size / max(1, source.size.height))
+    static func icon(_ image: UIImage?, skill: ContextSkill, size: CGFloat, tint: UIColor, onPrompt: Bool = false) -> UIImage {
+        let file = skill.workspaceFile
+        let isSkill = skill.group == "Skills"
+        let asset = skill.mateID != nil ? "registry-assistant-steps" : isSkill ? "registry-sparkles" : "registry-box"
+        let usesBackdrop = onPrompt && file != nil
+        let source = file.map { WorkspaceFileArtwork.image(for: $0, tint: usesBackdrop ? .darkGray : tint) }
+            ?? image ?? UIImage(named: asset)?.withTintColor(tint, renderingMode: .alwaysOriginal)
+            ?? UIImage(systemName: isSkill ? "sparkles" : "cube")!.withTintColor(tint, renderingMode: .alwaysOriginal)
+        return UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in
+            if usesBackdrop {
+                UIColor(white: 1, alpha: 0.9).setFill()
+                UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: size, height: size), cornerRadius: size * 0.2).fill()
+            }
+            let artworkSize = usesBackdrop ? size * 0.8 : size
+            let scale = min(artworkSize / max(1, source.size.width), artworkSize / max(1, source.size.height))
             let rect = CGRect(x: (size - source.size.width * scale) / 2, y: (size - source.size.height * scale) / 2, width: source.size.width * scale, height: source.size.height * scale)
             source.draw(in: rect)
         }
@@ -90,13 +126,13 @@ struct InlineContextText: View {
             let skill = mention.skill
             let avatar = ContextArtwork.matePreset(skill, avatars: mateAvatars).flatMap { MateRobotAssets.image(for: $0) }
             let size = skill.mateID == nil ? iconSize : iconSize * 1.18
-            let icon = ContextArtwork.icon(avatar ?? artwork.images[skill.name], skill: skill, size: size, tint: UIColor(ink))
+            let icon = ContextArtwork.icon(avatar ?? artwork.images[skill.name], skill: skill, size: size, tint: UIColor(ink), onPrompt: true)
             let symbol = Text(Image(uiImage: icon).renderingMode(.original)).baselineOffset(-iconSize * 0.14 - (size - iconSize) / 2)
             let title = Text((skill.mateID == nil ? " " : "\u{00a0}") + skill.mentionTitle).fontWeight(.semibold)
             result = Text("\(result)\(prefix)\(symbol)\(title)")
             cursor = NSMaxRange(mention.displayRange)
         }
-        let suffix = Text(display.substring(from: cursor).replacingOccurrences(of: ContextMentions.marker, with: ""))
+        let suffix = Text(ContextMentions.strippingMarkers(display.substring(from: cursor)))
         return Text("\(result)\(suffix)")
     }
 }
@@ -214,7 +250,7 @@ private struct ContextTextInput: UIViewRepresentable {
             guard let view, let coordinator else { return }
             let range = view.selectedRange
             let selected = view.attributedText.attributedSubstring(from: range)
-            UIPasteboard.general.string = coordinator.source(selected).replacingOccurrences(of: ContextMentions.marker, with: "")
+            UIPasteboard.general.string = ContextMentions.strippingMarkers(coordinator.source(selected))
         }
         let wantsFocus = focused && !mainPaneCovered
         view.wantsFocus = wantsFocus
@@ -293,7 +329,7 @@ final class ComposerTextView: UITextView {
     override func cut(_ sender: Any?) { onCopy?(); insertText("") }
     override func paste(_ sender: Any?) {
         if let text = UIPasteboard.general.string {
-            insertText(text.replacingOccurrences(of: "\u{fffc}", with: "").replacingOccurrences(of: ContextMentions.marker, with: ""))
+            insertText(ContextMentions.strippingMarkers(text.replacingOccurrences(of: "\u{fffc}", with: "")))
         }
     }
 }

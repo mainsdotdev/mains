@@ -1,6 +1,56 @@
 import Foundation
 import Observation
 
+public struct PlanProposal: Equatable, Sendable, Identifiable {
+    public enum Status: String, Sendable { case pending, applied, dismissed, failed }
+    public enum Decision: String, Sendable {
+        case apply, dismiss
+        var status: Status { self == .apply ? .applied : .dismissed }
+    }
+
+    public let id: Int
+    public let text: String
+    public let fullContentSource: String?
+    public let status: Status
+    public let isExitPlan: Bool
+
+    static func toolKey(_ name: String) -> String {
+        name.lowercased().filter { !$0.isWhitespace && $0 != "_" && $0 != "-" }
+    }
+
+    public init?(_ call: ToolCall) {
+        let name = Self.toolKey(call.toolName)
+        guard ["plan", "createplan", "exitplanmode"].contains(name), call.parentToolCallId == nil,
+              AgentActivity.foreground(call.metadata ?? .null) else { return nil }
+        let input = ToolPresentation.unwrap(call.input ?? .null)
+        let output = ToolPresentation.unwrap(call.output ?? .null)
+        let body = input["plan"].string ?? ""
+        let deferred = input["type"].string
+        if deferred == "mains/deferred-plan" {
+            text = input["preview"].string ?? ""; fullContentSource = "plan"
+        } else if deferred == "mains/deferred-tool-output" {
+            text = ""; fullContentSource = "tool-input"
+        } else {
+            guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            text = body; fullContentSource = nil
+        }
+        let marker = call.metadata?["planStatus"].string ?? output["planStatus"].string
+        status = marker.flatMap(Status.init(rawValue:)) ?? (["error", "failed"].contains(call.status) ? .failed : .pending)
+        id = call.id; isExitPlan = name == "exitplanmode"
+    }
+}
+
+public struct PendingPlanDecision: Sendable {
+    public let runID: String
+    public let planID: Int
+    public let decision: PlanProposal.Decision
+    public internal(set) var checking: Bool
+    public internal(set) var uncertain: Bool
+    let commandID: String
+    let owner: Int
+    let payload: JSONValue
+}
+
 public enum DecisionIdentity: Hashable, Sendable {
     case approval(runID: String, requestID: String, token: String?)
     case questions(runID: String, artifactID: Int)
@@ -40,6 +90,7 @@ public struct PendingApproval: Decodable, Identifiable, Sendable {
     public var id: DecisionIdentity { .approval(runID: runId, requestID: requestId, token: approvalToken) }
     public var supported: Bool { ["tool_approval", "ask_user", "elicitation"].contains(kind) }
     public var isForm: Bool { kind == "elicitation" && elicitationMode != "url" }
+    public var isExitPlan: Bool { kind == "tool_approval" && PlanProposal.toolKey(toolName) == "exitplanmode" }
     public var safeURL: URL? {
         guard let url, let parsed = URL(string: url), ["http", "https"].contains(parsed.scheme?.lowercased() ?? ""), parsed.host != nil else { return nil }
         return parsed

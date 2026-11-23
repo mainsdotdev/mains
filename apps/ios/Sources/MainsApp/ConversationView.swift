@@ -671,11 +671,24 @@ struct ConversationView: View {
                 }.zIndex(1)
             }
             SettingsRecoveryNotice(session: session, runID: runID)
+            if let decision = session.pendingPlanDecision, decision.uncertain {
+                ChatNotice(title: "Plan decision unconfirmed", message: "Check whether the computer received the plan decision.", symbol: "exclamationmark.circle", warning: true) {
+                    Button(decision.checking ? "Checking…" : "Check decision") {
+                        let owner = session.ownership
+                        Task {
+                            do { try await session.checkPlanDecision() }
+                            catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
+                        }
+                    }
+                    .disabled(decision.checking || !session.isConnected)
+                    .accessibilityIdentifier("checkPlanDecision")
+                }
+            }
             if !focusedVoice {
                 RemoteConversationQueueView(queues: session.viewingRunID == runID ? session.remoteQueues : [])
             }
             if !focusedVoice, run?.supportsSteering == true, run?.isReplica != true {
-                ConversationQueueView(session: session, queue: queue, canSteer: run?.canSteer == true, resume: prepareQueueResume)
+                ConversationQueueView(session: session, queue: queue, canSteer: run?.canSteer == true && session.pendingPlanDecision?.runID != runID, resume: prepareQueueResume)
             }
             if uncertain, let pending = session.pendingMessage,
                !pending.isQueueOwned || pending.runID != runID || !queue.messages.contains(where: { $0.id == pending.queueInputID }) {
@@ -717,7 +730,7 @@ struct ConversationView: View {
                     }, change: applyGoalChange)
                 }
                 MessageComposer(session: session, context: context, draft: draft,
-                    canSend: run != nil && session.pendingConversationAction == nil && session.pendingFork == nil && session.stoppingRunID != runID && (usesQueue ||
+                    canSend: run != nil && session.pendingConversationAction == nil && session.pendingPlanDecision?.runID != runID && session.pendingFork == nil && session.stoppingRunID != runID && (usesQueue ||
                         session.isConnected && !uncertain && !session.sending && pending?.status != .accepted && !scroll.paging && run?.isActive != true),
                     active: run?.isActive == true, canSendDuringRun: run?.supportsSteering == true, sendLabel: sendLabel,
                     stopping: session.stoppingRunID == runID, stop: { Task { await stop() } },

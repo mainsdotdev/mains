@@ -525,7 +525,8 @@ private struct ChatTurnView: View {
             let lastResponse = section.rows.last(where: { $0.kind == .response && $0.mateTask == nil })
             let copyRowID = live || lastResponse?.live == true ? nil : lastResponse?.id
             ForEach(TranscriptGroup.build(rows)) { group in
-                if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, live: live, isMate: isMate) }
+                if let plan = group.rows.first?.plan, !isMate { ChatPlanCard(session: session, runID: forkRunID, plan: plan, providerID: providerID) }
+                else if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, live: live, isMate: isMate) }
                 else if group.rows.first?.kind == .media { ChatMediaGallery(session: session, media: group.rows.flatMap(\.media)) }
                 else if let row = group.rows.first {
                     ChatMessage(session: session, row: row, providerID: providerID, readContent: readContent, isMate: isMate, openSubagents: openSubagents,

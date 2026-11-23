@@ -655,13 +655,13 @@ export const fileExplorerService = {
       excludePatterns = DEFAULT_SEARCH_EXCLUDE_PATTERNS,
     } = options;
 
-    const needle = query.toLowerCase();
+    const needle = (path.sep === "\\" ? query.replace(/\\/g, "/") : query).toLowerCase();
     if (!needle) return [];
 
     const normalizedRoot = rootPath.replace(/\/$/, "");
-    const rootPrefix = normalizedRoot + path.sep;
     const results: DirEntry[] = [];
     const seenDirectories = new Set<string>();
+    const relativePathOf = (fullPath: string) => path.relative(rootPath, fullPath).split(path.sep).join("/");
 
     const walk = async (dirPath: string): Promise<void> => {
       if (results.length >= max) return;
@@ -679,13 +679,10 @@ export const fileExplorerService = {
         const fullPath = path.join(dirPath, name);
 
         if (entry.isDirectory()) {
-          const relativePath = fullPath.startsWith(rootPrefix)
-            ? fullPath.slice(rootPrefix.length)
-            : fullPath;
           if (
             includeDirectories &&
             (name.toLowerCase().includes(needle) ||
-              relativePath.toLowerCase().includes(needle))
+              relativePathOf(fullPath).toLowerCase().includes(needle))
           ) {
             results.push({
               name,
@@ -697,12 +694,9 @@ export const fileExplorerService = {
           }
           await walk(fullPath);
         } else if (entry.isFile()) {
-          const relativePath = fullPath.startsWith(rootPrefix)
-            ? fullPath.slice(rootPrefix.length)
-            : fullPath;
           if (
             name.toLowerCase().includes(needle) ||
-            relativePath.toLowerCase().includes(needle)
+            relativePathOf(fullPath).toLowerCase().includes(needle)
           ) {
             results.push({
               name,

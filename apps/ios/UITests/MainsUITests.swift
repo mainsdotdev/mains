@@ -2607,6 +2607,64 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Native reply delivered."].waitForExistence(timeout: 15))
     }
 
+    func testDemoPlanCardReadsAndAppliesThePlan() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        prepareUnpaired(app); app.buttons["startDemo"].tap()
+        let options = app.buttons["runOptions"]
+        XCTAssertTrue(options.waitForExistence(timeout: 10)); options.tap()
+        let planMode = app.switches["runPlanMode"]
+        XCTAssertTrue(planMode.waitForExistence(timeout: 5)); planMode.tap()
+        assertControl(planMode, value: "1")
+        closeRunOptions(in: app)
+        let input = app.textViews["homeMessageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap(); input.typeText("Review the code")
+        app.buttons["startConversation"].tap()
+        let consent = app.buttons["allowDataSharing"]
+        if consent.waitForExistence(timeout: 4) { consent.tap() }
+        let apply = app.buttons["Apply Plan"]
+        XCTAssertTrue(app.staticTexts["Review the sample workspace"].waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(apply.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Dismiss"].exists)
+        attachScreenshot(app, name: "Pending plan card")
+        apply.tap()
+        XCTAssertTrue(app.staticTexts["Execute the plan above."].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "planDisclosure-", "Applied")).firstMatch.waitForExistence(timeout: 10))
+    }
+
+    func testDemoAtPickerKeepsWorkspaceMentionsInComposerAndPrompt() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        prepareUnpaired(app); app.buttons["startDemo"].tap()
+        let input = app.textViews["homeMessageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap(); input.typeText("Compare @docs/release")
+        let file = app.buttons["context-skill-workspace-file:docs/Release Notes.md"]
+        XCTAssertTrue(file.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["contextSection-Files"].exists)
+        XCTAssertTrue(file.label.contains("docs/Release Notes.md"))
+        file.tap()
+        XCTAssertEqual(input.value as? String, "Compare Release Notes.md ")
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        input.typeText("and @docs")
+        let folder = app.buttons["context-skill-workspace-file:docs"]
+        XCTAssertTrue(folder.waitForExistence(timeout: 10))
+        XCTAssertTrue(folder.label.contains("Folder"))
+        attachScreenshot(app, name: "Workspace file and folder results")
+        folder.tap()
+        XCTAssertEqual(input.value as? String, "Compare Release Notes.md and docs ")
+        attachScreenshot(app, name: "Composer file and folder mentions")
+        app.buttons["startConversation"].tap()
+        let consent = app.buttons["allowDataSharing"]
+        if consent.waitForExistence(timeout: 4) { consent.tap() }
+        let sent = app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", #"Compare\s+Release Notes\.md\s+and\s+docs"#)).firstMatch
+        XCTAssertTrue(sent.waitForExistence(timeout: 10), app.debugDescription)
+        if !sent.isHittable { app.scrollViews["conversationTranscript"].swipeDown() }
+        XCTAssertTrue(sent.isHittable)
+        attachScreenshot(app, name: "Sent file and folder mentions")
+    }
+
     func testDemoContextPickerKeepsKeyboardAndSendsSelections() throws {
         continueAfterFailure = false
         let app = makeApplication()

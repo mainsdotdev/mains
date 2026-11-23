@@ -22,6 +22,13 @@ export interface ConversationSearchHit {
 }
 export interface ConversationSearchPage { items: ConversationSearchHit[]; nextCursor: ConversationSearchCursor | null }
 
+export const WORKSPACE_FILE_SEARCH_CAPABILITY = "workspaceFileSearch";
+
+export interface WorkspaceFileSearchQuery { workspaceId: string; query: string; includeDirectories?: boolean }
+
+/** A file or folder's workspace-relative path, with `/` separators. */
+export interface WorkspaceFileSearchHit { path: string; type: "file" | "directory" }
+
 /** The durable Mains records exposed by the global command menu. */
 export type GlobalSearchResultKind = "workspace" | "run" | "document";
 

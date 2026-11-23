@@ -7,6 +7,7 @@ struct FullMessageView: View {
     let session: BackendSession
     let artifactID: Int
     var source = "artifact"
+    var expectedRunID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var offset = 0
@@ -17,7 +18,7 @@ struct FullMessageView: View {
     var body: some View {
         ScrollView {
             Group {
-                if source == "artifact" { ChatMessageBody(text: text) }
+                if source == "artifact" || source == "plan" { ChatMessageBody(text: text) }
                 else { Text(text).font(.system(.callout, design: .monospaced)).textSelection(.enabled) }
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -36,16 +37,19 @@ struct FullMessageView: View {
                 }.padding().background(.bar)
             }
             .navigationHeaderFade()
-            .expandedNavigationTitle(source == "tool-output" ? "Tool output" : source == "tool-input" ? "Tool input" : "Full message")
+            .expandedNavigationTitle(source == "plan" ? "Plan" : source == "tool-output" ? "Tool output" : source == "tool-input" ? "Tool input" : "Full message")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task(id: offset) { await load() }
             .onChange(of: session.ownership) { _, _ in text = ""; dismiss() }
+            .onChange(of: session.viewingRunID) { _, current in
+                if let expectedRunID, current != expectedRunID { text = ""; dismiss() }
+            }
     }
     private func load() async {
         loading = true; error = nil
         defer { loading = false }
         do {
-            let result = try await session.readContent(artifactID: artifactID, offset: offset, source: source)
+            let result = try await session.readContent(artifactID: artifactID, offset: offset, source: source, expectedRunID: expectedRunID)
             try Task.checkCancellation()
             text = result["text"].string ?? ""
             next = result["nextOffset"].number.map(Int.init)

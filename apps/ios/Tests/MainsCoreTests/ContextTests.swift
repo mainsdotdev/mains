@@ -373,6 +373,57 @@ import Testing
         #expect(faults.calls.last { $0.channel == "runs:continue" }?.args[0]["contextSkills"].array == [skill.wire])
     }
 
+    @Test @MainActor func workspaceFileSearchKeepsAFileMentionThroughSendAndHistory() async throws {
+        let (session, backend, faults) = try setup()
+        defer { session.setActive(false) }
+        try await eventually { session.isConnected && session.supportsWorkspaceFileSearch }
+        let workspace = try #require(backend.defaultWorkspaceID)
+        let scope = session.contextScope(providerID: "codex", workspaceID: workspace)
+        let matches = try await session.searchWorkspaceFiles("docs/release", scope: scope)
+        let file = try #require(matches.first)
+        #expect(matches.count == 1 && file.path == "docs/Release Notes.md")
+        let folder = try #require(try await session.searchWorkspaceFiles("docs", scope: scope).first { $0.kind == .directory })
+        #expect(folder.path == "docs")
+        #expect(faults.calls.last { $0.channel == "search:workspaceFiles" }?.args == [
+            .object(["workspaceId": .string(workspace), "query": .string("docs"), "includeDirectories": .bool(true)])
+        ])
+        for invalid in ["", "../notes.md", "docs/../notes.md", "/tmp/notes.md", "C:/notes.md"] {
+            #expect(WorkspaceFileMatch(path: invalid) == nil)
+        }
+
+        let draft = ConversationDraft(); draft.text = "👋 Compare @docs/release"
+        draft.insert(.workspaceFile(file), scope: scope)
+        draft.text += "and @docs"
+        draft.insert(.workspaceFile(folder), scope: scope)
+        let submission = try #require(draft.begin())
+        let editing = ContextText(submission.text, skills: submission.contextSkills)
+        #expect(editing.mentions.map { $0.skill.workspaceFile?.kind } == [.file, .directory])
+        #expect(editing.readable == "👋 Compare Release Notes.md and docs ")
+        let id = try await session.send(submission.text, spaceID: "codex", workspaceID: workspace,
+                                        contextSkills: submission.contextSkills, contextScope: submission.contextScope)
+        let sent = try #require(faults.calls.last { $0.channel == "runs:execute" }?.args.first)
+        #expect(sent["goal"].string == "👋 Compare @docs/Release Notes.md and @docs")
+        #expect(sent["contextFiles"].array == [file.wire, folder.wire] && sent["contextSkills"].array.isEmpty)
+        await session.selectConversation(id)
+        try await eventually { session.transcript.rows.contains { $0.kind == .prompt && !$0.contextSkills.isEmpty } }
+        let prompt = try #require(session.transcript.rows.first { $0.kind == .prompt })
+        let sentText = ContextText(prompt.text, skills: prompt.contextSkills, canonical: true)
+        #expect(sentText.mentions.map { $0.skill.workspaceFile?.kind } == [.file, .directory])
+        #expect(sentText.readable == "👋 Compare Release Notes.md and docs")
+    }
+
+    @Test func oldDesktopPathMentionsKeepTheirTypeWhenProjectedForDisplay() throws {
+        let unix: JSONValue = .object(["path": .string("/Users/test/project/src"), "type": .string("directory")])
+        let windows: JSONValue = .object(["path": .string(#"C:\project\src\app.ts"#)])
+        #expect(WorkspaceFileMatch.read(unix) == nil && WorkspaceFileMatch.read(windows) == nil)
+        let folder = try #require(WorkspaceFileMatch.read(unix, history: true))
+        let file = try #require(WorkspaceFileMatch.read(windows, history: true))
+        let text = "Open @\(folder.path) and @\(file.path)"
+        let projection = ContextText(text, skills: [.workspaceFile(folder), .workspaceFile(file)], canonical: true)
+        #expect(projection.mentions.map { $0.skill.workspaceFile?.kind } == [.directory, .file])
+        #expect(projection.readable == "Open src and app.ts")
+    }
+
     @MainActor private func setup() throws -> (BackendSession, DemoBackend, ContextFaults) {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1)), faults = ContextFaults()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in ContextTransport(backend, faults) })

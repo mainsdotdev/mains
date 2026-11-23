@@ -449,6 +449,7 @@ export const CHANNELS = {
   search: {
     query: "search:query",
     conversations: "search:conversations",
+    workspaceFiles: "search:workspaceFiles",
   },
   runs: {
     abort: "runs:abort",

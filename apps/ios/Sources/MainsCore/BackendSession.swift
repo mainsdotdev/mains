@@ -95,6 +95,8 @@ public final class BackendSession {
     public private(set) var atlasRevision = 0
     public private(set) var pendingAtlasSave: PendingAtlasSave?
     public private(set) var pendingConversationAction: PendingConversationAction?
+    public private(set) var pendingPlanDecision: PendingPlanDecision?
+    private var confirmedPlanDecision: (runID: String, planID: Int, status: PlanProposal.Status)?
     private struct GoalChangeAttempt {
         let id: String
         let runID: String
@@ -162,6 +164,8 @@ public final class BackendSession {
     public var supportsMatePinning: Bool { supportsMateInfo && connectedDescriptor?.capabilities.contains("matePinning") == true }
     public var supportsMobileGoalSummary: Bool { connectedDescriptor?.capabilities.contains("mobileGoalSummary") == true }
     public var supportsMobileGoalControls: Bool { connectedDescriptor?.capabilities.contains("mobileGoalControls") == true }
+    public var supportsWorkspaceFileSearch: Bool { connectedDescriptor?.capabilities.contains("workspaceFileSearch") == true }
+    public var supportsPlanDecisions: Bool { connectedDescriptor?.capabilities.contains("mobilePlanDecision") == true }
     public var goalChangeNeedsCheck: Bool { pendingGoalChange?.uncertain == true }
     public private(set) var goalSummaryRevision = 0
     var supportsMateTeamCreation: Bool { supportsMates && connectedDescriptor?.capabilities.contains("mateTeamCreation") == true }
@@ -635,7 +639,8 @@ public final class BackendSession {
     }
 
     public func updateConversationSettings(_ settings: ComposerSettings, runID: String) async throws {
-        guard isConnected, !sending, pendingConversationAction == nil, !savingConversationSettings.contains(runID), settingsChanges[runID] == nil,
+        guard isConnected, !sending, pendingConversationAction == nil, pendingPlanDecision?.runID != runID,
+              !savingConversationSettings.contains(runID), settingsChanges[runID] == nil,
               let run = conversations.first(where: { $0.id == runID }), run.isReplica != true else {
             throw MainsError.server("Conversation settings are unavailable. Check any unconfirmed save first.")
         }
@@ -1511,6 +1516,7 @@ public final class BackendSession {
 
     private func resetProjection() {
         pendingConversationAction = nil; retiredConversation = nil; conversationActionRevision = 0
+        pendingPlanDecision = nil; confirmedPlanDecision = nil
         pendingGoalChange = nil
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         voice.retire(); pendingVoiceConversation = nil; checkingVoiceConversation = false; voiceSpaceID = nil; voiceMate = nil
@@ -1641,6 +1647,24 @@ public final class BackendSession {
     }
 
     public func cachedContext(_ scope: ContextScope) -> ContextCatalogue? { contextCatalogues[scope] }
+
+    public func searchWorkspaceFiles(_ query: String, scope: ContextScope) async throws -> [WorkspaceFileMatch] {
+        guard supportsWorkspaceFileSearch, isConnected, let candidate = transport else { throw MainsError.disconnected }
+        guard let workspaceID = scope.workspaceID, scope.workspacePath != nil,
+              scope == contextScope(providerID: scope.providerID, workspaceID: workspaceID) else { throw MainsError.changedBackend }
+        let owner = pairingOwner, current = generation
+        let input: JSONValue = .object(["workspaceId": .string(workspaceID), "query": .string(query), "includeDirectories": .bool(true)])
+        let result = try await candidate.invoke("search:workspaceFiles", args: [input])
+        try Task.checkCancellation()
+        guard owner == pairingOwner, current == generation, isConnected, transport === candidate,
+              scope == contextScope(providerID: scope.providerID, workspaceID: workspaceID) else { throw MainsError.changedBackend }
+        guard case .array(let rows) = result else { throw MainsError.invalidReply }
+        var paths: Set<String> = []
+        return rows.prefix(50).compactMap { row in
+            guard let file = WorkspaceFileMatch.read(row), paths.insert(file.path).inserted else { return nil }
+            return file
+        }
+    }
 
     /// Lazy, workspace-scoped reads. A failed source keeps only that scope's previous successful list.
     public func loadContext(_ scope: ContextScope) async throws -> ContextCatalogue {
@@ -2031,6 +2055,7 @@ public final class BackendSession {
 #endif
 
         guard pendingConversationAction == nil else { throw MainsError.server("Check the pending chat change before sending.") }
+        if let runID, pendingPlanDecision?.runID == runID { throw MainsError.server("Check the plan decision before sending another message.") }
         guard pendingFork == nil else { throw MainsError.server("Wait for the fork, or check its delivery before sending.") }
         guard pendingMessage?.status != .uncertain else { throw MainsError.server("Check the unconfirmed message before sending another.") }
         if let runID, decisionDeliveries.contains(where: { $0.value.attempt?.runID == runID && [.sending, .uncertain].contains($0.value.phase) }) {
@@ -2116,8 +2141,15 @@ public final class BackendSession {
             guard contextScope == self.contextScope(providerID: providerID, workspaceID: actualWorkspaceID) else {
                 throw MainsError.server("The context belongs to another provider or workspace. Choose it again before sending.")
             }
-            let skills = attached.filter { $0.mateID == nil }
+            let skills = attached.filter { $0.mateID == nil && $0.workspaceFile == nil }
             if !skills.isEmpty { context["contextSkills"] = .array(skills.map(\.wire)) }
+            let files = attached.compactMap(\.workspaceFile)
+            if !files.isEmpty {
+                guard contextScope?.workspacePath != nil, files.allSatisfy({ WorkspaceFileMatch(path: $0.path, kind: $0.kind) != nil }) else {
+                    throw MainsError.server("Choose the file references again in your local workspace.")
+                }
+                context["contextFiles"] = .array(files.map(\.wire))
+            }
         }
         if !attachments.isEmpty { context["attachments"] = try .encode(attachments) }
         if mate != nil { payload["context"] = .object(context) }
@@ -2142,7 +2174,7 @@ public final class BackendSession {
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         guard pendingVoiceConversation == nil, !(voice.ownsCall && voice.runID == id) else { return false }
         #endif
-        return isConnected && pendingConversationAction == nil && pendingFork == nil && !sending && pendingMessage == nil && stoppingRunID == nil &&
+        return isConnected && pendingConversationAction == nil && pendingPlanDecision?.runID != id && pendingFork == nil && !sending && pendingMessage == nil && stoppingRunID == nil &&
         settingsChanges[id] == nil && conversations.first(where: { $0.id == id })?.canFork == true &&
         !decisionDeliveries.contains { $0.value.attempt?.runID == id && [.sending, .uncertain].contains($0.value.phase) }
     }
@@ -2163,7 +2195,7 @@ public final class BackendSession {
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         guard pendingVoiceConversation == nil, !(voice.ownsCall && voice.runID == id) else { return false }
         #endif
-        guard isConnected, pendingConversationAction == nil, pendingFork == nil, pendingMessage == nil, !sending,
+        guard isConnected, pendingConversationAction == nil, pendingPlanDecision?.runID != id, pendingFork == nil, pendingMessage == nil, !sending,
               stoppingRunID == nil, settingsChanges[id] == nil,
               let run = conversations.first(where: { $0.id == id }), run.accountId == accountID,
               run.isReplica != true, !run.isArchived,
@@ -2366,14 +2398,15 @@ public final class BackendSession {
         runQueues.kick()
     }
 
-    public func readContent(artifactID: Int, offset: Int = 0, source: String = "artifact") async throws -> JSONValue {
+    public func readContent(artifactID: Int, offset: Int = 0, source: String = "artifact", expectedRunID: String? = nil) async throws -> JSONValue {
         guard let transport, let runID = viewingRunID, isConnected else { throw MainsError.disconnected }
-        guard ["artifact", "tool-input", "tool-output"].contains(source), offset >= 0 else { throw MainsError.invalidReply }
-        let current = generation
+        guard expectedRunID == nil || expectedRunID == runID else { throw MainsError.changedBackend }
+        guard ["artifact", "tool-input", "tool-output", "plan"].contains(source), offset >= 0 else { throw MainsError.invalidReply }
+        let current = generation, owner = pairingOwner
         let result = try await transport.invoke("runs:readHistoryContent", args: [.object([
             "runId": .string(runID), "source": .string(source), "id": .number(Double(artifactID)), "offset": .number(Double(offset)),
         ])])
-        guard current == generation, viewingRunID == runID else { throw MainsError.changedBackend }
+        guard current == generation, owner == pairingOwner, self.transport === transport, viewingRunID == runID else { throw MainsError.changedBackend }
         return result
     }
 
@@ -2593,6 +2626,109 @@ extension BackendSession {
     public func checkQuestionDelivery(_ pending: PendingAsyncQuestions) async throws {
         if decisionState(for: pending.id).attempt?.channel == "runs:dismissAsyncQuestions" { try await dismissQuestions(pending, checkOnly: true) }
         else { try await answerQuestions(pending, answers: [], checkOnly: true) }
+    }
+
+    private func currentPlan(runID: String) -> PlanProposal? {
+        guard viewingRunID == runID, let page = transcript.page, !page.hasNewer, !transcript.isHistorical else { return nil }
+        return page.toolCalls.sorted { $0.id > $1.id }.lazy.compactMap(PlanProposal.init).first
+    }
+
+    private func livePlanApproval(runID: String) -> PendingApproval? {
+        pendingApprovals.first { $0.runId == runID && $0.isExitPlan && $0.approvalToken != nil && $0.expiresAt > Date() }
+    }
+
+    public func showsPlanApprovalInline(_ approval: PendingApproval) -> Bool {
+        guard supportsPlanDecisions, approval.isExitPlan, livePlanApproval(runID: approval.runId)?.id == approval.id,
+              let plan = currentPlan(runID: approval.runId), plan.isExitPlan,
+              conversations.contains(where: { $0.id == approval.runId && $0.assistantId == nil && $0.providerId == "claude_code" && $0.isActive }) else { return false }
+        return planStatus(plan, runID: approval.runId) == .pending
+    }
+
+    public func planStatus(_ plan: PlanProposal, runID: String) -> PlanProposal.Status {
+        if plan.status == .pending, let confirmed = confirmedPlanDecision, confirmed.runID == runID, confirmed.planID == plan.id {
+            return confirmed.status
+        }
+        return plan.status
+    }
+
+    public func offersPlanDecision(_ plan: PlanProposal, runID: String) -> Bool {
+        guard supportsPlanDecisions, currentPlan(runID: runID)?.id == plan.id, planStatus(plan, runID: runID) == .pending,
+              let run = conversations.first(where: { $0.id == runID }), run.accountId == accountID, run.isReplica != true, !run.isArchived else { return false }
+        if run.providerId == "claude_code", plan.isExitPlan { return run.isActive && livePlanApproval(runID: runID) != nil }
+        return !run.isActive
+    }
+
+    public func canDecidePlan(_ plan: PlanProposal, runID: String) -> Bool {
+        let queue = runQueues.existing(runID)
+        return offersPlanDecision(plan, runID: runID) && isConnected && pendingPlanDecision == nil && pendingMessage == nil &&
+            pendingConversationAction == nil && pendingFork == nil && stoppingRunID != runID && settingsChanges[runID] == nil &&
+            !savingConversationSettings.contains(runID) && queue?.busy != true && queue?.hasUnknown != true && queue?.editingID == nil &&
+            !decisionDeliveries.contains { $0.value.attempt?.runID == runID }
+    }
+
+    public func decidePlan(_ plan: PlanProposal, runID: String, decision: PlanProposal.Decision) async throws {
+        guard canDecidePlan(plan, runID: runID), let accountID, let run = conversations.first(where: { $0.id == runID }) else {
+            throw MainsError.server("This plan is no longer ready for a decision.")
+        }
+        if decision == .apply, !hasConsent(providerID: run.providerId) {
+            throw MainsError.server("Allow data sharing with \(Provider.recipient(run.providerId)) before applying the plan.")
+        }
+        var payload: [String: JSONValue] = ["runId": .string(runID), "accountId": .string(accountID),
+            "toolCallId": .number(Double(plan.id)), "decision": .string(decision.rawValue)]
+        if run.providerId == "claude_code", plan.isExitPlan, let approval = livePlanApproval(runID: runID), let token = approval.approvalToken {
+            payload["approvalRequestId"] = .string(approval.requestId); payload["approvalToken"] = .string(token)
+        }
+        if decision == .apply, let queue = runQueues.existing(runID), !queue.messages.isEmpty {
+            queue.pause("Plan is being applied. Resume queued messages when ready.")
+        }
+        let attempt = PendingPlanDecision(runID: runID, planID: plan.id, decision: decision, checking: false, uncertain: false,
+                                          commandID: UUID().uuidString, owner: pairingOwner, payload: .object(payload))
+        try await deliverPlanDecision(attempt, checking: false)
+    }
+
+    public func checkPlanDecision() async throws {
+        guard let pending = pendingPlanDecision, pending.uncertain, !pending.checking, isConnected else { throw MainsError.disconnected }
+        try await deliverPlanDecision(pending, checking: true)
+    }
+
+    private func deliverPlanDecision(_ original: PendingPlanDecision, checking: Bool) async throws {
+        var attempt = original
+        attempt.checking = checking
+        pendingPlanDecision = attempt
+        var payload = attempt.payload.objectValue
+        if checking { payload["checkOnly"] = .bool(true) }
+        do {
+            let result = try await command("runs:decidePlan", args: [.object(payload)],
+                commandID: checking ? UUID().uuidString : attempt.commandID, owner: attempt.owner) {
+                if !checking, self.viewingRunID != attempt.runID { throw MainsError.changedBackend }
+            }
+            guard pairingOwner == attempt.owner else { throw MainsError.changedBackend }
+            guard let status = result["status"].string.flatMap(PlanProposal.Status.init),
+                  status == attempt.decision.status || checking && (status == .applied || status == .dismissed) else { throw MainsError.invalidReply }
+            confirmedPlanDecision = (attempt.runID, attempt.planID, status)
+            if let requestID = payload["approvalRequestId"]?.string, let token = payload["approvalToken"]?.string {
+                decisionRevision += 1
+                pendingApprovals.removeAll { $0.id == .approval(runID: attempt.runID, requestID: requestID, token: token) }
+            }
+            await refresh()
+            guard pairingOwner == attempt.owner else { return }
+            if viewingRunID == attempt.runID { await loadHistory(direction: "refresh") }
+            guard pairingOwner == attempt.owner else { return }
+            pendingPlanDecision = nil; runQueues.kick()
+        } catch {
+            guard pairingOwner == attempt.owner else { throw MainsError.changedBackend }
+            if let canonical = transcript.page?.toolCalls.first(where: { viewingRunID == attempt.runID && $0.id == attempt.planID }).flatMap(PlanProposal.init),
+               canonical.status != .pending {
+                pendingPlanDecision = nil; runQueues.kick(); return
+            }
+            let refusal: Bool
+            if let failure = error as? MainsError, case .server(let message) = failure {
+                refusal = !checking && !failure.isUnconfirmedCommand && !["delivery is unknown", "still being delivered", "saving its status failed"].contains { message.localizedCaseInsensitiveContains($0) }
+            } else { refusal = false }
+            if refusal { pendingPlanDecision = nil; runQueues.kick() }
+            else { attempt.checking = false; attempt.uncertain = true; pendingPlanDecision = attempt }
+            throw error
+        }
     }
 
     private func validateDecisionRun(_ runID: String) throws {

@@ -2,6 +2,14 @@ import Foundation
 
 /// Prepared catalogue only. Demo context is never loaded from the computer or executed.
 enum DemoContext {
+    static func workspaceFiles(_ query: String, includeDirectories: Bool) -> [JSONValue] {
+        let files = ["README.md", "docs/Release Notes.md", "src/app.ts", "src/workspace/search.ts"]
+        let folders = includeDirectories ? ["docs", "src", "src/workspace"] : []
+        return (folders.compactMap { WorkspaceFileMatch(path: $0, kind: .directory) }
+            + files.compactMap { WorkspaceFileMatch(path: $0) })
+            .filter { $0.path.localizedCaseInsensitiveContains(query) }.map(\.wire)
+    }
+
     static func skills(workspace: Bool) -> [JSONValue] {
         var items: [JSONValue] = [
             .object(["name": .string("demo-planning"), "displayName": .string("Planning"), "scope": .string("plugin"),

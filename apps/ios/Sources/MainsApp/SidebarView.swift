@@ -65,7 +65,8 @@ struct SidebarView: View {
                             } label: {
                                 WorkspaceLabel(session: session, workspace: workspace,
                                                iconColumnWidth: menuIconWidth, iconSpacing: menuIconSpacing,
-                                               iconSize: menuIconSize, fallbackIconAsset: folderAsset)
+                                               iconSize: menuIconSize, fallbackIconAsset: folderAsset,
+                                               nameFont: .body.width(.expanded))
                             }
                             .buttonStyle(.plain).padding(.vertical, 10)
                             .accessibilityIdentifier("workspace-\(workspace.id)")
@@ -422,6 +423,7 @@ struct WorkspaceLabel: View {
     var iconSpacing: CGFloat = 9
     var iconSize: CGFloat = 17
     var fallbackIconAsset: String? = nil
+    var nameFont: Font = .body
     var body: some View {
         let project = session.projects.first { $0.id == workspace.projectId }
         let git = session.gitStates.first { $0.workspaceId == workspace.id }
@@ -429,7 +431,7 @@ struct WorkspaceLabel: View {
             RegistryIcon(token: project?.icon, fallbackAsset: fallbackIconAsset, size: iconSize)
                 .frame(width: iconColumnWidth).padding(.top, 3)
             VStack(alignment: .leading, spacing: 4) {
-                Text(workspace.name).font(.body).foregroundStyle(.primary).lineLimit(1)
+                Text(workspace.name).font(nameFont).foregroundStyle(.primary).lineLimit(1)
                 Text(git?.branch ?? (workspace.isReplica == true ? "Read only" : "No branch"))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }

@@ -21,7 +21,7 @@ public final class ConversationDraft {
         guard !persistencePaused else { return }
         let inFlight = submission.map { $0.retainsContent && stillContains($0) } ?? false
         var readable = text
-        for skill in contextSkills where skill.mateID != nil {
+        for skill in contextSkills where skill.mateID != nil || skill.workspaceFile != nil {
             readable = readable.replacingOccurrences(of: ContextMentions.mention(skill), with: skill.title)
         }
         textChanged?(inFlight ? "" : readable)
