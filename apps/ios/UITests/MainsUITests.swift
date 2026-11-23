@@ -561,8 +561,8 @@ final class MainsUITests: XCTestCase {
         assertRetainedPage()
 
         item.press(forDuration: 0.7)
-        app.buttons["Move to Trash"].tap()
-        app.alerts["Move to Trash?"].buttons["Move to Trash"].tap()
+        app.buttons["Remove from Atlas"].tap()
+        app.alerts["Remove from Atlas?"].buttons["Remove from Atlas"].tap()
         assertRetainedPage()
         XCTAssertTrue(item.exists)
         XCTAssertTrue(item.waitForNonExistence(timeout: 9))
@@ -570,6 +570,24 @@ final class MainsUITests: XCTestCase {
 
         app.navigationBars.buttons["BackButton"].tap()
         forgetFixture(app)
+    }
+
+    func testAtlasRemovesAndUndoesAnAutomaticChatFile() {
+        let app = makeApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        openSidebar(app)
+        app.buttons["openAtlas"].tap()
+
+        let item = app.buttons["atlasItem-demo-atlas-generated"]
+        if !item.isHittable { app.swipeUp() }
+        XCTAssertTrue(item.waitForExistence(timeout: 8))
+        item.press(forDuration: 0.7)
+        app.buttons["Remove from Atlas"].tap()
+        app.alerts["Remove from Atlas?"].buttons["Remove from Atlas"].tap()
+        XCTAssertTrue(item.waitForNonExistence(timeout: 8))
+        app.buttons["Undo"].tap()
+        XCTAssertTrue(item.waitForExistence(timeout: 8))
     }
 
     func testAtlasTrashTitleIsInertAndActionsRequireConfirmation() {
@@ -583,17 +601,17 @@ final class MainsUITests: XCTestCase {
         let id = "demo-atlas-page"
         let libraryItem = app.buttons["atlasItem-" + id]
         XCTAssertTrue(libraryItem.waitForExistence(timeout: 8))
-        let moveAlert = app.alerts["Move to Trash?"]
+        let moveAlert = app.alerts["Remove from Atlas?"]
         func moveToTrash() {
             libraryItem.press(forDuration: 0.7)
-            app.buttons["Move to Trash"].tap()
+            app.buttons["Remove from Atlas"].tap()
             XCTAssertTrue(moveAlert.waitForExistence(timeout: 5))
         }
         moveToTrash()
         moveAlert.buttons["Cancel"].tap()
         XCTAssertTrue(libraryItem.exists)
         moveToTrash()
-        moveAlert.buttons["Move to Trash"].tap()
+        moveAlert.buttons["Remove from Atlas"].tap()
         XCTAssertTrue(libraryItem.waitForNonExistence(timeout: 8))
 
         let trash = app.navigationBars["Trash"]
@@ -625,8 +643,8 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(libraryItem.waitForExistence(timeout: 8))
 
         libraryItem.swipeLeft()
-        app.buttons["Trash"].tap()
-        moveAlert.buttons["Move to Trash"].tap()
+        app.buttons["Remove"].tap()
+        moveAlert.buttons["Remove from Atlas"].tap()
         XCTAssertTrue(libraryItem.waitForNonExistence(timeout: 8))
         openTrash()
         XCTAssertTrue(delete.waitForExistence(timeout: 8))

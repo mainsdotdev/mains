@@ -1190,13 +1190,23 @@ public final class BackendSession {
 
     public func trashAtlasItem(_ entry: AtlasEntry, owner: Int) async throws -> AtlasSavedItem {
         guard owner == pairingOwner else { throw MainsError.changedBackend }
-        guard let id = entry.savedIdentity else { throw MainsError.server("Only saved Atlas items can be moved to Trash.") }
-        return try await beginAtlasSave("atlas:setMobileTrash", fields: ["id": .string(id), "trashed": .bool(true)], label: entry.title)
+        var fields: [String: JSONValue] = ["trashed": .bool(true)]
+        if let id = entry.savedIdentity {
+            fields["id"] = .string(id)
+        } else if let runID = entry.file?.runId, let sourceKey = entry.file?.sourceKey {
+            fields["id"] = .string(sourceKey)
+            fields["runId"] = .string(runID)
+        } else { throw MainsError.server("Atlas item not found.") }
+        return try await beginAtlasSave("atlas:setMobileTrash", fields: fields, label: entry.title)
     }
 
     public func restoreAtlasItem(_ item: AtlasTrashItem, owner: Int) async throws -> AtlasSavedItem {
+        try await restoreAtlasItem(id: item.id, title: item.title, owner: owner)
+    }
+
+    public func restoreAtlasItem(id: String, title: String, owner: Int) async throws -> AtlasSavedItem {
         guard owner == pairingOwner else { throw MainsError.changedBackend }
-        return try await beginAtlasSave("atlas:setMobileTrash", fields: ["id": .string(item.id), "trashed": .bool(false)], label: item.title)
+        return try await beginAtlasSave("atlas:setMobileTrash", fields: ["id": .string(id), "trashed": .bool(false)], label: title)
     }
 
     public func deleteAtlasTrashItem(_ item: AtlasTrashItem, owner: Int) async throws -> AtlasSavedItem {

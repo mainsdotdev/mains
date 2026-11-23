@@ -86,12 +86,15 @@ export interface AtlasListOptions {
   limit?: number;
   /** Include a bounded Markdown excerpt of each Page's current revision. */
   includePagePreview?: boolean;
+  /** Include automatically listed files removed from the library in a Trash read. */
+  includeRemovedSources?: boolean;
 }
 export interface AtlasListItem extends AtlasItem {
   /** Exact byte identity for file presentation; absent when unavailable. */
   contentHash?: string;
   /** Display-only excerpt; never used to edit or restore a Page. */
   preview?: string;
+  sourceOnly?: boolean;
 }
 export interface AtlasGeneratedFile {
   sourceKey: string;

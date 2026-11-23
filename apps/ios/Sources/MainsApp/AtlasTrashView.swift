@@ -54,17 +54,19 @@ struct AtlasTrashView: View {
             .task(id: key) { await load() }
             .pullToRefresh { await load() }
             .accessibilityIdentifier("atlasTrash")
-            .alert(confirmation?.operation == .delete ? "Delete permanently?" : "Restore item?",
+            .alert(confirmationTitle,
                    isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }),
                    presenting: confirmation) { selection in
                 if selection.operation == .delete {
-                    Button("Delete Permanently", role: .destructive) { perform(selection) }
+                    Button(selection.item.sourceOnly == true ? "Remove from Trash" : "Delete Permanently", role: .destructive) { perform(selection) }
                 } else {
                     Button("Restore") { perform(selection) }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { selection in
-                if selection.operation == .delete {
+                if selection.operation == .delete && selection.item.sourceOnly == true {
+                    Text("“(selection.item.title)” will stay hidden in Atlas. The original is still available in its conversation.")
+                } else if selection.operation == .delete {
                     Text("“\(selection.item.title)” will be permanently deleted from Atlas. This can’t be undone.")
                 } else {
                     Text("“\(selection.item.title)” will return to your Atlas library.")
@@ -119,7 +121,7 @@ struct AtlasTrashView: View {
                                     Image(systemName: "trash").foregroundStyle(.red)
                                         .frame(width: 44, height: 44).contentShape(.rect)
                                 }
-                                .accessibilityLabel("Delete " + item.title + " permanently")
+                                .accessibilityLabel(item.sourceOnly == true ? "Remove " + item.title + " from Trash" : "Delete " + item.title + " permanently")
                                 .accessibilityIdentifier("atlasDelete-" + item.id)
                             }
                         }
@@ -143,6 +145,10 @@ struct AtlasTrashView: View {
             }
         }
         .listStyle(.insetGrouped)
+    }
+    private var confirmationTitle: String {
+        guard let confirmation, confirmation.operation == .delete else { return "Restore item?" }
+        return confirmation.item.sourceOnly == true ? "Remove from Trash?" : "Delete permanently?"
     }
     private func perform(_ selection: Confirmation) {
         guard canChange else { return }

@@ -81,6 +81,22 @@ export const atlasItems = sqliteTable("atlas_items", {
   check("check_atlas_items_bookmark_job_json", sql`json_valid(${t.bookmarkJob}) OR ${t.bookmarkJob} IS NULL`),
 ]);
 
+export const atlasSourceRemovals = sqliteTable("atlas_source_removals", {
+  id: text("id").primaryKey().notNull(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  sourceKey: text("source_key").notNull(),
+  kind: text("kind", { enum: ["file", "image"] }).notNull(),
+  title: text("title").notNull(),
+  contentHash: text("content_hash"),
+  // A null date keeps the source hidden after its Trash entry is cleared.
+  trashedAt: integer("trashed_at", { mode: "timestamp" }),
+}, (t) => [
+  uniqueIndex("uniq_atlas_source_removals_source").on(t.accountId, t.sourceKey),
+  index("idx_atlas_source_removals_hash").on(t.accountId, t.kind, t.contentHash),
+  index("idx_atlas_source_removals_trash").on(t.accountId, t.trashedAt),
+  check("check_atlas_source_removals_kind", sql`${t.kind} IN ('file', 'image')`),
+]);
+
 export const atlasTags = sqliteTable("atlas_tags", {
   id: text("id").primaryKey().notNull(),
   accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),

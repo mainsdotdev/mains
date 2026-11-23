@@ -69,6 +69,7 @@ struct AtlasView: View {
     @State private var bookmarkEdit: AtlasBookmarkEditSelection?
     @State private var trashPresentation: TrashPresentation?
     @State private var trashConfirmation: (entry: AtlasEntry, owner: Int)?
+    @State private var lastRemoval: (item: AtlasSavedItem, owner: Int)?
     @State private var tagEdit: AtlasTagEditSelection?
     @State private var tagFilter: TagFilterPresentation?
     @State private var activeTag: AtlasTag?
@@ -168,6 +169,24 @@ struct AtlasView: View {
             }
         }
         .task(id: request) { await load(request) }
+        .task(id: lastRemoval?.item.id) {
+            guard lastRemoval != nil else { return }
+            try? await Task.sleep(for: .seconds(8))
+            if !Task.isCancelled { lastRemoval = nil }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let removal = lastRemoval, removal.owner == session.ownership {
+                HStack {
+                    Text("Removed from Atlas").font(.subheadline)
+                    Spacer()
+                    Button("Undo") { undoRemoval(removal.item, owner: removal.owner) }
+                        .disabled(!session.canSaveToAtlas)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .modifier(GlassSurface(radius: 14, interactive: false))
+                .padding(.horizontal, 16)
+            }
+        }
         .pullToRefresh { await load(loadKey) }
         .onChange(of: filter) { _, _ in query.page = 1 }
         .fullScreenCover(item: $file) { AtlasFilePreview(session: session, selection: $0, openConversation: { id in file = nil; openConversation(id) }) }
@@ -188,13 +207,17 @@ struct AtlasView: View {
                 activeTag = tag; query.tagID = tag?.id
             }
         }
-        .onChange(of: session.ownership) { _, _ in query.tagID = nil; activeTag = nil; trashConfirmation = nil }
-        .alert("Move to Trash?", isPresented: Binding(get: { trashConfirmation != nil }, set: { if !$0 { trashConfirmation = nil } }),
+        .onChange(of: session.ownership) { _, _ in query.tagID = nil; activeTag = nil; trashConfirmation = nil; lastRemoval = nil }
+        .alert("Remove from Atlas?", isPresented: Binding(get: { trashConfirmation != nil }, set: { if !$0 { trashConfirmation = nil } }),
                presenting: trashConfirmation) { selection in
-            Button("Move to Trash", role: .destructive) { trash(selection.entry, owner: selection.owner) }
+            Button("Remove from Atlas", role: .destructive) { trash(selection.entry, owner: selection.owner) }
             Button("Cancel", role: .cancel) {}
         } message: { selection in
-            Text("You can restore “\(selection.entry.title)” from Atlas Trash.")
+            if selection.entry.savedIdentity == nil {
+                Text("The original stays in its conversation. You can restore “\(selection.entry.title)” from Atlas Trash.")
+            } else {
+                Text("You can restore “\(selection.entry.title)” from Atlas Trash.")
+            }
         }
         .alert("Couldn’t update item", isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })) { Button("OK", role: .cancel) {} } message: { Text(editError ?? "") }
     }
@@ -316,10 +339,10 @@ struct AtlasView: View {
                 }.disabled(!canOrganize)
             }
             if let id = entry.sourceRunId { Button("Open chat with source", systemImage: "bubble.left") { openConversation(id) } }
-            if entry.savedIdentity != nil {
+            if canRemove(entry) {
                 Button(role: .destructive) { confirmTrash(entry) } label: {
                     Label {
-                        Text("Move to Trash")
+                        Text("Remove from Atlas")
                     } icon: {
                         Image(uiImage: (UIImage(systemName: "trash") ?? UIImage())
                             .withTintColor(.systemRed, renderingMode: .alwaysOriginal))
@@ -331,9 +354,11 @@ struct AtlasView: View {
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if entry.savedIdentity != nil {
                 Button("Move", systemImage: "folder") { move(entry) }.tint(.blue).disabled(!canOrganize)
-                Button("Trash", systemImage: "trash") { confirmTrash(entry) }.tint(.red).disabled(!canOrganize)
                 Button(entry.isFavorite ? "Unfavorite" : "Favorite", systemImage: entry.isFavorite ? "star.slash" : "star") { favorite(entry) }
                     .tint(.orange).disabled(!canOrganize)
+            }
+            if canRemove(entry) {
+                Button("Remove", systemImage: "trash") { confirmTrash(entry) }.tint(.red).disabled(!canOrganize)
             }
         }
     }
@@ -407,14 +432,30 @@ struct AtlasView: View {
             catch { if owner == session.ownership { editError = error.localizedDescription } }
         }
     }
+    private func canRemove(_ entry: AtlasEntry) -> Bool {
+        entry.savedIdentity != nil || library?.canRemoveSources == true && entry.file?.sourceKey != nil
+    }
     private func confirmTrash(_ entry: AtlasEntry) {
-        guard let owner = libraryOwner, canOrganize else { return }
+        guard let owner = libraryOwner, canOrganize, canRemove(entry) else { return }
         trashConfirmation = (entry, owner)
     }
     private func trash(_ entry: AtlasEntry, owner: Int) {
         guard owner == session.ownership, canOrganize else { return }
         Task {
-            do { _ = try await session.trashAtlasItem(entry, owner: owner) }
+            do {
+                let item = try await session.trashAtlasItem(entry, owner: owner)
+                if owner == session.ownership { lastRemoval = (item, owner) }
+            }
+            catch { if owner == session.ownership { editError = error.localizedDescription } }
+        }
+    }
+    private func undoRemoval(_ item: AtlasSavedItem, owner: Int) {
+        guard owner == session.ownership, session.canSaveToAtlas else { return }
+        Task {
+            do {
+                _ = try await session.restoreAtlasItem(id: item.id, title: item.title, owner: owner)
+                if owner == session.ownership, lastRemoval?.item.id == item.id { lastRemoval = nil }
+            }
             catch { if owner == session.ownership { editError = error.localizedDescription } }
         }
     }

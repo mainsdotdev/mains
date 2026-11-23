@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   empty: [],
   items: [] as AtlasListItem[],
   generated: [] as AtlasGeneratedFile[],
-  list: vi.fn(), setTags: vi.fn(),
+  list: vi.fn(), setTags: vi.fn(), setSourceTrash: vi.fn(), success: vi.fn(),
   tags: [{ id: "react", name: "React", count: 1 }, { id: "ts", name: "TypeScript", count: 1 }],
   queryResult: undefined as ((options: AtlasLibraryOptions) => AtlasLibraryPage) | undefined,
   previewImages: {} as Record<string, string>,
@@ -55,6 +55,7 @@ vi.mock("@/lib/redux/api/atlasApi", () => ({
   useEnrichAtlasBookmarkMutation: () => [vi.fn(), {}],
   useCreateAtlasPageMutation: () => [mocks.create, { isLoading: false }],
   useUpdateAtlasItemMutation: () => [vi.fn(), {}],
+  useSetAtlasSourceTrashMutation: () => [mocks.setSourceTrash, {}],
   useRemoveAtlasItemMutation: () => [vi.fn(), {}],
 }));
 vi.mock("@/hooks/use-active-space", () => ({ useActiveSpace: () => ({
@@ -77,7 +78,7 @@ vi.mock("../hooks/use-save-to-atlas", () => ({
   atlasError: (error: unknown) => error instanceof Error ? error.message : String(error),
 }));
 vi.mock("@/components/ui", async (original) => ({
-  ...await original<typeof import("@/components/ui")>(), toast: { error: mocks.error },
+  ...await original<typeof import("@/components/ui")>(), toast: { error: mocks.error, success: mocks.success },
 }));
 
 function savedEntry(item: AtlasListItem): AtlasLibraryEntry {
@@ -222,6 +223,19 @@ describe("Tags across Atlas item types", () => {
     fireEvent.click(screen.getByRole("button", { name: "Actions for generated.png" }));
     expect(screen.getByRole("menuitem", { name: "Save to Atlas" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: /Add tags|Edit tags/ })).toBeNull();
+  });
+
+  it("removes an unsaved chat file and undoes it with the returned Trash identity", async () => {
+    mocks.generated = [{ sourceKey: "upload", runId: "run", runTitle: "Images", collectionId: null, kind: "image",
+      origin: "attachment", path: "/upload.png", fileName: "upload.png", mimeType: "image/png", byteSize: 1, modifiedAt: "2026-10-07" }];
+    mocks.setSourceTrash.mockReturnValue({ unwrap: async () => ({ id: "source:trash" }) });
+    setup("/atlas?type=image&view=uploads");
+    fireEvent.click(screen.getByRole("button", { name: "Actions for upload.png" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove from Atlas" }));
+    await waitFor(() => expect(mocks.success).toHaveBeenCalled());
+    expect(mocks.setSourceTrash).toHaveBeenCalledWith({ accountId: "account", id: "upload", runId: "run", trashed: true });
+    mocks.success.mock.calls[0][1].action.onClick();
+    expect(mocks.setSourceTrash).toHaveBeenLastCalledWith({ accountId: "account", id: "source:trash", trashed: false });
   });
 });
 

@@ -351,6 +351,13 @@
       "when": 1795436979574,
       "tag": "0049_assistant_pins",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "6",
+      "when": 1795470111862,
+      "tag": "0050_atlas_source_removals",
+      "breakpoints": true
     }
   ]
 }

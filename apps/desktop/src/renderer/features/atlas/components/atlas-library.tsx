@@ -47,6 +47,7 @@ import {
   useUpdateAtlasItemMutation,
   useListAtlasTagsQuery,
   useEnrichAtlasBookmarkMutation,
+  useSetAtlasSourceTrashMutation,
 } from "@/lib/redux/api/atlasApi";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
@@ -143,6 +144,11 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
   const ownerKey = useAtlasOwnerKey(accountId);
+  const currentOwner = useRef<string | null>(ownerKey);
+  useEffect(() => {
+    currentOwner.current = ownerKey;
+    return () => { currentOwner.current = null; };
+  }, [ownerKey]);
   const provider = useSpaceProviderVariant();
   const ProviderIcon = provider.icon;
   const { activeSpace, spaces } = useActiveSpace();
@@ -194,6 +200,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const { data: collections = [] } = useListCollectionsQuery({ accountId });
   const [createPage, creating] = useCreateAtlasPageMutation();
   const [update, updating] = useUpdateAtlasItemMutation();
+  const [setSourceTrash, changingSourceTrash] = useSetAtlasSourceTrashMutation();
   const { save, saving } = useSaveToAtlas();
   const { open } = useDocumentViewer();
   const { openWithApp } = useCapabilities();
@@ -231,6 +238,25 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
       await update({ accountId, id: item.id, ...fields }).unwrap();
     } catch (error) {
       toast.error(atlasError(error));
+    }
+  };
+  const removeFromLibrary = async ({ saved, generated }: Entry) => {
+    const target = saved ? { id: saved.id } : generated ? { id: generated.sourceKey, runId: generated.runId } : null;
+    if (!target) return;
+    const transport = getTransport();
+    const isCurrent = () => getTransport() === transport && currentOwner.current === ownerKey;
+    try {
+      const item = saved
+        ? await update({ accountId, ...target, trashed: true }).unwrap()
+        : await setSourceTrash({ accountId, ...target, trashed: true }).unwrap();
+      if (!isCurrent()) return;
+      toast.success("Removed from Atlas", { action: { label: "Undo", onClick: () => {
+        if (!isCurrent()) return;
+        if (saved) void change(saved, { trashed: false });
+        else void setSourceTrash({ accountId, id: item.id, trashed: false }).unwrap().catch((error) => toast.error(atlasError(error)));
+      } } });
+    } catch (error) {
+      if (isCurrent()) toast.error(atlasError(error));
     }
   };
   const newPage = async (
@@ -430,17 +456,17 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                   ? "Remove from favorites"
                   : "Add to favorites"}
               </DropdownMenuItem>
-              <DropdownMenuItem
-                variant="danger"
-                onClick={() => {
-                  close();
-                  void change(entry.saved!, { trashed: true });
-                }}
-              >
-                <Trash className="size-4" />
-                Move to Trash
-              </DropdownMenuItem>
             </>
+          )}
+          {(entry.saved || entry.generated) && (
+            <DropdownMenuItem
+              variant="danger"
+              disabled={updating.isLoading || changingSourceTrash.isLoading}
+              onClick={() => { close(); void removeFromLibrary(entry); }}
+            >
+              <Trash className="size-4" />
+              Remove from Atlas
+            </DropdownMenuItem>
           )}
         </>
       )}

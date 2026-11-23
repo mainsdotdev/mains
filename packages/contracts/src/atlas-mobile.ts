@@ -33,7 +33,7 @@ export interface AtlasMobileEntry {
   /** Bookmark preview availability, including a metadata image not yet stored locally. */
   hasImage?: boolean;
 }
-export interface AtlasMobileLibraryPage { items: AtlasMobileEntry[]; page: number; hasNext: boolean }
+export interface AtlasMobileLibraryPage { items: AtlasMobileEntry[]; page: number; hasNext: boolean; canRemoveSources?: boolean }
 export interface AtlasMobilePageRequest {
   accountId: string; id: string; offset?: number; version?: number;
 }
@@ -93,9 +93,13 @@ export interface AtlasMobileEditBookmark extends AtlasMobileBookmarkIdentity {
 }
 export interface AtlasMobileBookmarkEditResult extends AtlasMobileSavedItem { requestedId: string; revision: string }
 export interface AtlasMobileTrashOptions { accountId: string; page?: number }
-export interface AtlasMobileTrashItem extends AtlasMobileSavedItem { collectionId: string | null; trashedAt: string }
+export interface AtlasMobileTrashItem extends AtlasMobileSavedItem { collectionId: string | null; trashedAt: string; sourceOnly?: boolean }
 export interface AtlasMobileTrashPage { items: AtlasMobileTrashItem[]; page: number; hasNext: boolean; canDeletePermanently?: boolean }
-export interface AtlasMobileSetTrash { accountId: string; id: string; trashed: boolean }
+export interface AtlasMobileSetTrash {
+  accountId: string; id: string; trashed: boolean;
+  /** When present, id is the listed source key, and this request only removes the source. */
+  runId?: string;
+}
 export interface AtlasMobileTrashState extends AtlasMobileSavedItem { requestedId: string; trashed: boolean }
 export interface AtlasMobileDeleteTrash { accountId: string; id: string; expectedTrashedAt: string }
 export interface AtlasMobileDeleteTrashResult extends AtlasMobileSavedItem { requestedId: string }

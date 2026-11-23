@@ -187,9 +187,10 @@ async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeo
   return [...new Map(result.map((item) => [item.sourceKey, item])).values()];
 }
 export async function generatedForRun(runId: string, accountId: string,
-  { includeMateOutputs = true, hashFiles = false }: { includeMateOutputs?: boolean; hashFiles?: boolean } = {}): Promise<DiscoveredFile[]> {
+  { includeMateOutputs = true, hashFiles = false, workOnly = false }: { includeMateOutputs?: boolean; hashFiles?: boolean; workOnly?: boolean } = {}): Promise<DiscoveredFile[]> {
   const context = await runContext(runId, accountId);
   const { run, runsService, roots, attachments } = context;
+  if (workOnly && run.mode !== "work") return [];
   // Bridge omits the local Mate column, but its run snapshot carries the same identity.
   const isMate = !!run.assistantId || (run.isReplica && typeof run.configSnapshot?.assistantId === "string");
   const includeOutputs = includeMateOutputs || !isMate;
@@ -223,20 +224,22 @@ async function store(accountId: string, key: string, name: string, bytes: Buffer
   sourceRunId: string | null, collectionId: string | null) {
   const previous = atlasRepo.bySource(accountId, key);
   if (previous) {
-    if (previous.trashedAt) atlasRepo.update(previous.id, accountId, { trashedAt: null });
+    const item = atlasRepo.keepSourceCopy(previous);
     emit(CHANNELS.atlas.changed, {});
-    return format(owned({ id: previous.id, accountId }));
+    return format(item);
   }
   const id = randomUUID();
   const type = classify(name);
   if (!type) throw new Error("Unsupported Atlas file type");
   const storageKey = await writeFile(id, name, bytes);
+  let item: AtlasRecord;
   try {
-    atlasRepo.insert({ id, accountId, ...type, title: name, fileName: name, storageKey,
+    item = atlasRepo.keepSourceCopy({ id, accountId, ...type, title: name, fileName: name, storageKey,
       byteSize: bytes.length, contentHash: fileHash(bytes), sourceRunId, sourceKey: key, collectionId });
-    emit(CHANNELS.atlas.changed, {});
-    return format(owned({ id, accountId }));
   } catch (error) { await removeFiles(id); throw error; }
+  if (item.id !== id) await removeFiles(id);
+  emit(CHANNELS.atlas.changed, {});
+  return format(item);
 }
 function once(key: string, action: () => Promise<AtlasItem>) {
   const existing = pendingSaves.get(key);
@@ -285,6 +288,16 @@ function fileIdentity({ kind, contentHash }: { kind: AtlasLibraryEntry["kind"]; 
   return (kind === "file" || kind === "image") && contentHash ? `${kind}:${contentHash}` : undefined;
 }
 
+function sourceVisibility(accountId: string) {
+  const keys = new Set<string>(), hashes = new Set<string>();
+  for (const source of atlasRepo.sourceMasks(accountId)) {
+    keys.add(source.sourceKey);
+    const hash = fileIdentity(source);
+    if (hash) hashes.add(hash);
+  }
+  return (file: AtlasGeneratedFile) => !keys.has(file.sourceKey) && !hashes.has(fileIdentity(file) ?? "");
+}
+
 function matchesLibrary(entry: AtlasLibraryEntry, options: AtlasLibraryOptions, query: string) {
   return (!options.type || options.type === "all" || entry.kind === options.type)
     && (!options.collectionId || entry.collectionId === options.collectionId)
@@ -309,6 +322,7 @@ async function* savedLibraryEntries(options: AtlasLibraryOptions, query: string)
 
 async function* generatedLibraryEntries(options: AtlasLibraryOptions, query: string) {
   if (options.type === "page" || options.type === "bookmark" || options.tagId || options.scope === "saved" || options.scope === "favorites") return;
+  const visible = sourceVisibility(options.accountId);
   const preferredFiles = new Set<string>();
   if (options.scope === "all") {
     if (query) {
@@ -339,6 +353,7 @@ async function* generatedLibraryEntries(options: AtlasLibraryOptions, query: str
     for (const { stats, ...file } of files) {
       if (options.scope === "generated" && file.origin === "attachment") continue;
       if (options.scope === "uploads" && file.origin !== "attachment") continue;
+      if (!visible(file)) continue;
       const entry: AtlasLibraryEntry = { key: file.sourceKey, kind: file.kind, title: file.fileName,
         date: file.modifiedAt, collectionId: file.collectionId, path: file.replica ? null : file.path, generated: file };
       if (!matchesLibrary(entry, options, query)) continue;
@@ -348,6 +363,7 @@ async function* generatedLibraryEntries(options: AtlasLibraryOptions, query: str
         try { file.contentHash = await fileVersionHash(file.path, stats); }
         catch { continue; }
       }
+      if (!visible(file)) continue;
       entry.contentHash = file.contentHash;
       const key = fileIdentity(entry);
       if (key && preferredFiles.has(key)) continue;
@@ -410,8 +426,24 @@ export const atlasService = {
       || (options.kind !== undefined && !["page", "file", "image", "bookmark"].includes(options.kind))
       || (options.trashed !== undefined && typeof options.trashed !== "boolean")
       || (options.isFavorite !== undefined && typeof options.isFavorite !== "boolean")
-      || (options.collectionId !== undefined && typeof options.collectionId !== "string"))
+      || (options.collectionId !== undefined && typeof options.collectionId !== "string")
+      || (options.includeRemovedSources !== undefined && typeof options.includeRemovedSources !== "boolean")
+      || (options.includeRemovedSources && (options.trashed !== true || options.kind || options.ids || options.collectionId || options.isFavorite !== undefined)))
       throw new Error("Invalid Atlas pagination or filters");
+    if (options.includeRemovedSources) {
+      const entries = atlasRepo.trashEntries(accountId, options.offset, options.limit ?? (options.offset === undefined ? undefined : ATLAS_LIBRARY_PAGE_SIZE));
+      const ids = entries.filter((entry) => !entry.sourceOnly).map((entry) => entry.id);
+      const saved = new Map<string, AtlasListItem>();
+      for (let offset = 0; offset < ids.length; offset += 500) {
+        for (const item of this.list({ accountId, ids: ids.slice(offset, offset + 500) })) saved.set(item.id, item);
+      }
+      return entries.map(({ id, kind, title, trashedAt }) => {
+        const time = new Date(trashedAt * 1000).toISOString();
+        return saved.get(id) ?? { id, accountId, kind, title, metadata: null, collectionId: null, sourceRunId: null, sourceKey: null,
+          path: null, fileName: null, mimeType: null, byteSize: null, isFavorite: false, trashedAt: time, version: 0,
+          createdAt: time, updatedAt: time, sourceOnly: true };
+      });
+    }
     if (options.ids?.length === 0) return [];
     const includePreview = options?.includePagePreview === true;
     const rows = atlasRepo.list({ ...options, accountId, includePagePreview: includePreview });
@@ -473,6 +505,7 @@ export const atlasService = {
       throw new Error("Invalid Atlas pagination");
     if (options.collectionId) await collection(options.collectionId, accountId);
     const rows = atlasRepo.generatedRuns(accountId, offset, limit + 1, options.collectionId);
+    const visible = sourceVisibility(accountId);
     const items: AtlasGeneratedFile[] = [];
     // Four filesystem walks at a time, rather than one walk for every conversation.
     for (let i = 0; i < Math.min(rows.length, limit); i += 4) {
@@ -480,7 +513,7 @@ export const atlasService = {
         .map((run) => generatedForRun(run.id, accountId, { includeMateOutputs: false, hashFiles: true })));
       items.push(...batch.flat().map(({ stats: _stats, ...file }) => file));
     }
-    return { items: items.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt)),
+    return { items: items.filter(visible).sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt)),
       nextOffset: rows.length > limit ? offset + limit : null };
   },
   get(options: AtlasIdentity): AtlasItem | null {
@@ -614,9 +647,9 @@ export const atlasService = {
       await validate?.();
       const old = atlasRepo.bySource(accountId, key);
       if (old) {
-        if (old.trashedAt) atlasRepo.update(old.id, accountId, { trashedAt: null });
+        const item = atlasRepo.keepSourceCopy(old);
         emit(CHANNELS.atlas.changed, {});
-        return format(owned({ id: old.id, accountId }));
+        return format(item);
       }
       // Hidden annotation captures remain available for an explicit user save.
       const attachment = context.attachments.some((file) => file.path === real);
@@ -670,12 +703,42 @@ export const atlasService = {
     return this.update({ accountId: page.accountId, id: page.id, coverPreset: input.preset });
   },
   async remove(input: AtlasIdentity) {
+    const { id, accountId } = identity(input);
+    if (id.startsWith("source:")) {
+      const source = atlasRepo.removedSource(id, accountId);
+      if (!source?.trashedAt) throw new Error("Atlas item not found in Trash");
+      atlasRepo.clearSourceTrash(id, accountId);
+      emit(CHANNELS.atlas.changed, {});
+      return;
+    }
     const item = owned(input);
     if (!item.trashedAt) throw new Error("Move this item to Trash before deleting it");
     // Deletion checks current covers and revision references in one transaction.
     atlasRepo.remove(item.id, item.accountId);
     emit(CHANNELS.atlas.changed, {});
     if (item.storageKey || item.kind === "bookmark") await removeFiles(item.id);
+  },
+  async trashSource(input: AtlasIdentity & { runId: string }) {
+    const { id, accountId } = identity(input);
+    const runId = required(input.runId, "Conversation");
+    if (!/^[a-f0-9]{64}$/.test(id)) throw new Error("Atlas item not found");
+    const file = (await generatedForRun(runId, accountId, { includeMateOutputs: false, workOnly: true }))
+      .find((entry) => entry.sourceKey === id);
+    if (!file) throw new Error("Atlas item not found");
+    const contentHash = file.contentHash ?? (file.stats ? await fileVersionHash(file.path, file.stats) : null);
+    const saved = atlasRepo.bySource(accountId, id);
+    if (saved) return this.update({ accountId, id: saved.id, trashed: true });
+    const removed = atlasRepo.trashSource({ accountId, sourceKey: id, kind: file.kind, title: safeName(file.fileName), contentHash });
+    emit(CHANNELS.atlas.changed, {});
+    return removed;
+  },
+  restoreSource(input: AtlasIdentity) {
+    const { id, accountId } = identity(input);
+    const source = atlasRepo.removedSource(id, accountId);
+    if (!source?.trashedAt) throw new Error("Atlas item not found in Trash");
+    atlasRepo.restoreSource(id, accountId);
+    emit(CHANNELS.atlas.changed, {});
+    return source;
   },
   async isStoredFile(realPath: string) {
     if (!path.isAbsolute(realPath)) return false;

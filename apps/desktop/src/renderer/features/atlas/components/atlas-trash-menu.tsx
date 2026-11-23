@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import type { AtlasItem } from "@mains/contracts/atlas";
+import type { AtlasListItem } from "@mains/contracts/atlas";
 import {
   Button,
   DropdownMenu,
@@ -17,6 +17,7 @@ import { useAppDispatch } from "@/lib/redux/hooks";
 import {
   useListAtlasQuery,
   useRemoveAtlasItemMutation,
+  useSetAtlasSourceTrashMutation,
   useUpdateAtlasItemMutation,
 } from "@/lib/redux/api/atlasApi";
 import { closeAtlasPageTab } from "@/lib/redux/slices/atlasSlice";
@@ -55,8 +56,8 @@ export function AtlasTrashMenu({
     anchorTop: number;
   } | null>(null);
   const [query, setQuery] = useState("");
-  const [deleting, setDeleting] = useState<AtlasItem | null>(null);
-  const [preview, setPreview] = useState<AtlasItem | null>(null);
+  const [deleting, setDeleting] = useState<AtlasListItem | null>(null);
+  const [preview, setPreview] = useState<AtlasListItem | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const pending = useRef(false);
   const mounted = useRef(true);
@@ -67,8 +68,9 @@ export function AtlasTrashMenu({
     };
   }, []);
   const [update] = useUpdateAtlasItemMutation();
+  const [setSourceTrash] = useSetAtlasSourceTrashMutation();
   const [remove, removing] = useRemoveAtlasItemMutation();
-  const items = useListAtlasQuery({ accountId }, { skip: !position });
+  const items = useListAtlasQuery({ accountId, trashed: true, includeRemovedSources: true }, { skip: !position });
   const search = query.trim().toLocaleLowerCase();
   const trashed = (items.data ?? [])
     .filter((item) => item.accountId === accountId && item.trashedAt)
@@ -77,7 +79,7 @@ export function AtlasTrashMenu({
     item.title.toLocaleLowerCase().includes(search),
   );
   const close = () => setPosition(null);
-  const show = (item: AtlasItem) => {
+  const show = (item: AtlasListItem) => {
     close();
     if (item.kind === "page") requestAtlasPage({ ownerKey, id: item.id });
     else if (item.kind === "bookmark" && item.url) void window.api.shell.openExternal(item.url).catch((error: unknown) => toast.error(atlasError(error)));
@@ -89,12 +91,13 @@ export function AtlasTrashMenu({
         docType: classifyDocType(item.path) ?? "md",
       });
   };
-  const restore = async (item: AtlasItem) => {
+  const restore = async (item: AtlasListItem) => {
     if (pending.current) return;
     pending.current = true;
     setPendingId(item.id);
     try {
-      await update({ accountId, id: item.id, trashed: false }).unwrap();
+      if (item.sourceOnly) await setSourceTrash({ accountId, id: item.id, trashed: false }).unwrap();
+      else await update({ accountId, id: item.id, trashed: false }).unwrap();
     } catch (error) {
       toast.error(atlasError(error));
     } finally {
@@ -190,9 +193,10 @@ export function AtlasTrashMenu({
                   className="flex items-center gap-1 rounded-xl px-1 hover:bg-primary-200/40 focus-within:bg-primary-200/40 dark:hover:bg-primary/5 dark:focus-within:bg-primary/5"
                 >
                   <Button
-                    role="menuitem"
+                    role={item.sourceOnly ? undefined : "menuitem"}
                     tabIndex={-1}
-                    aria-label={`Open ${item.title}`}
+                    aria-label={item.sourceOnly ? undefined : `Open ${item.title}`}
+                    disabled={item.sourceOnly}
                     onClick={() => show(item)}
                     className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-2 py-3 text-left focus-visible:ring-2 focus-visible:ring-accent/40"
                   >
@@ -238,8 +242,8 @@ export function AtlasTrashMenu({
                   <Button
                     role="menuitem"
                     tabIndex={-1}
-                    aria-label={`Delete ${item.title} permanently`}
-                    title="Delete permanently"
+                    aria-label={item.sourceOnly ? `Remove ${item.title} from Trash` : `Delete ${item.title} permanently`}
+                    title={item.sourceOnly ? "Remove from Trash" : "Delete permanently"}
                     disabled={!!pendingId}
                     onClick={() => {
                       close();
@@ -269,8 +273,8 @@ export function AtlasTrashMenu({
         onCancel={() => {
           if (!removing.isLoading) setDeleting(null);
         }}
-        title={`Delete ${deleting?.title ?? "item"} permanently?`}
-        description="This permanently removes the item from Atlas."
+        title={deleting?.sourceOnly ? `Remove ${deleting.title} from Trash?` : `Delete ${deleting?.title ?? "item"} permanently?`}
+        description={deleting?.sourceOnly ? "It will stay hidden in Atlas. The original is still available in its conversation." : "This permanently removes the item from Atlas."}
         returnFocusRef={triggerRef}
       />
     </>

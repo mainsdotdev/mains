@@ -117,14 +117,23 @@ export const atlasMobile = {
   trash(input: AtlasMobileTrashOptions): AtlasMobileTrashPage {
     const accountId = required(input?.accountId), page = input.page ?? 1;
     if (!Number.isSafeInteger(page) || page < 1 || page > 100_000) throw new Error("Invalid Trash page");
-    const rows = atlasService.list({ accountId, trashed: true, offset: (page - 1) * 50, limit: 51 });
-    return { items: rows.slice(0, 50).map((item) => ({ id: item.id, title: item.title, kind: item.kind, collectionId: item.collectionId, trashedAt: item.trashedAt! })),
+    const rows = atlasRepo.trashEntries(accountId, (page - 1) * 50, 51);
+    return { items: rows.slice(0, 50).map(({ id, title, kind, collectionId, trashedAt, sourceOnly }) => ({
+      id, title, kind, collectionId, trashedAt: new Date(trashedAt * 1000).toISOString(), ...(sourceOnly ? { sourceOnly: true } : {}),
+    })),
       page, hasNext: rows.length > 50, canDeletePermanently: true };
   },
 
   async setTrash(input: AtlasMobileSetTrash): Promise<AtlasMobileTrashState> {
     const accountId = required(input?.accountId), id = required(input?.id);
-    if (typeof input.trashed !== "boolean" || Object.keys(input).some((key) => !["accountId", "id", "trashed"].includes(key))) throw new Error("Only Trash or Restore is supported by this command");
+    if (typeof input.trashed !== "boolean" || input.runId !== undefined && !input.trashed
+      || Object.keys(input).some((key) => !["accountId", "id", "trashed", "runId"].includes(key))) throw new Error("Only Trash or Restore is supported by this command");
+    if (input.runId !== undefined || id.startsWith("source:")) {
+      if (input.runId === undefined && input.trashed) throw new Error("Atlas item not found");
+      const item = input.runId !== undefined ? await atlasService.trashSource({ accountId, id, runId: required(input.runId) })
+        : atlasService.restoreSource({ accountId, id });
+      return { id: item.id, requestedId: id, title: item.title, kind: item.kind, trashed: input.trashed };
+    }
     const current = atlasService.get({ accountId, id });
     if (!current) throw new Error("Atlas item not found");
     // Setting a state is idempotent; repeated Trash preserves its original date.
@@ -138,9 +147,12 @@ export const atlasMobile = {
     const accountId = required(input?.accountId), id = required(input?.id);
     if (typeof input.expectedTrashedAt !== "string" || !input.expectedTrashedAt || input.expectedTrashedAt.length > 64
       || Object.keys(input).some(key => !["accountId", "id", "expectedTrashedAt"].includes(key))) throw new Error("Invalid Atlas Trash deletion");
-    const item = atlasService.get({ accountId, id });
-    if (!item || item.id !== id || !isAtlasLibraryItem(item)) throw new Error("Atlas item not found");
-    if (item.trashedAt !== input.expectedTrashedAt) throw new Error("This item’s Trash status changed. Refresh Trash and try again.");
+    const source = id.startsWith("source:") ? atlasRepo.removedSource(id, accountId) : null;
+    const saved = source ? null : atlasService.get({ accountId, id });
+    const item = source ?? saved;
+    if (!item || item.id !== id || saved && !isAtlasLibraryItem(saved)) throw new Error("Atlas item not found");
+    const trashedAt = source ? source.trashedAt?.toISOString() : saved?.trashedAt;
+    if (trashedAt !== input.expectedTrashedAt) throw new Error("This item’s Trash status changed. Refresh Trash and try again.");
     // The shared removal checks Trash and commits the database deletion before awaiting file cleanup.
     await atlasService.remove({ accountId, id });
     return { id, requestedId: id, title: item.title, kind: item.kind };
@@ -241,7 +253,7 @@ export const atlasMobile = {
         mimeType: saved?.mimeType ?? generated?.mimeType ?? null,
         byteSize: saved?.byteSize ?? generated?.byteSize ?? null, preview: previews.get(entry.key) ?? null };
     });
-    return { items, page: result.page, hasNext: result.hasNext };
+    return { items, page: result.page, hasNext: result.hasNext, canRemoveSources: true };
   },
 
   readPage(input: AtlasMobilePageRequest): AtlasMobilePage {

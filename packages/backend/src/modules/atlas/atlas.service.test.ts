@@ -648,6 +648,7 @@ describe("Atlas phone library", { timeout: 15000 }, () => {
     atlasRepo.update(copy.id, identity.accountId, { trashedAt: new Date(trashDate) });
     const trash = atlasMobile.trash({ accountId: identity.accountId });
     expect(trash.canDeletePermanently).toBe(true);
+    expect((await atlasService.library({ accountId: identity.accountId, scope: "generated" })).items).toEqual([]);
     const request = { ...identity, expectedTrashedAt: trash.items[0].trashedAt };
     await expect(atlasMobile.deleteTrash({ ...request, accountId: "other" })).rejects.toThrow("not found");
     await expect(atlasMobile.deleteTrash({ ...request, path: source } as never)).rejects.toThrow("Invalid");
@@ -663,6 +664,51 @@ describe("Atlas phone library", { timeout: 15000 }, () => {
     expect(atlasService.get(identity)).toBeNull();
     expect(fs.existsSync(copy.path!)).toBe(false);
     expect(fs.readFileSync(source, "utf8")).toBe("original contents");
+    expect((await atlasService.library({ accountId: identity.accountId })).items).toEqual([]);
+    expect((await atlasService.generated({ accountId: identity.accountId })).items).toEqual([]);
+    const savedAgain = await atlasService.saveFile({ accountId: identity.accountId, runId: "delete-source", path: source });
+    expect((await atlasService.library({ accountId: identity.accountId })).items.map((item) => item.key)).toEqual([savedAgain.id]);
+  });
+
+  it("hides a chat upload and matching automatic results across scopes and restores them without changing the chat", async () => {
+    const accountId = "default", runId = "source-upload";
+    createRun(db, { id: runId, mode: "work" });
+    const bytes = Buffer.from("matching image bytes");
+    const [attachment] = (await prepareRunAttachments(runId, [{ name: "upload.png", type: "image",
+      mimeType: "image/png", data: bytes.toString("base64") }]))!;
+    const generated = output("generated.png", "source-output");
+    fs.writeFileSync(generated, bytes);
+    const uploads = () => atlasMobile.library({ accountId, scope: "uploads" });
+    const library = (scope: "all" | "generated", query?: string) => atlasService.library({ accountId, scope, query });
+    const upload = (await uploads()).items[0];
+    expect((await library("all")).items).toHaveLength(1);
+    const input = { accountId, runId, id: upload.key, trashed: true };
+    await expect(atlasMobile.setTrash({ ...input, accountId: "other" })).rejects.toThrow("Conversation not found");
+    const removal = await atlasMobile.setTrash(input);
+    const entry = atlasMobile.trash({ accountId }).items[0];
+    expect(entry).toMatchObject({ id: removal.id, title: "upload.png", sourceOnly: true });
+    expect(atlasService.list({ accountId, trashed: true, includeRemovedSources: true })[0]).toMatchObject({ id: removal.id, sourceOnly: true, path: null });
+    expect(await atlasMobile.setTrash(input)).toEqual(removal);
+    expect(atlasMobile.trash({ accountId }).items).toEqual([entry]);
+    expect((await uploads()).items).toEqual([]);
+    expect((await library("all", "upload")).items).toEqual([]);
+    expect((await library("generated")).items).toEqual([]);
+    expect((await atlasService.generated({ accountId })).items).toEqual([]);
+    expect(fs.readFileSync(attachment.sourcePath)).toEqual(bytes);
+    expect(await atlasMobile.describeFile({ accountId, reference: upload.file! })).toMatchObject({ name: "upload.png" });
+    await expect(atlasMobile.setTrash({ accountId: "other", id: removal.id, trashed: false })).rejects.toThrow("not found");
+    await atlasMobile.setTrash({ accountId, id: removal.id, trashed: false });
+    expect((await uploads()).items).toHaveLength(1);
+    expect((await library("generated")).items).toHaveLength(1);
+
+    const removedAgain = await atlasMobile.setTrash(input);
+    const { trashedAt } = atlasMobile.trash({ accountId }).items[0];
+    await atlasMobile.deleteTrash({ accountId, id: removedAgain.id, expectedTrashedAt: trashedAt });
+    expect(atlasMobile.trash({ accountId }).items).toEqual([]);
+    expect((await library("all")).items).toEqual([]);
+    const saved = await atlasService.saveFile({ accountId, runId, path: attachment.sourcePath });
+    expect((await library("all")).items.map((item) => item.key)).toEqual([saved.id]);
+    expect((await uploads()).items).toHaveLength(1);
   });
 
   it("keeps trashed Page assets protected from mobile permanent deletion", async () => {

@@ -175,6 +175,33 @@ import Testing
         #expect(session.viewingRunID == nil && session.selectedSpaceID == space && storage.snapshot == nil)
     }
 
+    @Test @MainActor func removesAndRestoresAnAutomaticAtlasFileWithoutLosingItsSource() async throws {
+        let backend = try DemoBackend()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let initial = try await session.atlasLibrary(AtlasQuery())
+        #expect(initial.canRemoveSources == true)
+        let entry = try #require(initial.items.first { $0.origin == "generated" })
+        let reference = try #require(entry.file)
+        let removed = try await session.trashAtlasItem(entry, owner: session.ownership)
+        #expect(try await session.atlasLibrary(AtlasQuery()).items.allSatisfy { $0.id != entry.id })
+        let trash = try #require(try await session.atlasTrash().items.first)
+        #expect(trash.id == removed.id && trash.sourceOnly == true)
+        _ = try await session.restoreAtlasItem(id: removed.id, title: removed.title, owner: session.ownership)
+        #expect(try await session.atlasLibrary(AtlasQuery()).items.contains { $0.id == entry.id })
+        _ = try await session.trashAtlasItem(entry, owner: session.ownership)
+        let second = try #require(try await session.atlasTrash().items.first)
+        _ = try await session.deleteAtlasTrashItem(second, owner: session.ownership)
+        #expect(try await session.atlasTrash().items.isEmpty)
+        #expect(try await session.atlasLibrary(AtlasQuery()).items.allSatisfy { $0.id != entry.id })
+        let file = try await session.describeAtlasFile(reference)
+        let source = try #require(AtlasSaveSource.file(file))
+        let saved = try await session.saveAtlasFile(source, owner: session.ownership)
+        #expect(try await session.atlasLibrary(AtlasQuery()).items.contains { $0.id == saved.id })
+    }
+
     @Test @MainActor func trashReceiptRecoveryDoesNotTrashAnItemThatWasRestoredByANewerCommand() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })

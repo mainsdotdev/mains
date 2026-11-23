@@ -1,14 +1,27 @@
-import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { AtlasListOptions, AtlasMetadataPatch, AtlasItemTag, AtlasTag } from "@mains/contracts/atlas";
 import { ATLAS_LIBRARY_PAGE_SIZE } from "@mains/contracts/atlas";
 import { ATLAS_COVER_SOURCE_PREFIX } from "@mains/contracts/atlas-covers";
 import { getDb } from "../../db/client";
-import { atlasItems, atlasPageRevisions, atlasPageFileRefs, atlasTags, atlasItemTags, runs } from "../../db/schema";
+import { atlasItems, atlasPageRevisions, atlasPageFileRefs, atlasSourceRemovals, atlasTags, atlasItemTags, runs } from "../../db/schema";
 import { mergeMetadata, readMetadata } from "./atlas.metadata";
 
 export type AtlasRecord = typeof atlasItems.$inferSelect;
 export type RevisionRecord = typeof atlasPageRevisions.$inferSelect;
+type SourceRemoval = typeof atlasSourceRemovals.$inferSelect;
+type SourceFile = Pick<SourceRemoval, "accountId" | "sourceKey" | "kind" | "title" | "contentHash">;
+type TrashEntry = Pick<AtlasRecord, "id" | "title" | "kind" | "collectionId"> & { trashedAt: number; sourceOnly: 0 | 1 };
+
+function conversationSource(item: AtlasRecord): SourceFile | null {
+  if ((item.kind !== "file" && item.kind !== "image") || !item.sourceKey || !/^[a-f0-9]{64}$/.test(item.sourceKey)) return null;
+  return { accountId: item.accountId, sourceKey: item.sourceKey, kind: item.kind, title: item.title, contentHash: item.contentHash };
+}
+
+function matchingSource(file: SourceFile) {
+  return and(eq(atlasSourceRemovals.accountId, file.accountId), or(eq(atlasSourceRemovals.sourceKey, file.sourceKey),
+    file.contentHash ? and(eq(atlasSourceRemovals.kind, file.kind), eq(atlasSourceRemovals.contentHash, file.contentHash)) : undefined));
+}
 
 // Mirrors isAtlasLibraryItem for aggregate reads, without loading file inventory.
 const libraryItem = sql`coalesce(substr(${atlasItems.sourceKey},1,${ATLAS_COVER_SOURCE_PREFIX.length}) <> ${ATLAS_COVER_SOURCE_PREFIX},1)
@@ -153,6 +166,62 @@ export const atlasRepo = {
   bySource(accountId: string, sourceKey: string) {
     return getDb().select().from(atlasItems)
       .where(and(eq(atlasItems.accountId, accountId), eq(atlasItems.sourceKey, sourceKey))).get() ?? null;
+  },
+  sourceMasks(accountId: string) {
+    const db = getDb();
+    const removed = db.select({ sourceKey: atlasSourceRemovals.sourceKey, kind: atlasSourceRemovals.kind, contentHash: atlasSourceRemovals.contentHash })
+      .from(atlasSourceRemovals).where(eq(atlasSourceRemovals.accountId, accountId)).all();
+    const trashed = db.select().from(atlasItems).where(and(eq(atlasItems.accountId, accountId), isNotNull(atlasItems.trashedAt),
+      isNotNull(atlasItems.sourceKey), inArray(atlasItems.kind, ["file", "image"]))).all().flatMap((item) => conversationSource(item) ?? []);
+    return [...removed, ...trashed];
+  },
+  trashEntries(accountId: string, offset?: number, limit?: number) {
+    return getDb().all<TrashEntry>(sql`
+      SELECT id, title, kind, collection_id AS collectionId, trashed_at AS trashedAt, 0 AS sourceOnly, updated_at AS updatedAt
+      FROM atlas_items WHERE account_id = ${accountId} AND trashed_at IS NOT NULL
+      UNION ALL
+      SELECT id, title, kind, NULL, trashed_at, 1, trashed_at
+      FROM atlas_source_removals WHERE account_id = ${accountId} AND trashed_at IS NOT NULL
+      ORDER BY trashedAt DESC, updatedAt DESC, id DESC
+      ${limit === undefined ? sql.empty() : sql`LIMIT ${limit} OFFSET ${offset ?? 0}`}
+    `);
+  },
+  trashSource(file: SourceFile) {
+    const db = getDb();
+    return db.transaction(() => {
+      const previous = db.select().from(atlasSourceRemovals).where(matchingSource(file))
+        .orderBy(desc(atlasSourceRemovals.trashedAt), atlasSourceRemovals.id).get();
+      if (previous?.trashedAt) return previous;
+      if (previous) {
+        return db.update(atlasSourceRemovals).set({ trashedAt: new Date() })
+          .where(eq(atlasSourceRemovals.id, previous.id)).returning().get();
+      }
+      return db.insert(atlasSourceRemovals).values({ ...file, id: `source:${randomUUID()}`, trashedAt: new Date() }).returning().get();
+    });
+  },
+  removedSource(id: string, accountId: string) {
+    return getDb().select().from(atlasSourceRemovals)
+      .where(and(eq(atlasSourceRemovals.id, id), eq(atlasSourceRemovals.accountId, accountId))).get();
+  },
+  restoreSource(id: string, accountId: string) {
+    getDb().delete(atlasSourceRemovals).where(and(eq(atlasSourceRemovals.id, id),
+      eq(atlasSourceRemovals.accountId, accountId))).run();
+  },
+  clearSourceTrash(id: string, accountId: string) {
+    getDb().update(atlasSourceRemovals).set({ trashedAt: null })
+      .where(and(eq(atlasSourceRemovals.id, id), eq(atlasSourceRemovals.accountId, accountId))).run();
+  },
+  keepSourceCopy(row: typeof atlasItems.$inferInsert) {
+    const db = getDb();
+    return db.transaction(() => {
+      const existing = row.sourceKey ? atlasRepo.bySource(row.accountId, row.sourceKey) : null;
+      if (existing?.trashedAt) atlasRepo.update(existing.id, row.accountId, { trashedAt: null });
+      if (!existing) atlasRepo.insert(row);
+      const item = atlasRepo.find(existing?.id ?? row.id, row.accountId)!;
+      const source = conversationSource(item);
+      if (source) db.delete(atlasSourceRemovals).where(matchingSource(source)).run();
+      return item;
+    });
   },
   byStorageKey(storageKey: string) {
     return getDb().select().from(atlasItems).where(eq(atlasItems.storageKey, storageKey)).get() ?? null;
@@ -311,6 +380,10 @@ export const atlasRepo = {
       // Current covers (including trashed Pages) and historical embeds survive
       // until their references are removed. Share the lock with metadata writes.
       if (atlasRepo.referenced(id)) throw new Error("This file is used by a Page or its revision history");
+      const item = atlasRepo.find(id, accountId);
+      const source = item && conversationSource(item);
+      if (source) db.insert(atlasSourceRemovals).values({ ...source, id: `source:${randomUUID()}` })
+        .onConflictDoNothing({ target: [atlasSourceRemovals.accountId, atlasSourceRemovals.sourceKey] }).run();
       db.delete(atlasItems).where(and(eq(atlasItems.id, id), eq(atlasItems.accountId, accountId))).run();
     });
   },

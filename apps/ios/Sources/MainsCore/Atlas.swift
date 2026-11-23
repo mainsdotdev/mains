@@ -90,6 +90,7 @@ public struct AtlasLibraryPage: Decodable, Sendable {
     public let items: [AtlasEntry]
     public let page: Int
     public let hasNext: Bool
+    public var canRemoveSources: Bool? = nil
 
     /// Group only the loaded page, keeping the server's order within each local day.
     public func daySections(calendar: Calendar = .current) -> [AtlasLibraryDay] {
@@ -115,6 +116,7 @@ public struct AtlasTrashItem: Decodable, Identifiable, Sendable {
     public let kind: String
     public let collectionId: String?
     public let trashedAt: String
+    public var sourceOnly: Bool? = nil
 }
 public struct AtlasTrashPage: Decodable, Sendable {
     public let items: [AtlasTrashItem]

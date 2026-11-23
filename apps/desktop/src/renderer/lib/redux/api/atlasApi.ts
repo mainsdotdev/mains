@@ -1,4 +1,5 @@
 import { CHANNELS } from "@mains/contracts/channels";
+import type { AtlasMobileSetTrash, AtlasMobileTrashState } from "@mains/contracts/atlas-mobile";
 import type { AtlasAutoTagging, AtlasTag, AtlasSaveBookmark, AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedPage, AtlasIdentity, AtlasItem, AtlasLibraryOptions, AtlasLibraryPage, AtlasListItem, AtlasListOptions,
   AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import { baseApi } from "./baseApi";
@@ -43,7 +44,7 @@ export const atlasApi = baseApi.injectEndpoints({
     }),
     atlasGenerated: builder.query<AtlasGeneratedPage, AtlasGeneratedOptions>({
       query: (options) => ({ handler: CHANNELS.atlas.generated, args: [options] }),
-      providesTags: ["RunArtifacts", "RunOutputs", "Runs"],
+      providesTags: ["Atlas", "RunArtifacts", "RunOutputs", "Runs"],
     }),
     atlasPage: builder.query<AtlasPage | null, AtlasIdentity>({
       query: (options) => ({ handler: CHANNELS.atlas.get, args: [options] }),
@@ -112,6 +113,10 @@ export const atlasApi = baseApi.injectEndpoints({
       query: (input) => ({ handler: CHANNELS.atlas.setCoverPreset, args: [input] }),
       invalidatesTags: (_r, e, { id }) => e ? [] : ["Atlas", { type: "AtlasPage", id }],
     }),
+    setAtlasSourceTrash: builder.mutation<AtlasMobileTrashState, AtlasMobileSetTrash>({
+      query: (input) => ({ handler: CHANNELS.atlas.setMobileTrash, args: [input] }),
+      invalidatesTags: (_r, error) => error ? [] : ["Atlas"],
+    }),
     removeAtlasItem: builder.mutation<void, AtlasIdentity>({
       query: (input) => ({ handler: CHANNELS.atlas.remove, args: [input] }),
       invalidatesTags: (_r, e, { id }) => e ? [] : ["Atlas", { type: "AtlasPage", id }],
@@ -129,4 +134,4 @@ export const { useAtlasLibraryQuery, useListAtlasQuery, useAtlasGeneratedQuery, 
   useSaveAtlasBookmarkMutation, useEnrichAtlasBookmarkMutation, useListAtlasTagsQuery, useRenameAtlasTagMutation,
   useRemoveAtlasTagMutation, useSetAtlasTagsMutation, useAtlasAutoTaggingQuery, useSetAtlasAutoTaggingMutation,
   useSaveAtlasPageMutation, useAtlasRevisionsQuery, useAtlasRevisionQuery, useResolveAtlasConflictMutation, useRestoreAtlasPageMutation, useSaveToAtlasMutation,
-  useUploadAtlasFileMutation, useUpdateAtlasItemMutation, useSetAtlasCoverPresetMutation, useRemoveAtlasItemMutation } = atlasApi;
+  useUploadAtlasFileMutation, useUpdateAtlasItemMutation, useSetAtlasCoverPresetMutation, useSetAtlasSourceTrashMutation, useRemoveAtlasItemMutation } = atlasApi;
