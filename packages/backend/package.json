@@ -75,6 +75,7 @@
   },
   "dependencies": {
     "@blocknote/server-util": "0.55.0",
+    "@hpcc-js/wasm-zstd": "1.17.0",
     "cross-spawn": "^7.0.6",
     "mdast-util-from-markdown": "^2.0.3",
     "parse5": "8.0.1",

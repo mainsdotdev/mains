@@ -1,5 +1,5 @@
 {
-  "cliVersion": "0.171.0",
+  "cliVersion": "0.172.0",
   "files": [
     {
       "path": "AbsolutePathBuf.ts",
@@ -399,7 +399,7 @@
     },
     {
       "path": "v2/CodexErrorInfo.ts",
-      "sha256": "2afe2e45da498e3ac199c299f56fc2b22eee3dcf98144fa6de0312460342de82"
+      "sha256": "ff676d8c357ceb702a81736db29824bf6571d2f0a700d8dd8ee071308a4b39bb"
     },
     {
       "path": "v2/CollabAgentState.ts",
@@ -516,6 +516,10 @@
     {
       "path": "v2/CyberAccessProgram.ts",
       "sha256": "a8ee683015942f859a1daaba83b62586068ef9c381edf83e3b65837ac24e27e7"
+    },
+    {
+      "path": "v2/DaybreakAvailability.ts",
+      "sha256": "6c25e249e02e9c02232301c252ee334e482c5da38e1cf13979e69569fbff7260"
     },
     {
       "path": "v2/DynamicToolCallOutputContentItem.ts",
@@ -831,7 +835,7 @@
     },
     {
       "path": "v2/ModelAccessPrograms.ts",
-      "sha256": "0d29296bc21669d32667833d6f92379db6c117a87107a5c65626ef65ce808ed4"
+      "sha256": "5328636bab155b2995f6a7a77869c302e905feb12554d19c69331a2870cfb67f"
     },
     {
       "path": "v2/ModelAvailabilityNux.ts",
@@ -1215,7 +1219,7 @@
     },
     {
       "path": "v2/Thread.ts",
-      "sha256": "69aef3ea80d72a43f3513e956f90396cbb1285638fb14b5c151e347be299a899"
+      "sha256": "3d25d483ac747dbdf87553cc1a7665f0f3a4104fb2384e79eba926ecd22d15c5"
     },
     {
       "path": "v2/ThreadActiveFlag.ts",
@@ -1331,7 +1335,7 @@
     },
     {
       "path": "v2/ThreadRealtimeFrameChannels.ts",
-      "sha256": "11470fcd0c1f8a78134ab1c70b5df71a0213067668bdf0ecaf4e63b87121b078"
+      "sha256": "28b77afed8c2b578cfa317407a216e6218364f0ffcc9d564f571949bb015fa81"
     },
     {
       "path": "v2/ThreadRealtimeHandoffMode.ts",
@@ -1343,7 +1347,7 @@
     },
     {
       "path": "v2/ThreadRealtimeItem.ts",
-      "sha256": "fc30e77650d921d72bf16b616a5fed375b7969ace4ec1d533e932ce06a39c8b0"
+      "sha256": "0cf7716bb3a254cc444823e4c91927c4b19d6c7d5903a2455e5bcda45ad4a1f4"
     },
     {
       "path": "v2/ThreadRealtimeItemAddedNotification.ts",
@@ -1384,6 +1388,10 @@
     {
       "path": "v2/ThreadRealtimeSdpNotification.ts",
       "sha256": "d0cd47d527495f4d6257627cdd4cf473d0c593641c71c1917e2964cdf5ff8196"
+    },
+    {
+      "path": "v2/ThreadRealtimeSessionInputReason.ts",
+      "sha256": "fb345b28c71109808b2d8de559df5452d3adfe62dd4864cba27d070f23c4ce63"
     },
     {
       "path": "v2/ThreadRealtimeSessionOutcome.ts",
@@ -1455,7 +1463,7 @@
     },
     {
       "path": "v2/ThreadStartParams.ts",
-      "sha256": "dc8bebec4181a5502fc141b0122cc48e066b3b5c77d9fd2a4de875fcd6d66a68"
+      "sha256": "030fa6ab434c1cbf117800c9b8db53b846750ae16ab3c271103d371e1d052f43"
     },
     {
       "path": "v2/ThreadStartResponse.ts",

@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { CliHistorySource } from "./stats.dto";
@@ -20,6 +20,43 @@ interface CachedFile {
 }
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 const READ_BYTES = 256 * 1024;
+const ZSTD_SUFFIX = ".jsonl.zst";
+
+async function* readChunks(handle: FileHandle, position: number, size: number) {
+  while (position < size) {
+    const buffer = Buffer.allocUnsafe(Math.min(READ_BYTES, size - position));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    if (bytesRead === 0) return;
+    yield buffer.subarray(0, bytesRead);
+    position += bytesRead;
+  }
+}
+
+async function* decompressRollout(handle: FileHandle, size: number) {
+  if (size === 0) throw new Error("Empty Zstandard rollout");
+  const { Zstd } = await import("@hpcc-js/wasm-zstd");
+  const decoder = await Zstd.load();
+  decoder.resetDecompression();
+  // The WASM codec collects each input chunk's output. Small slices bound that
+  // allocation even when run-length encoded blocks expand by a large factor.
+  const decodeInputBytes = 512;
+  for await (const chunk of readChunks(handle, 0, size)) {
+    for (let start = 0; start < chunk.length; start += decodeInputBytes) {
+      const decoded = decoder.decompressChunk(chunk.subarray(start, start + decodeInputBytes));
+      if (decoded.length) yield Buffer.from(decoded);
+    }
+  }
+  decoder.decompressEnd();
+}
+
+let pendingCompressedRead = Promise.resolve();
+function readCompressed(handle: FileHandle, size: number, consume: (chunks: AsyncIterable<Buffer>) => Promise<void>) {
+  // The WASM library shares one decoder across scanner instances. It also
+  // validates frame completion consistently across the supported Node versions.
+  const result = pendingCompressedRead.then(() => consume(decompressRollout(handle, size)));
+  pendingCompressedRead = result.catch(() => undefined);
+  return result;
+}
 
 export function cliHistorySources(environment = process.env, home = os.homedir()): Source[] {
   const expand = (value: string) => path.resolve(value.startsWith("~/") ? path.join(home, value.slice(2)) : value);
@@ -41,11 +78,12 @@ export function createCliHistoryScanner() {
   const readFile = async (file: string, providerId: CliProviderId) => {
     const handle = await fs.open(file, "r");
     try {
+      const compressed = file.endsWith(ZSTD_SUFFIX);
       const stat = await handle.stat();
       const identity = `${providerId}:${stat.dev}:${stat.ino}`;
       const previous = cache.get(file);
       if (previous && previous.identity === identity && previous.size === stat.size && previous.mtime === stat.mtimeMs) return previous;
-      let resume = previous && previous.identity === identity && stat.size > previous.size ? previous : undefined;
+      let resume = !compressed && previous && previous.identity === identity && stat.size > previous.size ? previous : undefined;
       if (resume) {
         const guard = Buffer.alloc(resume.guard.length);
         const head = Buffer.alloc(resume.head.length);
@@ -60,51 +98,59 @@ export function createCliHistoryScanner() {
       const pause = createStatsWorkBudget();
       let skippedLines = resume?.skippedLines ?? 0;
       let offset = resume?.offset ?? 0;
-      let position = offset;
-      let chunks: Buffer[] = [];
-      let lineBytes = 0;
-      const buffer = Buffer.alloc(READ_BYTES);
-      while (position < stat.size) {
-        const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, stat.size - position), position);
-        if (bytesRead === 0) break;
-        let start = 0;
-        while (start < bytesRead) {
-          const newline = buffer.indexOf(10, start);
-          const end = newline < 0 || newline >= bytesRead ? bytesRead : newline;
-          lineBytes += end - start;
-          if (lineBytes <= MAX_LINE_BYTES && end > start) chunks.push(Buffer.from(buffer.subarray(start, end)));
-          if (end === bytesRead) break;
-          if (lineBytes <= MAX_LINE_BYTES) {
-            try {
-              const record = parseTranscriptLine(Buffer.concat(chunks).toString("utf8"), providerId, state);
-              if (record) {
-                record.sessionId ||= file;
-                if (providerId === "codex") {
-                  // Reconcile moved/copied rollouts once during parsing; equal
-                  // genuine events within one file still retain occurrence ids.
-                  const key = JSON.stringify([record.providerId, record.sessionId, record.timestamp, record.model,
-                    record.inputTokens, record.outputTokens, record.cacheReadTokens, record.cacheWriteTokens]);
-                  const occurrence = (occurrences.get(key) ?? 0) + 1;
-                  occurrences.set(key, occurrence);
-                  record.dedupeKey = `${key}:${occurrence}`;
+      const fallbackSessionId = compressed ? file.slice(0, -".zst".length) : file;
+      const consume = async (input: AsyncIterable<Buffer>) => {
+        let position = offset;
+        let chunks: Buffer[] = [];
+        let lineBytes = 0;
+        for await (const buffer of input) {
+          let start = 0;
+          while (start < buffer.length) {
+            const newline = buffer.indexOf(10, start);
+            const end = newline < 0 ? buffer.length : newline;
+            lineBytes += end - start;
+            if (lineBytes > MAX_LINE_BYTES) chunks = [];
+            else if (end > start) chunks.push(buffer.subarray(start, end));
+            if (newline < 0) break;
+            if (lineBytes <= MAX_LINE_BYTES) {
+              try {
+                const record = parseTranscriptLine(Buffer.concat(chunks).toString("utf8"), providerId, state);
+                if (record) {
+                  record.sessionId ||= fallbackSessionId;
+                  if (providerId === "codex") {
+                    // Reconcile moved/copied rollouts once during parsing; equal
+                    // genuine events within one file still retain occurrence ids.
+                    const key = JSON.stringify([record.providerId, record.sessionId, record.timestamp, record.model,
+                      record.inputTokens, record.outputTokens, record.cacheReadTokens, record.cacheWriteTokens]);
+                    const occurrence = (occurrences.get(key) ?? 0) + 1;
+                    occurrences.set(key, occurrence);
+                    record.dedupeKey = `${key}:${occurrence}`;
+                  }
+                  records.push(record);
                 }
-                records.push(record);
-              }
-            } catch { skippedLines++; }
-          } else { skippedLines++; }
-          chunks = []; lineBytes = 0;
-          offset = position + end + 1;
-          start = end + 1;
-          const yielding = pause();
-          if (yielding) await yielding;
+              } catch { skippedLines++; }
+            } else { skippedLines++; }
+            chunks = [];
+            lineBytes = 0;
+            offset = position + end + 1;
+            start = end + 1;
+            const yielding = pause();
+            if (yielding) await yielding;
+          }
+          position += buffer.length;
         }
-        position += bytesRead;
+      };
+      if (compressed) await readCompressed(handle, stat.size, consume);
+      else await consume(readChunks(handle, offset, stat.size));
+
+      // Plain append-only files retry any unfinished tail on the next scan.
+      // Compressed rollouts are reused only while the entire file is unchanged.
+      const guard = Buffer.alloc(compressed ? 0 : Math.min(4096, offset));
+      const head = Buffer.alloc(guard.length);
+      if (guard.length) {
+        await handle.read(guard, 0, guard.length, offset - guard.length);
+        await handle.read(head, 0, head.length, 0);
       }
-      // An unfinished JSONL tail is retried from its beginning on the next scan.
-      const guard = Buffer.alloc(Math.min(4096, offset));
-      await handle.read(guard, 0, guard.length, offset - guard.length);
-      const head = Buffer.alloc(Math.min(4096, offset));
-      await handle.read(head, 0, head.length, 0);
       const entry = { size: stat.size, mtime: stat.mtimeMs, identity, offset, guard, head, state, records, skippedLines, occurrences };
       cache.set(file, entry);
       return entry;
@@ -132,7 +178,9 @@ export function createCliHistoryScanner() {
         for (const entry of entries) {
           const file = path.join(directory, entry.name);
           if (entry.isDirectory()) { await walk(file); continue; }
-          if (!entry.isFile() || !entry.name.endsWith(".jsonl") || visited.has(file)) continue;
+          const transcript = entry.name.endsWith(".jsonl") ||
+            (source.providerId === "codex" && entry.name.endsWith(ZSTD_SUFFIX));
+          if (!entry.isFile() || !transcript || visited.has(file)) continue;
           visited.add(file);
           try {
             const stat = await fs.stat(file);
