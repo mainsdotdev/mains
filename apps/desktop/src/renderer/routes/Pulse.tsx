@@ -18,7 +18,10 @@ import { PageShell } from "@/components/layout/page-shell";
 export default function PulsePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { data: pulses = [], isLoading } = useGetPulsesQuery(undefined, { pollingInterval: 15_000, skipPollingIfUnfocused: true });
+  const { currentData: pulses, isError, isSuccess, refetch } = useGetPulsesQuery(undefined, {
+    pollingInterval: 15_000,
+    skipPollingIfUnfocused: true,
+  });
   const { mode } = useModeConfig();
   const [query, setQuery] = useState("");
   const [editingPulse, setEditingPulse] = useState<Pulse | null>(null);
@@ -35,14 +38,14 @@ export default function PulsePage() {
   const linkedModalOpen = linkedCreate || linkedTemplate !== null;
 
   const searching = query.trim().length > 0;
-  const visiblePulses = pulses.filter((p) =>
+  const visiblePulses = (pulses ?? []).filter((p) =>
     matchesSearch(query, p.title, p.prompt),
   );
   const visibleTemplates = templatesForMode(mode).filter((t) =>
     matchesSearch(query, t.title, t.description),
   );
   const noMatches =
-    searching && visiblePulses.length === 0 && visibleTemplates.length === 0;
+    isSuccess && searching && visiblePulses.length === 0 && visibleTemplates.length === 0;
 
   const openCreate = () => {
     setEditingPulse(null);
@@ -125,7 +128,9 @@ export default function PulsePage() {
         <div className="space-y-12">
           <PulseList
             pulses={visiblePulses}
-            isLoading={isLoading}
+            isLoading={!isSuccess && !isError && !pulses?.length}
+            loadFailed={isError}
+            onRetry={() => void refetch()}
             searching={searching}
             onEdit={openEdit}
           />

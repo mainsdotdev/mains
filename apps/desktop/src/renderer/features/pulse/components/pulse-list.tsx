@@ -30,7 +30,9 @@ interface PulseListProps {
   /** Already search-filtered by the page. */
   pulses: Pulse[];
   isLoading: boolean;
-  /** A search is narrowing `pulses` — hide the section rather than claim nothing is scheduled. */
+  loadFailed: boolean;
+  onRetry: () => void;
+  /** Hide an empty section when a completed search narrows the list. */
   searching: boolean;
   onEdit: (pulse: Pulse) => void;
 }
@@ -54,6 +56,8 @@ function useMinuteClock(): number {
 export function PulseList({
   pulses,
   isLoading,
+  loadFailed,
+  onRetry,
   searching,
   onEdit,
 }: PulseListProps) {
@@ -90,7 +94,7 @@ export function PulseList({
 
   const activeCount = pulses.filter((p) => p.isActive).length;
 
-  if (searching && pulses.length === 0) return null;
+  if (searching && pulses.length === 0 && !isLoading && !loadFailed) return null;
 
   return (
     <section>
@@ -103,17 +107,28 @@ export function PulseList({
         )}
       </div>
 
+      {loadFailed && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-3xl glass-surface px-5 py-4">
+          <Body role="alert">
+            {pulses.length > 0 ? "Unable to refresh pulses. Showing the last loaded list." : "Unable to load pulses."}
+          </Body>
+          <Button variant="secondary" onClick={onRetry}>Try again</Button>
+        </div>
+      )}
+
       {isLoading ? (
-        <Text as="div" size="xs" tone="faint" className="px-1 py-3">
+        <Text as="div" role="status" size="xs" tone="faint" className="px-1 py-3">
           Loading…
         </Text>
       ) : pulses.length === 0 ? (
-        <div className="rounded-3xl border border-dashed border-primary-300/70 dark:border-primary-800 px-5 py-5">
-          <Body>Nothing scheduled yet</Body>
-          <Caption as="p" tone="subtle" className="mt-1">
-            Pick a template below, or start a pulse from scratch.
-          </Caption>
-        </div>
+        !loadFailed && (
+          <div className="rounded-3xl border border-dashed border-primary-300/70 dark:border-primary-800 px-5 py-5">
+            <Body>Nothing scheduled yet</Body>
+            <Caption as="p" tone="subtle" className="mt-1">
+              Pick a template below, or start a pulse from scratch.
+            </Caption>
+          </div>
+        )
       ) : (
         <div className="rounded-3xl glass-surface px-4 py-1">
           {pulses.map((pulse, index) => (
