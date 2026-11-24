@@ -77,6 +77,7 @@ import type { RunSettingConfig, SettingsChangeSource } from "@mains/contracts/ru
 import type { ComposerSendTarget } from "../lib/composer-send-target";
 import { ComposerSendTargetSelect } from "./composer-send-target-select";
 import { addComposerUploads } from "../lib/composer-uploads";
+import { CONTENT_COLUMN_WIDTH } from "../lib/content-column";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 const EMPTY_DIRECTORIES: string[] = [];
@@ -1035,7 +1036,7 @@ export function WorkspaceInput({
       dense={denseFloating}
     />
   );
-  const noticeClassName = cn("w-full max-w-210 mx-auto", providerNoticeClassName);
+  const noticeClassName = cn("w-full", CONTENT_COLUMN_WIDTH, providerNoticeClassName);
 
   return (
     <>
@@ -1070,7 +1071,7 @@ export function WorkspaceInput({
 
       {layout !== "floating" && runQueue && <ComposerQueueCard controls={runQueue} isRunning={isRunning} />}
       <div
-        className={`@container/composer relative mx-auto flex min-w-0 w-full max-w-210 flex-col cursor-pointer transition-all
+        className={`@container/composer relative flex min-w-0 w-full ${CONTENT_COLUMN_WIDTH} flex-col cursor-pointer transition-all
         ${layout === "floating"
           ? `rounded-[28px] text-primary-950 dark:text-primary-50 ${compactFloating ? "" : "pb-2"}`
           : assistantComposer ? "rounded-[28px] glass-surface" : "rounded-[28px] glass-surface pb-2"}

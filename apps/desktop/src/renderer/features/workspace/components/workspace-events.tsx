@@ -26,7 +26,7 @@ import { RealtimeVoiceBar } from "./realtime-voice-bar";
 import { projectVoiceTranscriptEvents } from "../lib/voice-transcript-view";
 import { assistantTranscriptGroups, isAssistantReplyStreaming } from "../lib/assistant-transcript-view";
 import { AssistantTypingIndicator } from "./assistant-typing-indicator";
-import { CONTENT_COLUMN_GUTTER } from "../lib/content-column";
+import { CONTENT_COLUMN_GUTTER, CONTENT_COLUMN_WIDTH } from "../lib/content-column";
 import { buildTurnMarkers, type TurnMarker } from "../lib/turn-markers";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import type { Run, RunEvent, Workspace } from "../types";
@@ -382,7 +382,7 @@ function AgentTurnMessagesAccordion({
         }`}
       >
         <div className="min-h-0 overflow-hidden">
-          <div className="border-b border-primary-200/50 dark:border-primary-800/50 pb-1">
+          <div className=" pb-1">
             <Button
               type="button"
               onClick={() => setOpen((v) => !v)}
@@ -866,7 +866,7 @@ export function WorkspaceEvents({
             <div className={floatingChat ? "px-4" : CONTENT_COLUMN_GUTTER}>
             {/* Keep the latest message above the orb when following the tail;
                 this padding scrolls away with history beneath the overlay. */}
-            <div className={floatingChat ? "min-h-75-max-w-125 mx-auto space-y-4 pt-4 pb-0" :"min-h-75 max-w-210 mx-auto space-y-4 pt-12 pb-24 group-has-data-voice-orb-overlay/voice-chat:pb-52 sm:group-has-data-voice-orb-overlay/voice-chat:pb-68" }>
+            <div className={floatingChat ? "min-h-75-max-w-125 mx-auto space-y-4 pt-4 pb-0" : `min-h-75 ${CONTENT_COLUMN_WIDTH} space-y-4 pt-12 pb-24 group-has-data-voice-orb-overlay/voice-chat:pb-52 sm:group-has-data-voice-orb-overlay/voice-chat:pb-68`}>
               {(history?.hasOlder || history?.error) && (
                 <button type="button" className="block mx-auto text-secondary text-xs py-2 hover:text-primary"
                   disabled={history.loading} onClick={() => void pageHistory(history?.error ? "refresh" : "older")}>

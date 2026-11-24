@@ -1,6 +1,7 @@
 import type { ModeId } from "./modes";
 import type { PrRefInput, PrRevision } from "./pull-requests";
 import type { ConversationSettings } from "./run-settings";
+import type { ApprovalKind } from "./runs";
 
 export const ASSISTANT_AVATAR_COLORS = ["coral", "amber", "lime", "mint", "cyan", "blue", "violet", "rose"] as const;
 export const ASSISTANT_ROBOT_AVATARS = {
@@ -191,6 +192,24 @@ export interface AssistantAssignment {
     activity?: AssistantTaskActivity[];
     pullRequestReview?: AssistantPullRequestContext;
 }
+
+export interface AssistantTeamWorkItem {
+    id: string;
+    kind: "assignment" | "conversation";
+    assistantId: string;
+    runId: string | null;
+    title: string;
+    status: "needs_you" | "needs_attention" | "running" | "waiting_for_teammate" | "queued" | "completed" | "canceled";
+    pendingKinds: ApprovalKind[];
+    pullRequestKey: string | null;
+    updatedAt: Date;
+}
+
+export interface AssistantTeamWork {
+    team: Pick<AssistantTeam, "id" | "name">;
+    items: AssistantTeamWorkItem[];
+}
+
 export function canAccessAssistantAssignment(
     assistant: Pick<Assistant, "id" | "accountId" | "teamId">,
     task: Pick<AssistantAssignment, "accountId" | "teamId" | "toAssistantId">,
@@ -201,6 +220,7 @@ export function canAccessAssistantAssignment(
 export interface AssignAssistantTask {
     accountId: string;
     toAssistantId: string;
+    expectedTeamId?: string;
     taskKey: string;
     title: string;
     prompt: string;

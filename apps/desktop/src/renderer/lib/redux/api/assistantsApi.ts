@@ -1,5 +1,5 @@
 import { CHANNELS } from "@mains/contracts/channels";
-import type { Assistant, AssistantTeam, AssistantOverview, CreateAssistant, ChangeAssistantTeam, UpdateAssistantProfile, SaveAssistantMemory, AssistantMemory, AssistantAssignment, AssignAssistantTask, AssistantConversation, SendAssistantMessage, AssistantExecution, AssistantProfileSetupAction, AssistantPullRequestReview, ReviewPullRequestWithAssistant, SetAssistantPinned } from "@mains/contracts/assistants";
+import type { Assistant, AssistantTeam, AssistantTeamWork, AssistantOverview, CreateAssistant, ChangeAssistantTeam, UpdateAssistantProfile, SaveAssistantMemory, AssistantMemory, AssistantAssignment, AssignAssistantTask, AssistantConversation, SendAssistantMessage, AssistantExecution, AssistantProfileSetupAction, AssistantPullRequestReview, ReviewPullRequestWithAssistant, SetAssistantPinned } from "@mains/contracts/assistants";
 import type { PrRefInput } from "@mains/contracts/pull-requests";
 import { baseApi } from "./baseApi";
 export const assistantsApi = baseApi.injectEndpoints({
@@ -12,6 +12,10 @@ export const assistantsApi = baseApi.injectEndpoints({
             invalidatesTags: ["Assistants", "AssistantChats"],
         }),
         assistantOverview: b.query<AssistantOverview, string>({ query: accountId => ({ handler: CHANNELS.assistants.overview, args: [accountId] }), providesTags: ["Assistants"] }),
+        assistantTeamWork: b.query<AssistantTeamWork, { accountId: string; teamId: string }>({
+            query: ({ accountId, teamId }) => ({ handler: CHANNELS.assistants.teamWork, args: [accountId, teamId], timeoutMs: 10_000 }),
+            providesTags: ["AssistantTeamWork"], keepUnusedDataFor: 0,
+        }),
         createAssistantTeam: b.mutation<AssistantTeam, {
             accountId: string;
             name: string;
@@ -48,7 +52,7 @@ export const assistantsApi = baseApi.injectEndpoints({
         sendAssistantMessage: b.mutation<{
             runId: string;
         }, SendAssistantMessage>({ query: input => ({ handler: CHANNELS.assistants.send, args: [input] }), invalidatesTags: ["AssistantChats", "Assistants"] }),
-        assignAssistantTask: b.mutation<AssistantAssignment, AssignAssistantTask>({ query: input => ({ handler: CHANNELS.assistants.assign, args: [input] }), invalidatesTags: ["Assistants", "AssistantChats"] }),
+        assignAssistantTask: b.mutation<AssistantAssignment, AssignAssistantTask>({ query: input => ({ handler: CHANNELS.assistants.assign, args: [input] }), invalidatesTags: ["Assistants", "AssistantChats", "AssistantTeamWork"] }),
         reviewPullRequestWithAssistant: b.mutation<AssistantAssignment, ReviewPullRequestWithAssistant>({
             query: input => ({ handler: CHANNELS.assistants.reviewPullRequest, args: [input] }),
             invalidatesTags: ["Assistants", "AssistantChats"],
@@ -74,4 +78,4 @@ export const assistantsApi = baseApi.injectEndpoints({
     }),
 });
 export const { useSetupAssistantProfileMutation, useAssistantAssignmentQuery, usePrepareAssistantWelcomeMutation, useRespondAssistantWelcomeMutation, useAssistantOverviewQuery, useCreateAssistantTeamMutation, useCreateAssistantMutation, useChangeAssistantTeamMutation, useUpdateAssistantProfileMutation, useArchiveAssistantMutation, useSaveAssistantMemoryMutation, useRemoveAssistantMemoryMutation, useAssistantConversationsQuery, useSendAssistantMessageMutation, useAssignAssistantTaskMutation, useReconcileAssistantTaskMutation, useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation } = assistantsApi;
-export const { useReviewPullRequestWithAssistantMutation, useAssistantPullRequestReviewsQuery, useRemoveAssistantMutation, useSetAssistantPinnedMutation } = assistantsApi;
+export const { useReviewPullRequestWithAssistantMutation, useAssistantPullRequestReviewsQuery, useRemoveAssistantMutation, useSetAssistantPinnedMutation, useAssistantTeamWorkQuery } = assistantsApi;

@@ -11,6 +11,7 @@ import { assistantConversationOwner, visitAssistantConversation, replaceAssistan
 import { AssistantProfileForm } from "@/features/assistants/components/assistant-profile-form";
 import { AssistantInfoPanel } from "@/features/assistants/components/assistant-info-panel";
 import { AssistantChat } from "@/features/assistants/components/assistant-chat";
+import { AssistantTeamWork } from "@/features/assistants/components/assistant-team-work";
 import { AssistantRobotAvatar } from "@/features/assistants/components/assistant-robot-avatar";
 import { useAssistantUpdates } from "@/features/assistants/hooks/use-assistant-updates";
 import { usePreviewPanel } from "@/hooks/use-preview-panel";
@@ -22,13 +23,17 @@ import { composerOwnerKey } from "@/features/workspace/lib/ui-context";
 export default function AssistantsPage() {
   const backendId = useAppSelector(state => state.backends.activeBackendId ?? "local");
   const { data: account } = useGetAccountQuery();
-  return account ? <AssistantConversations key={`${backendId}:${account.id}`} accountId={account.id} backendId={backendId} /> : null;
+  const [params] = useSearchParams();
+  const teamId = params.get("team");
+  useAssistantUpdates(!!teamId);
+  if (!account) return null;
+  if (teamId) return <AssistantTeamWork key={JSON.stringify([backendId, account.id, teamId])} accountId={account.id} teamId={teamId} />;
+  return <AssistantConversations key={`${backendId}:${account.id}`} accountId={account.id} backendId={backendId} />;
 }
 
 function AssistantConversations({ accountId, backendId }: { accountId: string; backendId: string }) {
   const dispatch = useAppDispatch();
   const chatColumnRef = useRef<HTMLDivElement>(null);
-  useAssistantUpdates();
   const { currentData: overview, error, isLoading, isFetching, refetch } = useAssistantOverviewQuery(accountId);
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();

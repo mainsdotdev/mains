@@ -9,7 +9,7 @@ import { setRightPanelOpen, setSessionPanelOpen } from "@/lib/redux/slices/appSe
 
 export function usePreviewPanel() {
   const dispatch = useAppDispatch();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const { mode } = useModeConfig();
   const backendId = useAppSelector((state) => state.backends.activeBackendId);
   const workspaceId = useAppSelector((state) => state.workspace.activeWorkspaceId);
@@ -21,7 +21,8 @@ export function usePreviewPanel() {
     : !assistants && mode === "developer" && workspaceId ? workspaceBrowserExpansionKey(backendId, workspaceId) : composerKey;
   const group = useAppSelector((state) => state.preview.byOwner[ownerKey] ?? EMPTY_PREVIEW_GROUP);
   const activeTab = group.tabs.find((tab) => tab.id === group.activeTabId) ?? null;
-  const canOpen = (atlas || ready) && !shouldHideRightPanel(pathname);
+  const teamWork = assistants && !!new URLSearchParams(search).get("team");
+  const canOpen = (atlas || ready) && !teamWork && !shouldHideRightPanel(pathname);
   const isOpen = group.open && !!activeTab && canOpen;
   const reveal = useCallback(() => {
     dispatch(setRightPanelOpen(false));

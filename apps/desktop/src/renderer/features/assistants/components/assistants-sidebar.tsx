@@ -2,10 +2,10 @@ import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { Assistant } from "@mains/contracts/assistants";
 import { Button, Text, toast } from "@/components/ui";
-import { AssistantSteps, Info, Pin, PinFilled, Warning } from "@/components/ui/icons";
+import { AgentTeams, AssistantSteps, Info, Pin, PinFilled, Warning } from "@/components/ui/icons";
 import NewButton from "@/components/layout/sidebar/new-button";
 import SearchBar from "@/components/layout/sidebar/search-bar";
-import { SidebarGroupSection } from "@/components/layout/sidebar/sidebar-group-section";
+import { SidebarGroupSection, SIDEBAR_ACTION_ICON } from "@/components/layout/sidebar/sidebar-group-section";
 import { SidebarItemHoverCard } from "@/components/layout/sidebar/sidebar-item-hover-card";
 import { SidebarTopRows } from "@/components/layout/sidebar/sidebar-top-rows";
 import { useGetAccountQuery } from "@/lib/redux/api";
@@ -13,11 +13,13 @@ import { useAssistantOverviewQuery, useSetAssistantPinnedMutation } from "@/lib/
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setSidebarCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import { useIsMobile } from "@/lib/platform";
-import { assistantHref, assistantTeamGroupKey } from "../lib/assistant-navigation";
+import { assistantHref, assistantTeamGroupKey, assistantTeamWorkHref } from "../lib/assistant-navigation";
 import { AssistantMonogram } from "./assistant-monogram";
 import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantArchiveMenu } from "./assistant-archive-menu";
 import { assistantIdsWithPendingSetup, errorText, isAssistantWorking } from "../lib/assistant-ui";
+
+const SHOW_TEAM_ASSIGNMENTS_ACTION = false;
 
 export function AssistantsSidebar() {
   const backendId = useAppSelector(state => state.backends.activeBackendId);
@@ -38,16 +40,23 @@ export function AssistantsSidebar() {
   const matches = (mate: Assistant) => !query || `${mate.name} ${mate.description}`.toLocaleLowerCase().includes(query);
   const pendingSetup = assistantIdsWithPendingSetup(overview?.welcomes);
   const pinned: Array<Assistant & { pinnedAt: Date }> = [];
+  const matchingPinnedTeams = new Set<string>();
   const groupsByTeam = new Map<string | null, Assistant[]>();
   for (const assistant of overview?.assistants.slice().reverse() ?? []) {
     if (assistant.isArchived) continue;
     if (assistant.pinnedAt != null) {
-      if (matches(assistant)) pinned.push({ ...assistant, pinnedAt: assistant.pinnedAt });
+      if (matches(assistant)) {
+        pinned.push({ ...assistant, pinnedAt: assistant.pinnedAt });
+        if (SHOW_TEAM_ASSIGNMENTS_ACTION && assistant.teamId) matchingPinnedTeams.add(assistant.teamId);
+      }
       continue;
     }
     const members = groupsByTeam.get(assistant.teamId);
     if (members) members.push(assistant);
     else groupsByTeam.set(assistant.teamId, [assistant]);
+  }
+  for (const teamId of matchingPinnedTeams) {
+    if (!groupsByTeam.has(teamId)) groupsByTeam.set(teamId, []);
   }
   pinned.sort((a, b) => new Date(b.pinnedAt).getTime() - new Date(a.pinnedAt).getTime() || a.id.localeCompare(b.id));
   const showTeamHeadings = groupsByTeam.size > 1 || !groupsByTeam.has(null);
@@ -56,7 +65,7 @@ export function AssistantsSidebar() {
     teamId,
     label: teamId === null ? "No team" : teamNames.get(teamId) ?? "Unavailable team",
     members: members.filter(matches),
-  })).filter(group => group.members.length > 0);
+  })).filter(group => group.members.length > 0 || (group.teamId !== null && matchingPinnedTeams.has(group.teamId)));
   const changePin = async (assistant: Assistant) => {
     try { await setPinned({ accountId: assistant.accountId, id: assistant.id, pinned: assistant.pinnedAt == null }).unwrap(); }
     catch (error) { toast.error(errorText(error)); }
@@ -70,7 +79,7 @@ export function AssistantsSidebar() {
     <div className="flex h-full flex-col text-primary-900 dark:text-primary-100">
       <SidebarTopRows header={<Text as="h2" size="base" weight="medium" className="px-2">Mates</Text>}>
         <div inert={searchExpanded} className={`pr-9 transition-opacity duration-150 motion-reduce:transition-none ${searchExpanded ? "opacity-0" : "opacity-100"}`}>
-          <NewButton title="mate" icon={<AssistantSteps aria-hidden="true" className="size-3.5 shrink-0" />} onClick={() => { const next = new URLSearchParams(params); next.delete("tab"); next.set("new", "1"); open(`/assistants?${next}`); }} />
+          <NewButton title="mate" icon={<AssistantSteps aria-hidden="true" className="size-3.5 shrink-0" />} onClick={() => { const next = new URLSearchParams(params); next.delete("tab"); next.delete("team"); next.set("new", "1"); open(`/assistants?${next}`); }} />
         </div>
         <div className={`absolute inset-y-0 right-0 flex items-center justify-end transition-[width] duration-200 ease-out motion-reduce:transition-none ${searchExpanded ? "w-full" : "w-8"}`}>
           <SearchBar isExpanded={searchExpanded} searchQuery={searchQuery} searchLabel="Search mates" onToggle={() => setSearchExpanded(true)} onSearchChange={setSearchQuery} onClear={() => { setSearchQuery(""); setSearchExpanded(false); }} />
@@ -94,8 +103,13 @@ export function AssistantsSidebar() {
           return (
             <section key={groupKey} aria-label={label}>
               <SidebarGroupSection key={query ? "search" : "browse"} groupKey={query ? undefined : groupKey}
-                label={label} labelWeight="medium" count={members.length}>
-                <div className="space-y-1.5 pt-1">{rows}</div>
+                label={label} labelWeight="medium" count={members.length}
+                secondaryAction={SHOW_TEAM_ASSIGNMENTS_ACTION && teamId && teamNames.has(teamId) ? {
+                  label: `View assignments for ${label}`, icon: <AgentTeams aria-hidden="true" className={SIDEBAR_ACTION_ICON} />,
+                  fadeOnHover: true, current: params.get("team") === teamId,
+                  onClick: () => open(assistantTeamWorkHref(teamId)),
+                } : undefined}>
+                {!!rows.length && <div className="space-y-1.5 pt-1">{rows}</div>}
               </SidebarGroupSection>
             </section>
           );

@@ -3,6 +3,7 @@ import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setWorkspaceGroupExpanded } from "@/lib/redux/slices/appSettingsSlice";
 import { Button, Text, type SortableHandle } from "@/components/ui";
 import { ArrowUp, New } from "@/components/ui/icons";
+import { cn } from "@/lib/cn";
 
 /** Shared by the header's own glyph and any a caller supplies in its place. */
 export const SIDEBAR_ACTION_ICON =
@@ -58,6 +59,8 @@ export function SidebarGroupSection({
     onClick: (event: MouseEvent<HTMLElement>) => void;
     icon: ReactNode;
     menuOpen?: boolean;
+    fadeOnHover?: boolean;
+    current?: boolean;
   };
   /**
    * Makes the header the handle of a `SortableItem`: dragging it, or Alt+Arrow
@@ -86,6 +89,7 @@ export function SidebarGroupSection({
         ref={sortHandle?.ref}
         role="button"
         tabIndex={0}
+        aria-label={label}
         aria-expanded={expanded}
         aria-controls={contentId}
         onPointerDown={(event) => {
@@ -99,6 +103,7 @@ export function SidebarGroupSection({
           toggleExpanded();
         }}
         onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
           sortHandle?.onKeyDown?.(e);
           if (e.defaultPrevented) return;
           if (e.key === "Enter" || e.key === " ") {
@@ -142,8 +147,17 @@ export function SidebarGroupSection({
                 e.stopPropagation();
                 secondaryAction.onClick(e);
               }}
-              className={`${secondaryAction.menuOpen ? "flex" : "hidden group-hover/section:flex group-focus-within/section:flex"} items-center p-0.5 cursor-pointer rounded-md`}
+              className={cn(
+                "items-center rounded-md p-0.5 aria-current:bg-primary-950/8 dark:aria-current:bg-primary/10",
+                secondaryAction.menuOpen ? "flex" : secondaryAction.fadeOnHover ? [
+                  "pointer-events-none flex opacity-0 transition-opacity duration-200 motion-reduce:transition-none",
+                  "group-hover/section:pointer-events-auto group-hover/section:opacity-100",
+                  "group-focus-visible/section:pointer-events-auto group-focus-visible/section:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+                  "[@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+                ] : "hidden group-hover/section:flex group-focus-within/section:flex",
+              )}
               aria-label={secondaryAction.label}
+              aria-current={secondaryAction.current ? "page" : undefined}
               aria-haspopup={secondaryAction.menuOpen !== undefined ? "menu" : undefined}
               aria-expanded={secondaryAction.menuOpen}
             >

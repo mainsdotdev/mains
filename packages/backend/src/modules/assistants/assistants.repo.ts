@@ -114,6 +114,31 @@ export const assistantsRepo = {
             .orderBy(desc(runs.updatedAt), desc(runs.createdAt), desc(runs.id)).limit(100).all();
     },
     assignments(accountId: string) { return getDb().select(assignmentProjection).from(assistantAssignments).where(eq(assistantAssignments.accountId, accountId)).orderBy(sql`CASE WHEN status IN ('completed', 'failed', 'canceled') THEN 1 ELSE 0 END`, desc(assistantAssignments.createdAt), assistantAssignments.id).limit(200).all().map(assignment); },
+    teamWorkAssignments(accountId: string, teamId: string) {
+        return getDb().select({
+            id: assistantAssignments.id, title: assistantAssignments.title,
+            assistantId: assistantAssignments.toAssistantId, status: assistantAssignments.status,
+            runId: runs.id, updatedAt: assistantAssignments.updatedAt,
+            pullRequestKey: sql<string | null>`json_extract(${assistantAssignments.context}, '$.pullRequestReview.key')`,
+            hasPendingChild: sql<number>`CASE WHEN ${assistantAssignments.status} = 'running' THEN EXISTS (SELECT 1 FROM assistant_assignments child
+                WHERE child.parent_id = ${assistantAssignments.id} AND child.account_id = ${accountId}
+                AND child.team_id = ${teamId} AND child.status NOT IN ('completed', 'failed', 'canceled')) ELSE 0 END`,
+            hasQueuedInput: sql<number>`CASE WHEN ${assistantAssignments.status} = 'running' THEN EXISTS (SELECT 1 FROM assistant_messages message
+                WHERE message.target_run_id = ${assistantAssignments.workerRunId} AND message.kind IN ('request', 'followup', 'result')
+                AND message.status IN ('queued', 'dispatching')) ELSE 0 END`,
+        }).from(assistantAssignments)
+            .leftJoin(runs, and(eq(runs.id, assistantAssignments.workerRunId), eq(runs.accountId, accountId),
+                eq(runs.assistantId, assistantAssignments.toAssistantId), eq(runs.isArchived, false), ownedHere(runs.ownerBackendId)))
+            .where(and(eq(assistantAssignments.accountId, accountId), eq(assistantAssignments.teamId, teamId)))
+            .orderBy(desc(activeAssignment), desc(assistantAssignments.updatedAt), assistantAssignments.id).limit(100).all();
+    },
+    teamWorkConversations(accountId: string, teamId: string, runIds: string[]) {
+        if (!runIds.length) return [];
+        return getDb().select({ id: runs.id, assistantId: assistants.id, title: runs.title, updatedAt: runs.updatedAt })
+            .from(runs).innerJoin(assistants, and(eq(assistants.id, runs.assistantId), eq(assistants.accountId, accountId),
+                eq(assistants.teamId, teamId), eq(assistants.isArchived, false)))
+            .where(and(inArray(runs.id, runIds), eq(runs.accountId, accountId), eq(runs.isArchived, false), ownedHere(runs.ownerBackendId))).all();
+    },
     assignmentsForMate(mate: Pick<Assistant, "id" | "accountId" | "teamId">, taskId?: string, offset = 0) {
         // Match canAccessAssistantAssignment before applying the page limit.
         const scope = and(eq(assistantAssignments.accountId, mate.accountId), or(

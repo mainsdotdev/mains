@@ -20,6 +20,7 @@ import { execFileSync } from "node:child_process";
 import WebSocket from "ws";
 import { buildSubprotocols } from "@mains/contracts/ws-protocol";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { PendingApproval } from "@mains/contracts/runs";
 import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_PINNING_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY, type MobileMateChange, type MobileMateDirectory, type MobileMateRoutines } from "@mains/contracts/assistants";
 import { getDb } from "./db/client";
 import { providers as providerTable } from "./db/schema";
@@ -189,7 +190,34 @@ describe("backend host acquisition and shutdown", () => {
         ]) },
       });
       expect(await invoke(CHANNELS.assistants.mobileAssignment, [accountId, sent.data.runId, task.id])).toMatchObject({ success: false });
+      const queued = await assistantWork.assign({ accountId, toAssistantId: mateId, taskKey: "queued-work", title: "Next release", prompt: "Review the next release" });
+      const teamWorkArgs = [accountId, createdTeam.data.id];
+      const question = assistantWork.tool(task.workerRunId!, "AskAssistantQuestion", { question: "Which release should I review?" });
+      const request = await vi.waitFor(async () => {
+        const { data } = await invoke(CHANNELS.runs.listPendingApprovals, [task.workerRunId]) as { data: PendingApproval[] };
+        expect(data).toHaveLength(1);
+        return data[0];
+      });
+      const waiting = await invokeHandler(CHANNELS.assistants.teamWork, teamWorkArgs);
+      expect(waiting).toMatchObject({ success: true, data: { items: expect.arrayContaining([
+        expect.objectContaining({ id: task.id, status: "needs_you", pendingKinds: ["ask_user"], runId: task.workerRunId }),
+        expect.objectContaining({ id: queued.id, status: "queued", runId: null }),
+      ]) } });
+      expect(JSON.stringify(waiting)).not.toContain(request.approvalToken);
+      expect(JSON.stringify(waiting)).not.toContain(request.question);
+      expect(JSON.stringify(waiting)).not.toContain(`"id":"${task.workerRunId}"`);
+      expect(await invoke(CHANNELS.assistants.teamWork, teamWorkArgs)).toMatchObject({ success: false });
+      expect(await invoke(CHANNELS.runs.toolApprovalResponse, [{ requestId: request.requestId, approvalToken: request.approvalToken,
+        approved: true, answer: "November release" }], "answer-team-work-question")).toMatchObject({ success: true });
+      await expect(question).resolves.toMatchObject({ status: "answered", answer: "November release" });
+      expect(await invokeHandler(CHANNELS.assistants.teamWork, teamWorkArgs)).toMatchObject({ success: true, data: {
+        items: expect.arrayContaining([expect.objectContaining({ id: task.id, status: "running", pendingKinds: [] })]),
+      } });
+      await assistantWork.cancel(accountId, queued.id);
       await assistantWork.report(task.workerRunId!, { assignmentId: task.id, status: "completed", result: "Sample checked", evidence: ["Checked the fixture repository"] });
+      expect(await invokeHandler(CHANNELS.assistants.teamWork, teamWorkArgs)).toMatchObject({ success: true, data: {
+        items: expect.arrayContaining([expect.objectContaining({ id: task.id, status: "completed" })]),
+      } });
       expect(await invoke(CHANNELS.assistants.mobileAssignment, [accountId, runId, task.id])).toMatchObject({
         success: true, data: { workerRunId: task.workerRunId, result: "Sample checked", status: "completed" },
       });
@@ -198,6 +226,7 @@ describe("backend host acquisition and shutdown", () => {
       expect(await invoke(CHANNELS.backend.describe, [])).toMatchObject({ data: { capabilities: expect.arrayContaining([MOBILE_MATE_INFO_CAPABILITY]) } });
       expect(await invoke(CHANNELS.pulse.getAll, [])).toMatchObject({ success: false });
       const team = assistantsService.createTeam({ accountId, name: "Release team" });
+      expect(await invokeHandler(CHANNELS.assistants.teamWork, [accountId, team.id])).toMatchObject({ success: true, data: { items: [] } });
       const reviewer = await assistantsService.create({ ...input, ...profile, name: "Reviewer", teamId: team.id, profileSetup: false });
       const teammate = await assistantsService.create({ ...input, ...profile, name: "Teammate", teamId: team.id, profileSetup: false });
       const manage = (id: string, change: MobileMateChange, key: string) =>

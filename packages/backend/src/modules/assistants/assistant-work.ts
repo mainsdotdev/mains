@@ -190,8 +190,9 @@ export const assistantWork = {
     },
     async assign(input: unknown, requestingRunId?: string, assertCurrent: () => void = () => { }, source?: AssignmentSource): Promise<AssistantAssignment> {
         const value = object(input);
-        onlyKeys(value, ["accountId", "toAssistantId", "taskKey", "title", "prompt", "execution"]);
+        onlyKeys(value, ["accountId", "toAssistantId", "expectedTeamId", "taskKey", "title", "prompt", "execution"]);
         const accountId = text(value.accountId, "Account"), target = assistantsService.requireForWork(text(value.toAssistantId, "Assistant"), accountId);
+        const expectedTeamId = value.expectedTeamId === undefined ? undefined : text(value.expectedTeamId, "Team");
         const taskKey = text(value.taskKey, "Task key", 200), title = text(value.title, "Title", 200), prompt = text(value.prompt, "Task", 24000);
         const mention = source?.kind === "mention" ? source : undefined;
         const caller = requestingRunId ? await requester(requestingRunId, !!mention) : null;
@@ -206,12 +207,16 @@ export const assistantWork = {
         const dedupeKey = review ? reviewDedupeKey(target.id, review.key, review.revision) : JSON.stringify([requestingRunId ?? "user", target.id, taskKey]);
         function existingAssignment() {
             const existing = assistantsRepo.byKey(accountId, dedupeKey);
+            if (existing && expectedTeamId !== undefined && existing.teamId !== expectedTeamId)
+                throw new Error("Assistant team changed. Retry this assignment");
             if (existing && !review && (existing.title !== title || existing.prompt !== prompt || JSON.stringify(existing.execution) !== JSON.stringify(execution(requestedExecution))))
                 throw new Error("Use a new task key for different work");
             return existing;
         }
         const existing = existingAssignment();
         if (existing) return existing;
+        if (expectedTeamId !== undefined && target.teamId !== expectedTeamId)
+            throw new Error("Assistant team changed. Retry this assignment");
         const taskExecution = await assistantsService.execution(accountId, requestedExecution);
         assertCurrent();
         const concurrent = existingAssignment();

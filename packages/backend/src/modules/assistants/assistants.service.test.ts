@@ -925,6 +925,17 @@ describe("assistant profiles and shared knowledge", () => {
     it("classifies assistant tables and identity as local in Bridge", () => { expect(() => auditBridgeSchema()).not.toThrow(); });
 });
 describe("durable assistant delegation", () => {
+    it("only admits a new team assignment while the target belongs to the selected team", async () => {
+        const mate = await makeAssistant("Reviewer");
+        const otherTeam = assistantsService.createTeam({ accountId: mate.accountId, name: "Other team" });
+        const task = { accountId: mate.accountId, toAssistantId: mate.id, taskKey: "team-assignment", title: "Review release", prompt: "Check the build." };
+        await expect(assistantWork.assign({ ...task, expectedTeamId: otherTeam.id })).rejects.toThrow("Assistant team changed");
+        expect(assistantsRepo.assignments(mate.accountId)).toEqual([]);
+        const assigned = await assistantWork.assign({ ...task, expectedTeamId: teamId });
+        expect(assigned.teamId).toBe(teamId);
+        await expect(assistantWork.assign({ ...task, expectedTeamId: teamId })).resolves.toMatchObject({ id: assigned.id });
+    });
+
     async function parentAndWorker(): Promise<{
         parent: Assistant;
         worker: Assistant;

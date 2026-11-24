@@ -9,6 +9,7 @@ import { object, onlyKeys, text } from "./assistants.validation";
 import { emit } from "../../ipc-kit/event-bus";
 import type { IpcInvokeContext } from "../../ipc-kit";
 import { assistantsMobile } from "./assistants-mobile";
+import { readAssistantTeamWork } from "./assistant-team-work";
 
 function handleWithContext<Args extends unknown[], T>(fn: (ctx: IpcInvokeContext, ...args: Args) => T | Promise<T>) {
     const invoke = handle(fn);
@@ -28,6 +29,7 @@ export function registerAssistantsIpc() {
     }));
     ipcMain.handle(CHANNELS.assistants.assignment, handle((accountId: string, id: string) => assistantsService.assignment(accountId, id)));
     ipcMain.handle(CHANNELS.assistants.overview, handle((accountId: string) => assistantsService.overview(accountId)));
+    ipcMain.handle(CHANNELS.assistants.teamWork, handle(readAssistantTeamWork));
     ipcMain.handle(CHANNELS.assistants.createTeam, handleWithContext((ctx, payload: unknown) => changed(async () => {
         if (ctx?.deviceId) await assistantsMobile.assertAccount(text(object(payload).accountId, "Account"));
         const team = assistantsService.createTeam(payload);

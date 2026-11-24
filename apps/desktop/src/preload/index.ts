@@ -113,6 +113,7 @@ const api = {
     setupProfile: (accountId: string, id: string, input: import("@mains/contracts/assistants").AssistantProfileSetupAction) => ipcRenderer.invoke(CHANNELS.assistants.setupProfile, accountId, id, input),
     respondWelcome: (accountId: string, id: string, answer: string | null, execution?: import("@mains/contracts/assistants").AssistantExecution) => ipcRenderer.invoke(CHANNELS.assistants.respondWelcome, accountId, id, answer, execution),
     overview: (accountId: string): Promise<ServiceResponse<import("@mains/contracts/assistants").AssistantOverview>> => ipcRenderer.invoke(CHANNELS.assistants.overview, accountId),
+    teamWork: (accountId: string, teamId: string): Promise<ServiceResponse<import("@mains/contracts/assistants").AssistantTeamWork>> => ipcRenderer.invoke(CHANNELS.assistants.teamWork, accountId, teamId),
     create: (payload: import("@mains/contracts/assistants").CreateAssistant) => ipcRenderer.invoke(CHANNELS.assistants.create, payload),
     createTeam: (payload: { accountId: string; name: string }) => ipcRenderer.invoke(CHANNELS.assistants.createTeam, payload),
     changeTeam: (payload: import("@mains/contracts/assistants").ChangeAssistantTeam) => ipcRenderer.invoke(CHANNELS.assistants.changeTeam, payload),

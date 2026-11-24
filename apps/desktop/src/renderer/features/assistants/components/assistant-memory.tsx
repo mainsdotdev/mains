@@ -58,7 +58,9 @@ export function AssistantMemoryPanel({ assistant, memories }: {
     <div>
       <h2 className="text-lg font-medium">{assistant.teamId ? "What the team knows" : `What ${assistant.name} remembers`}</h2>
       {assistant.teamId && <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-300">Shared decisions and this mate’s private notes, with their sources.</p>}
-      <Button variant="primary" className="mt-4 inline-flex whitespace-nowrap" onClick={() => open(null)}>Add memory</Button>
+      <div className="mt-4 flex justify-end">
+        <Button variant="primary" className="whitespace-nowrap" onClick={() => open(null)}>Add memory</Button>
+      </div>
     </div>
     {(creating || editing) && <form onSubmit={submit} className="glass-card space-y-3.5 rounded-2xl p-3.5">
       <label className="flex flex-col gap-1.5">

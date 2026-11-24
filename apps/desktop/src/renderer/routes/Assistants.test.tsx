@@ -5,7 +5,8 @@ import { Provider } from "react-redux";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Assistant, AssistantConversation, AssistantTeam, AssistantWelcome, SetAssistantPinned, UpdateAssistantProfile } from "@mains/contracts/assistants";
+import type { Assistant, AssistantAssignment, AssistantConversation, AssistantTeam, AssistantTeamWork, AssistantWelcome, SetAssistantPinned, UpdateAssistantProfile } from "@mains/contracts/assistants";
+import type { ToolApprovalRequest } from "@mains/contracts/runs";
 import type { Pulse } from "@/lib/redux/api/pulseApi";
 import type { ModelInfo } from "@/lib/redux/api/providersApi";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
@@ -27,7 +28,12 @@ const archiveMate = vi.hoisted(() => vi.fn());
 const setPinned = vi.hoisted(() => vi.fn());
 const removeMate = vi.hoisted(() => vi.fn());
 const updateProfile = vi.hoisted(() => vi.fn());
+const readTeamWork = vi.hoisted(() => vi.fn());
+const readAssignment = vi.hoisted(() => vi.fn());
+const assignTask = vi.hoisted(() => vi.fn());
+const pendingApprovals = vi.hoisted(() => [] as ToolApprovalRequest[]);
 const welcomes = vi.hoisted(() => [] as AssistantWelcome[]);
+const assignments = vi.hoisted(() => [] as AssistantAssignment[]);
 vi.mock("@/lib/redux/api", () => ({
   useGetAccountQuery: () => ({ data: { id: "account" } }),
   useGetProvidersQuery: () => ({ data: [{ id: "codex", isEnabled: true }] }),
@@ -35,7 +41,10 @@ vi.mock("@/lib/redux/api", () => ({
   useGetProviderModelsQuery: () => ({ currentData: mocks.models, isFetching: false }),
 }));
 vi.mock("@/lib/redux/api/assistantsApi", () => ({
-  useAssistantOverviewQuery: () => ({ currentData: { assistants: mocks.assistants, teams: mocks.teams, assignments: [], memories: [], welcomes }, refetch: vi.fn() }),
+  useAssistantOverviewQuery: () => ({ currentData: { assistants: mocks.assistants, teams: mocks.teams, assignments, memories: [], welcomes }, refetch: vi.fn() }),
+  useAssistantTeamWorkQuery: readTeamWork,
+  useAssistantAssignmentQuery: readAssignment,
+  useAssignAssistantTaskMutation: () => [assignTask, {}],
   useAssistantConversationsQuery: ({ id }: { id: string }) => ({ currentData: mocks.loadingChats ? undefined : id === "website" ? mocks.websiteChats : mocks.chats, error: mocks.chatsError, refetch: mocks.refetchChats }),
   useArchiveAssistantMutation: () => [archiveMate, {}],
   useSetAssistantPinnedMutation: () => [setPinned, {}],
@@ -49,6 +58,9 @@ vi.mock("@/lib/redux/api/pulseApi", () => ({
   useDeletePulseMutation: () => [vi.fn(), {}], useTogglePulseMutation: () => [vi.fn(), {}], useRunPulseNowMutation: () => [vi.fn(), {}],
 }));
 vi.mock("@/features/assistants/hooks/use-assistant-updates", () => ({ useAssistantUpdates() {} }));
+vi.mock("@/features/workspace/hooks/use-tool-approval", () => ({
+  useToolApproval: (runs: { id: string }[]) => ({ pendingApprovals: pendingApprovals.filter(item => runs.some(run => run.id === item.runId)) }),
+}));
 vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => ({ mode: "developer" }) }));
 vi.mock("@/features/assistants/components/assistant-chat", () => ({
   AssistantChat: ({ assistant, selectedRunId, animateWelcome, onSelectRun, onOpenDetails }: {
@@ -70,7 +82,6 @@ vi.mock("@/features/assistants/components/assistant-chat", () => ({
   },
 }));
 vi.mock("@/features/assistants/components/assistant-memory", () => ({ AssistantMemoryPanel: () => null }));
-vi.mock("@/features/assistants/components/assistant-assignments", () => ({ AssistantAssignments: () => null }));
 vi.mock("@/hooks/use-suppress-browser-view", () => ({ useSuppressBrowserView() {} }));
 vi.mock("@/lib/platform", () => ({ useIsMobile: () => false, useCapabilities: () => ({ windowChrome: false }) }));
 
@@ -92,10 +103,15 @@ function setup(initial = "/assistants?assistant=release&run=first", openPreview?
 beforeEach(() => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
   createMate.mockReset();
+  readTeamWork.mockReset().mockReturnValue({});
+  readAssignment.mockReset().mockReturnValue({});
+  assignTask.mockReset();
+  pendingApprovals.length = 0;
   archiveMate.mockReset().mockReturnValue({ unwrap: async () => undefined });
   setPinned.mockReset().mockReturnValue({ unwrap: async () => undefined });
   removeMate.mockReset().mockReturnValue({ unwrap: async () => undefined });
   welcomes.length = 0;
+  assignments.length = 0;
   createTeam.mockReset().mockImplementation((input: Pick<AssistantTeam, "accountId" | "name">) =>
     ({ unwrap: () => Promise.resolve({ ...input, id: "new-team", createdAt: new Date(0) }) }));
   updateProfile.mockReset().mockImplementation(({ id, profile, teamChange, modelChange }: UpdateAssistantProfile) => ({
@@ -598,6 +614,27 @@ describe("assistant profile and conversation", () => {
     expect(screen.queryByRole("complementary", { name: "About Release" })).toBeNull();
   });
 
+  it("lists and counts only assignments addressed to the selected Mate", async () => {
+    const own: AssistantAssignment = {
+      id: "release-review", accountId: "account", teamId: "team", toAssistantId: "release",
+      fromAssistantId: null, fromRunId: null, parentId: null, taskKey: "review", title: "Review the release",
+      prompt: "Check the changelog.", status: "running", execution: { mode: "work" }, workerRunId: "first",
+      result: null, evidence: [], error: null, createdAt: new Date(0), updatedAt: new Date(0),
+    };
+    assignments.push(own,
+      { ...own, id: "website-task", toAssistantId: "website", title: "Update the website", status: "queued" },
+      { ...own, id: "old-review", teamId: "website-team", title: "Review the previous release", status: "completed" },
+    );
+    setup("/assistants?assistant=release&run=first&tab=tasks");
+    const panel = within(await screen.findByRole("complementary", { name: "About Release" }));
+
+    expect(panel.getByRole("tab", { name: "Assignments · 1" })).toBeTruthy();
+    const list = within(panel.getByRole("list", { name: "Assignment list" }));
+    expect(list.getByRole("article", { name: own.title })).toBeTruthy();
+    expect(list.getByRole("article", { name: "Review the previous release" })).toBeTruthy();
+    expect(list.queryByRole("article", { name: "Update the website" })).toBeNull();
+  });
+
   it.each([
     browserPreview,
     { kind: "document", id: "report", doc: { path: "/tmp/report.pdf", fileName: "Report.pdf", docType: "pdf" } },
@@ -637,8 +674,9 @@ describe("assistant profile and conversation", () => {
     setup();
 
     const sidebar = within(screen.getByRole("navigation", { name: "Mates" }));
-    expect(sidebar.getAllByRole("button", { expanded: true }).map(button => button.textContent)).toEqual(["Mains", "No team", "Website team"]);
+    expect(sidebar.getAllByRole("button", { expanded: true }).map(button => button.getAttribute("aria-label"))).toEqual(["Mains", "No team", "Website team"]);
     const mains = within(sidebar.getByRole("region", { name: "Mains" }));
+    expect(mains.queryByRole("button", { name: "View assignments for Mains" })).toBeNull();
     expect(mains.getAllByRole("button", { name: /^About / }).map(button => button.getAttribute("aria-label")))
       .toEqual(["About PR reviewer", "About Release"]);
     expect(within(sidebar.getByRole("region", { name: "No team" })).getByRole("button", { name: "About Travel planner" })).toBeTruthy();
@@ -660,6 +698,69 @@ describe("assistant profile and conversation", () => {
     expect(websiteTeam.queryByRole("button", { name: "About Website" })).toBeNull();
     fireEvent.keyDown(websiteTeam.getByRole("button", { name: "Website team", expanded: false }), { key: "Enter" });
     expect(websiteTeam.getByRole("button", { name: "About Website" })).toBeTruthy();
+  });
+
+  it("opens Team assignments and links a pending request to its exact Mate conversation", () => {
+    const team: AssistantTeamWork = { team: { id: "team", name: "Mains" }, items: [
+      { id: "review", kind: "assignment", assistantId: "release", runId: "second", title: "Release review",
+        status: "needs_you", pendingKinds: ["ask_user"], pullRequestKey: "github:mains/app#184", updatedAt: new Date() },
+      { id: "other", kind: "conversation", assistantId: "website", runId: "website-first", title: "Website announcement",
+        status: "running", pendingKinds: [], pullRequestKey: null, updatedAt: new Date() },
+    ] };
+    pendingApprovals.push(
+      { requestId: "secret", runId: "second", kind: "ask_user", toolName: "AskAssistantQuestion", question: "Enter a confidential value", isSecret: true, timestamp: 1 },
+      { requestId: "review-question", runId: "second", kind: "ask_user", toolName: "AskAssistantQuestion", question: "Should I review iOS too?", timestamp: 2 },
+    );
+    readTeamWork.mockReturnValue({ currentData: team });
+    setup("/assistants?team=team");
+
+    expect(screen.getByTestId("location").textContent).toBe("?team=team");
+    expect(screen.getByRole("heading", { name: "Team assignments" })).toBeTruthy();
+    expect(readTeamWork).toHaveBeenCalledWith({ accountId: "account", teamId: "team" }, expect.anything());
+    const waiting = within(screen.getByRole("region", { name: "Needs you" }));
+    const row = waiting.getByRole("button", { name: /Release review.*Question/ });
+    expect(within(row).getByText("mains/app#184")).toBeTruthy();
+    fireEvent.click(row);
+    const details = within(screen.getByRole("complementary", { name: "Assignment details" }));
+    expect(details.getByText("Should I review iOS too?")).toBeTruthy();
+    expect(details.queryByText("Enter a confidential value")).toBeNull();
+    expect(screen.getByTestId("location").textContent).toBe("?team=team");
+    fireEvent.click(details.getByRole("button", { name: "Open chat" }));
+    expect(screen.getByTestId("conversation").textContent).toBe("second");
+  });
+
+  it("opens assignment details for work without a dispatched conversation", () => {
+    readTeamWork.mockReturnValue({ currentData: { team: { id: "team", name: "Mains" }, items: [
+      { id: "queued-task", kind: "assignment", assistantId: "release", runId: null, title: "Draft release notes",
+        status: "queued", pendingKinds: [], pullRequestKey: null, updatedAt: new Date() },
+    ] } satisfies AssistantTeamWork });
+    setup("/assistants?team=team");
+    fireEvent.click(screen.getByRole("button", { name: /Draft release notes/ }));
+    const details = within(screen.getByRole("complementary", { name: "Assignment details" }));
+    expect(details.queryByRole("button", { name: "Open chat" })).toBeNull();
+    expect(readAssignment).toHaveBeenCalledWith({ accountId: "account", id: "queued-task" }, { skip: false });
+    expect(screen.queryByTestId("conversation")).toBeNull();
+  });
+
+  it("assigns work to a selected teammate on the team page", async () => {
+    readTeamWork.mockReturnValue({ currentData: { team: { id: "team", name: "Mains" }, items: [] } satisfies AssistantTeamWork });
+    assignTask.mockReturnValue({ unwrap: async () => ({
+      id: "release-notes", toAssistantId: "website", title: "Draft release notes", updatedAt: new Date(),
+    }) });
+    setup("/assistants?team=team");
+    fireEvent.click(screen.getByRole("button", { name: "New assignment" }));
+    const form = within(screen.getByRole("form", { name: "New assignment" }));
+    expect(form.getByRole<HTMLButtonElement>("button", { name: "Assign task" }).disabled).toBe(true);
+    fireEvent.click(form.getByRole("button", { name: "Assign to" }));
+    fireEvent.click(screen.getByRole("option", { name: "Website" }));
+    fireEvent.change(form.getByLabelText("Assignment title"), { target: { value: "Draft release notes" } });
+    fireEvent.change(form.getByLabelText("Scope and completion criteria"), { target: { value: "Summarize the merged PRs." } });
+    fireEvent.click(form.getByRole("button", { name: "Assign task" }));
+
+    const details = within(await screen.findByRole("complementary", { name: "Assignment details" }));
+    expect(details.getByRole("heading", { name: "Draft release notes" })).toBeTruthy();
+    expect(assignTask).toHaveBeenCalledWith(expect.objectContaining({ accountId: "account", toAssistantId: "website",
+      expectedTeamId: "team", title: "Draft release notes", prompt: "Summarize the merged PRs.", execution: { mode: "work" } }));
   });
 
   it("filters only the assistant list without switching the current chat", async () => {

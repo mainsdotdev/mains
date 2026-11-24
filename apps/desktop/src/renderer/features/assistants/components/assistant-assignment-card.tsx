@@ -28,12 +28,8 @@ export function AssistantAssignmentCard({ task, assignee, openAssistant, initial
   const title = assignmentDisplayTitle(task.title, task.taskKey);
   const assigneeName = assignee?.name ?? "Mate";
   const review = pullRequestReviewPresentation(task);
-  const result = review?.result ?? task.result;
-  const evidence = review?.evidence ?? task.evidence;
   const brief = review ? review.focus : showBrief ? task.prompt : "";
-  const preview = plainActivityText(result || brief).replace(/\s+/g, " ");
-  const canCancel = !["completed", "failed", "canceled"].includes(task.status);
-  const canCheckDelivery = task.status === "uncertain" || (task.status === "completed" && !!task.error);
+  const preview = plainActivityText((review?.result ?? task.result) || brief).replace(/\s+/g, " ");
 
   return (
     <article aria-labelledby={titleId} className="glass-card min-w-0 rounded-2xl">
@@ -62,30 +58,8 @@ export function AssistantAssignmentCard({ task, assignee, openAssistant, initial
         className={cn(disclosureClassName, expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
         <div className="min-h-0 overflow-hidden">
           {disclosure !== "unopened" && (
-            <div className="space-y-2.5 px-2.5 pb-2.5 pt-0.5">
-              {!review && showBrief && <AssistantCardSection title="Task brief">
-                <p className="whitespace-pre-wrap break-words text-sm leading-5">{task.prompt}</p>
-              </AssistantCardSection>}
-              {(result || evidence.length > 0) && (
-                <AssistantCardSection title="Report">
-                  {result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{result}</AgentMarkdown>}
-                  {!!evidence.length && <ul aria-label="Task evidence" className={cn("text-xs text-primary-600 dark:text-primary-400", review ? "flex flex-wrap gap-x-3 gap-y-1" : "space-y-0.5")}>
-                    {evidence.map((entry, index) => <li key={index} className="break-words">{entry}</li>)}
-                  </ul>}
-                </AssistantCardSection>
-              )}
-              {review?.focus && <AssistantCardSection title="Review focus">
-                <p className="whitespace-pre-wrap break-words text-sm leading-5">{review.focus}</p>
-              </AssistantCardSection>}
-              {(task.error || task.status === "blocked") && (
-                <AssistantCardSection title="Status details">
-                  {task.error && <p className="break-words text-sm leading-5">{errorText(task.error)}</p>}
-                  {task.status === "blocked" && <AssignmentFollowup task={task} />}
-                </AssistantCardSection>
-              )}
-              {(task.workerRunId || canCheckDelivery || canCancel) && (
-                <AssignmentActions task={task} openAssistant={openAssistant} canCheckDelivery={canCheckDelivery} canCancel={canCancel} />
-              )}
+            <div className="px-2.5 pb-2.5 pt-0.5">
+              <AssistantAssignmentDetails task={task} openAssistant={openAssistant} showBrief={showBrief} />
             </div>
           )}
         </div>
@@ -94,9 +68,47 @@ export function AssistantAssignmentCard({ task, assignee, openAssistant, initial
   );
 }
 
+export function AssistantAssignmentDetails({ task, openAssistant, showBrief = true }: {
+  task: AssistantAssignment;
+  openAssistant?(id: string, runId: string): void;
+  showBrief?: boolean;
+}) {
+  const review = pullRequestReviewPresentation(task);
+  const result = review?.result ?? task.result;
+  const evidence = review?.evidence ?? task.evidence;
+  const canCancel = !["completed", "failed", "canceled"].includes(task.status);
+  const canCheckDelivery = task.status === "uncertain" || (task.status === "completed" && !!task.error);
+
+  return <div className="min-w-0 space-y-2.5">
+    {!review && showBrief && <AssistantCardSection title="Task brief">
+      <p className="whitespace-pre-wrap break-words text-sm leading-5">{task.prompt}</p>
+    </AssistantCardSection>}
+    {(result || evidence.length > 0) && (
+      <AssistantCardSection title="Report">
+        {result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{result}</AgentMarkdown>}
+        {!!evidence.length && <ul aria-label="Task evidence" className={cn("text-xs text-primary-600 dark:text-primary-400", review ? "flex flex-wrap gap-x-3 gap-y-1" : "space-y-0.5")}>
+          {evidence.map((entry, index) => <li key={index} className="break-words">{entry}</li>)}
+        </ul>}
+      </AssistantCardSection>
+    )}
+    {review?.focus && <AssistantCardSection title="Review focus">
+      <p className="whitespace-pre-wrap break-words text-sm leading-5">{review.focus}</p>
+    </AssistantCardSection>}
+    {(task.error || task.status === "blocked") && (
+      <AssistantCardSection title="Status details">
+        {task.error && <p className="break-words text-sm leading-5">{errorText(task.error)}</p>}
+        {task.status === "blocked" && <AssignmentFollowup task={task} />}
+      </AssistantCardSection>
+    )}
+    {(task.workerRunId && openAssistant || canCheckDelivery || canCancel) && (
+      <AssignmentActions task={task} openAssistant={openAssistant} canCheckDelivery={canCheckDelivery} canCancel={canCancel} />
+    )}
+  </div>;
+}
+
 function AssignmentActions({ task, openAssistant, canCheckDelivery, canCancel }: {
   task: AssistantAssignment;
-  openAssistant(id: string, runId: string): void;
+  openAssistant?(id: string, runId: string): void;
   canCheckDelivery: boolean;
   canCancel: boolean;
 }) {
@@ -119,7 +131,7 @@ function AssignmentActions({ task, openAssistant, canCheckDelivery, canCancel }:
           onClick={() => run(cancel({ accountId: task.accountId, id: task.id }).unwrap())}>Cancel task</Button>}
         {canCheckDelivery && <Button variant="primary" disabled={busy}
           onClick={() => run(reconcile({ accountId: task.accountId, id: task.id }).unwrap())}>Check delivery</Button>}
-        {workerRunId && <Button variant="secondary" onClick={() => openAssistant(task.toAssistantId, workerRunId)}>Open chat</Button>}
+        {workerRunId && openAssistant && <Button variant="secondary" onClick={() => openAssistant(task.toAssistantId, workerRunId)}>Open chat</Button>}
       </div>
     </div>
   );

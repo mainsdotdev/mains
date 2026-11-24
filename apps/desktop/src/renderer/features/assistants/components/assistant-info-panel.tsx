@@ -1,5 +1,5 @@
 import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent } from "react";
-import { canAccessAssistantAssignment, isAssistantRobotShape, type Assistant, type AssistantConversation, type AssistantOverview, type AssistantProfile, type AssistantTeam } from "@mains/contracts/assistants";
+import { isAssistantRobotShape, type Assistant, type AssistantConversation, type AssistantOverview, type AssistantProfile, type AssistantTeam } from "@mains/contracts/assistants";
 import { Button, Input, Label, Select, SegmentedTabs, Textarea } from "@/components/ui";
 import { Close } from "@/components/ui/icons";
 import { AgentMarkdown } from "@/components/agent-markdown";
@@ -236,7 +236,7 @@ export function AssistantInfoPanel({ assistant, overview, avatarState, chats, se
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => { if (isOpen && isVisible) closeRef.current?.focus({ preventScroll: true }); }, [isOpen, isVisible]);
-  const tasks = overview.assignments.filter(task => canAccessAssistantAssignment(assistant, task));
+  const tasks = overview.assignments.filter(task => task.accountId === assistant.accountId && task.toAssistantId === assistant.id);
   const activeTasks = tasks.filter(task => !["completed", "failed", "canceled"].includes(task.status)).length;
   if (!isVisible) return null;
   // Size the canvas against the route, so clipping the opening panel never reflows its text.
