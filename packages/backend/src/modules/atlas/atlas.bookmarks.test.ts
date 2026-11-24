@@ -13,12 +13,12 @@ import { atlasMobile } from "./atlas.mobile";
 import { appSettingsService } from "../appSettings";
 import { atlasBookmarks } from "./atlas.bookmarks";
 import { bookmarkUrl, extractBookmarkMetadata, fetchBookmarkResource } from "./atlas.bookmark-metadata";
-import { assertPublicHttpUrl } from "../imageProxy";
+import { fetchPublicHttpUrl } from "../imageProxy";
 
 const ai = vi.hoisted(() => ({ generate: vi.fn(), models: vi.fn(async () => [{ id: "cheap", displayName: "Small model" }]) }));
 let db: DatabaseInstance, cleanup: () => void, restore: () => void, directory: string;
 vi.mock("../../db/client", () => ({ getDb: () => db }));
-vi.mock("../imageProxy", async (original) => ({ ...await original<typeof import("../imageProxy")>(), assertPublicHttpUrl: vi.fn(async () => {}) }));
+vi.mock("../imageProxy", async (original) => ({ ...await original<typeof import("../imageProxy")>(), fetchPublicHttpUrl: vi.fn((url: string, options: RequestInit) => fetch(url, options)) }));
 vi.mock("../providers", () => ({ providersService: { getById: vi.fn(async (id: string) => ({ id, isEnabled: true })) } }));
 vi.mock("../providers/adapters/adapter.factory", () => ({ createWorkAdapter: () => ({ generateText: ai.generate, listModels: ai.models }) }));
 const page = `<html><head><meta content="A &amp; B" property="og:title"><meta property="og:description" content="Useful React documentation"><meta property="og:image" content="/cover.png"></head><body><article>React performance and rendering</article><script>do not index scripts</script></body></html>`;
@@ -117,7 +117,7 @@ describe("Atlas bookmarks", () => {
     try {
       await expect(atlasMobile.readImage({ accountId: "foreign", reference: { itemId: item.id } })).rejects.toThrow("not found");
       expect(fetch).not.toHaveBeenCalled();
-      vi.mocked(assertPublicHttpUrl).mockRejectedValueOnce(new Error("Blocked private image destination"));
+      vi.mocked(fetchPublicHttpUrl).mockRejectedValueOnce(new Error("Blocked private image destination"));
       await expect(atlasMobile.readImage({ accountId, reference: { itemId: item.id } })).rejects.toThrow("Blocked private");
       expect(fetch).not.toHaveBeenCalled(); expect(resize).not.toHaveBeenCalled();
       await atlasMobile.setTrash({ accountId, id: item.id, trashed: true });

@@ -2,6 +2,11 @@ import * as dns from "dns";
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { imageProxyService, isBlockedIp, isImageContentType } from "./imageProxy.service";
 
+// Capture the connector passed to fetch without opening a network socket.
+vi.mock("undici", () => ({ Agent: class {
+  constructor(readonly options: { connect: { lookup: import("node:net").LookupFunction } }) {}
+} }));
+
 describe("signLocalVisualizationUrl", () => {
   it("signs absolute HTML paths and rejects other inputs", () => {
     expect(
@@ -85,6 +90,29 @@ describe("safeImageFetch (image-only responses)", () => {
     );
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("png");
+  });
+
+  it("hands the socket the checked DNS answers and preserves the HTTPS hostname", async () => {
+    serve(new Response(null, { headers: { "content-type": "image/png" } }));
+    const url = "https://images.example.test/icon.png";
+    const answer = { address: "185.199.108.133", family: 4 };
+    vi.mocked(fetch).mockImplementationOnce(async (input, init) => {
+      expect(input).toBe(url);
+      expect(init?.redirect).toBe("manual");
+      const { dispatcher } = init as RequestInit & {
+        dispatcher: { options: { connect: { lookup: import("node:net").LookupFunction } } };
+      };
+      const results = await new Promise((resolve, reject) => {
+        dispatcher.options.connect.lookup(new URL(url).hostname, { all: true }, (error, addresses) => {
+          if (error) reject(error);
+          else resolve(addresses);
+        });
+      });
+      expect(results).toEqual([answer]);
+      return new Response(null, { headers: { "content-type": "image/png" } });
+    });
+    expect((await imageProxyService.safeImageFetch(url, null)).ok).toBe(true);
+    expect(dns.promises.lookup).toHaveBeenCalledTimes(1);
   });
 
   it("drops the body of a non-image even when GitHub answered 200", async () => {

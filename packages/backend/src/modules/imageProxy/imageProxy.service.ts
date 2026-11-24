@@ -1,6 +1,8 @@
 import * as os from "os";
 import * as path from "path";
-import * as dns from "dns";
+import * as dns from "node:dns";
+import { isIP, type LookupFunction } from "node:net";
+import { Agent } from "undici";
 import { isLocalImagePreviewSize, type LocalImagePreviewSize } from "@mains/contracts/image-preview";
 import { getConnectionWithSecrets } from "../connections";
 import {
@@ -75,34 +77,51 @@ export function isBlockedIp(ip: string): boolean {
   return ip.includes(":") ? isBlockedIpv6(ip) : isBlockedIpv4(ip);
 }
 
-/**
- * Reject anything that isn't a public http(s) destination. Resolves the host
- * and checks every returned address, so a domain that resolves to a private IP
- * is blocked too. NOTE: a small resolve-then-fetch TOCTOU (DNS-rebinding)
- * window remains — acceptable for this single-user desktop threat model.
- */
-export async function assertPublicHttpUrl(urlStr: string): Promise<void> {
-  let u: URL;
-  try {
-    u = new URL(urlStr);
-  } catch {
-    throw new SsrfBlockedError("invalid url");
+function publicHost(url: string): string {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw new SsrfBlockedError("invalid url"); }
+  if (!["http:", "https:"].includes(parsed.protocol)) throw new SsrfBlockedError("only http(s) urls are allowed");
+  const host = parsed.hostname.replace(/^\[|\]$/g, "");
+  // Node connects directly to numeric addresses without invoking lookup.
+  if (isIP(host) && isBlockedIp(host)) throw new SsrfBlockedError(`blocked address ${host}`);
+  return host;
+}
+
+async function publicAddresses(host: string): Promise<dns.LookupAddress[]> {
+  let addresses: dns.LookupAddress[];
+  try { addresses = await dns.promises.lookup(host, { all: true }); }
+  catch { throw new SsrfBlockedError(`dns resolution failed for ${host}`); }
+  if (!addresses.length) throw new SsrfBlockedError(`no addresses for ${host}`);
+  for (const { address } of addresses) {
+    if (isBlockedIp(address)) throw new SsrfBlockedError(`blocked address ${address}`);
   }
-  if (u.protocol !== "http:" && u.protocol !== "https:") {
-    throw new SsrfBlockedError("only http(s) urls are allowed");
-  }
-  const host = u.hostname.replace(/^\[|\]$/g, ""); // strip IPv6 brackets
-  let addrs: { address: string }[];
-  try {
-    addrs = await dns.promises.lookup(host, { all: true });
-  } catch {
-    throw new SsrfBlockedError(`dns resolution failed for ${host}`);
-  }
-  if (addrs.length === 0) throw new SsrfBlockedError(`no addresses for ${host}`);
-  for (const { address } of addrs) {
-    if (isBlockedIp(address)) {
-      throw new SsrfBlockedError(`blocked address ${address}`);
-    }
+  return addresses;
+}
+
+export async function assertPublicHttpUrl(url: string): Promise<void> {
+  await publicAddresses(publicHost(url));
+}
+
+// net.connect consumes these exact addresses. The URL hostname stays intact for
+// the HTTP Host header, TLS SNI and certificate verification.
+const lookup: LookupFunction = (host, options, callback) => {
+  void publicAddresses(host).then(addresses => {
+    const family = options.family === "IPv4" ? 4 : options.family === "IPv6" ? 6 : options.family;
+    const matching = family ? addresses.filter(record => record.family === family) : addresses;
+    if (!matching.length) return callback(new Error("No matching public address"), "");
+    if (options.all) callback(null, matching);
+    else callback(null, matching[0].address, matching[0].family);
+  }, error => callback(error, ""));
+};
+const previewDispatcher = new Agent({ connect: { lookup } });
+
+export async function fetchPublicHttpUrl(url: string, options: RequestInit): Promise<Response> {
+  publicHost(url);
+  const init = { ...options, redirect: "manual" as const, dispatcher: previewDispatcher };
+  try { return await fetch(url, init); }
+  catch (error) {
+    if (error instanceof Error && "cause" in error && error.cause instanceof SsrfBlockedError) throw error.cause;
+    throw error;
   }
 }
 
@@ -215,16 +234,12 @@ export const imageProxyService = {
     let headers: Record<string, string> | undefined = authHeaders ?? undefined;
 
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      await assertPublicHttpUrl(url);
-      // Manual redirect: undici (Node's global fetch) exposes the Location
-      // header — unlike a browser's opaqueredirect — so we re-validate each
-      // hop instead of letting the network stack follow redirects blindly
-      // into a private address.
-      const response = await fetch(url, { headers, redirect: "manual" });
+      const response = await fetchPublicHttpUrl(url, { headers });
 
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
         if (!location) return onlyImages(response);
+        await response.body?.cancel();
         url = new URL(location, url).toString();
         headers = undefined; // drop auth before following a redirect
         continue;

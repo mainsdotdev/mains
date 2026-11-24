@@ -1,5 +1,5 @@
 import { parse, type DefaultTreeAdapterMap } from "parse5";
-import { assertPublicHttpUrl } from "../imageProxy";
+import { fetchPublicHttpUrl } from "../imageProxy";
 
 /** Keep meaningful queries and fragment routes; remove only known tracking keys. */
 export function bookmarkUrl(value: unknown) {
@@ -21,9 +21,7 @@ export async function fetchBookmarkResource(initial: string, image = false, owne
   const limit = image ? 5 * 1024 * 1024 : 2 * 1024 * 1024;
   for (let hop = 0; hop <= 5; hop++) {
     signal.throwIfAborted();
-    await assertPublicHttpUrl(url);
-    signal.throwIfAborted();
-    const response = await fetch(url, { signal, redirect: "manual", credentials: "omit",
+    const response = await fetchPublicHttpUrl(url, { signal, credentials: "omit",
       headers: { Accept: image ? "image/*" : "text/html,application/xhtml+xml", "User-Agent": "MainsBookmark/1.0" } });
     if (response.status >= 300 && response.status < 400) {
       const next = response.headers.get("location");

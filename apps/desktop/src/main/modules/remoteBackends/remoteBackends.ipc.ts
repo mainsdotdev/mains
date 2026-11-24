@@ -4,6 +4,9 @@ import { CHANNELS } from "@mains/contracts/channels";
 import { remoteBackendsService } from "./remoteBackends.service";
 
 export function registerRemoteBackendsIpc(): void {
+  void remoteBackendsService.migrateLegacyTokens().catch(() => {
+    console.error("Could not migrate stored remote backend credentials");
+  });
   ipcMain.handle(
     CHANNELS.remoteBackends.setToken,
     handle((id: string, token: string) => remoteBackendsService.setToken(id, token)),

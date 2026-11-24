@@ -217,7 +217,8 @@ function AddBackendForm({
       <Caption>
         {mode === "ssh"
           ? "Leave blank when a launch command is set — a token is generated automatically. Otherwise paste the one `mains` printed."
-          : "Printed by `mains`, or shown under This machine."}
+          : "Printed by `mains`, or shown under This machine."}{" "}
+        If the OS credential store is unavailable, the token lasts until Mains quits.
       </Caption>
 
       <div className="flex justify-end">

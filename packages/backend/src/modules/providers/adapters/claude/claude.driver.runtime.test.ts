@@ -502,6 +502,8 @@ esac
   });
 
   it("uses the bundled executable for runs, the live catalogue, commands and account probes", async () => {
+    vi.stubEnv("DISABLE_TELEMETRY", undefined);
+    vi.stubEnv("DISABLE_ERROR_REPORTING", undefined);
     const driver = createClaudeDriver({ settingSources: [] });
     expect(resolveClaudeRuntime()).toEqual({ path: bundled, source: "bundled" });
     expect(detectInstalledClis()).toMatchObject({ claude: true, claudeSource: "bundled" });
@@ -519,6 +521,7 @@ esac
     expect(await driver.generateText!("hello", { model: "sonnet" })).toBe("ok");
     for (const [{ options }] of sdk.query.mock.calls) {
       expect(options.pathToClaudeCodeExecutable).toBe(bundled);
+      expect(options.env).toMatchObject({ DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1" });
       expect(options.env).not.toHaveProperty("ANTHROPIC_API_KEY");
       expect(options.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
     }

@@ -3349,6 +3349,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     // uses CLI login session rather than API billing.
     const cleanEnv: Record<string, string | undefined> = {
       ...process.env,
+      DISABLE_TELEMETRY: process.env.DISABLE_TELEMETRY || "1",
+      DISABLE_ERROR_REPORTING: process.env.DISABLE_ERROR_REPORTING || "1",
       // Advertise the host's MCP Apps support when the CLI connects to servers.
       CLAUDE_CODE_MCP_APPS_HOST: "1",
       CLAUDE_CODE_STARTUP_FAILURE_RESULTS: "1",
