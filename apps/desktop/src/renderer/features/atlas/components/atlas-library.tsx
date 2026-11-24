@@ -509,8 +509,8 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const title = type === "all" && project
     ? project.name
     : ATLAS_TYPES.find((item) => item.value === type)!.label;
-  const loading = library.isFetching && !library.currentData;
-  const error = library.error;
+  const loadFailed = library.isError;
+  const loading = !loadFailed && (!library.currentData || (!library.isSuccess && entries.length === 0));
 
   return (
     <PageShell
@@ -740,15 +740,21 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           </section>
         )}
         <div ref={resultsRef} className="scroll-mt-8" />
-        {!!error && (
-          <Text className="mb-4" role="alert">
-            {atlasError(error)}
-          </Text>
+        {loadFailed && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-3xl glass-surface px-5 py-4">
+            <div role="alert" className="min-w-0">
+              <Text weight="medium">
+                {entries.length > 0 ? "Unable to refresh Atlas items. Showing the last loaded results." : "Unable to load Atlas items."}
+              </Text>
+              {!!library.error && <Muted size="xs" className="mt-1 wrap-break-word">{atlasError(library.error)}</Muted>}
+            </div>
+            <Button variant="secondary" onClick={() => void library.refetch()}>Try again</Button>
+          </div>
         )}
         {loading ? (
-          <Muted className="py-16 text-center">Loading your items…</Muted>
+          <Muted className="py-16 text-center" role="status">Loading your items…</Muted>
         ) : !entries.length ? (
-          <div className="flex flex-col items-center py-24 text-center">
+          !loadFailed && <div className="flex flex-col items-center py-24 text-center">
             {!searchValue && scope === "favorites" ? (
               <Star className="mb-5 size-10 text-primary-400" />
             ) : !searchValue && scope === "generated" ? (
