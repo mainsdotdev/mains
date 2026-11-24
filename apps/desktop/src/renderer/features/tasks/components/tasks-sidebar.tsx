@@ -25,7 +25,6 @@ import {
   supportsPullRequests,
   type IssueScopeCounts,
   type TasksScope,
-  type TasksTab,
 } from "../lib/scope";
 
 /**
@@ -49,11 +48,10 @@ const PROVIDER_ICON_CLASS = "size-3.5 shrink-0 text-primary-900 dark:text-primar
 export function TasksSidebar() {
   const { tab, scope, setScope } = useTasksScope();
   const {
-    data: connectionStates = EMPTY_CONNECTIONS,
+    currentData: connectionStates = EMPTY_CONNECTIONS,
     isSuccess: connectionsLoaded,
     refetch,
   } = useGetConnectionStatesQuery();
-  const { currentData: issues = [] } = useGetIssuesInboxQuery(OPEN_ISSUES_QUERY);
   const [activeModal, setActiveModal] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [runSync, { isLoading: syncing }] = useRunEntitySyncMutation();
@@ -74,14 +72,13 @@ export function TasksSidebar() {
     });
   };
 
-  // The PR tab only lists GitHub and GitLab; GitLab keeps its support placeholder.
   const visibleConnections = useMemo(
     () =>
       connectionStates
         .filter(
           (connection) =>
             connection.category === "issues" &&
-            (tab === "issues" || connection.id === "github" || connection.id === "gitlab"),
+            (tab === "issues" || supportsPullRequests(connection.id)),
         )
         .sort((a, b) => a.sortOrder - b.sortOrder),
     [connectionStates, tab],
@@ -89,8 +86,15 @@ export function TasksSidebar() {
   const connected = visibleConnections.filter((connection) => connection.isConnected);
   const available = visibleConnections.filter((connection) => !connection.isConnected);
 
-  const counts = useMemo(() => issueScopeCounts(issues), [issues]);
-  const countsCapped = issues.length >= OPEN_ISSUES_QUERY.limit;
+  const issuesTabConnected = tab === "issues" && connected.length > 0;
+  const { currentData: issues, isError: issuesError } = useGetIssuesInboxQuery(OPEN_ISSUES_QUERY, {
+    skip: !issuesTabConnected,
+  });
+  const counts = useMemo(
+    () => issuesTabConnected && issues && !issuesError ? issueScopeCounts(issues) : null,
+    [issuesTabConnected, issues, issuesError],
+  );
+  const countsCapped = (issues?.length ?? 0) >= OPEN_ISSUES_QUERY.limit;
 
   const isConnected = useCallback(
     (id: string) => connectionStates.some((c) => c.id === id && c.isConnected),
@@ -113,7 +117,7 @@ export function TasksSidebar() {
       <SidebarTopRows header={
         <div className="flex w-full items-center justify-between gap-2 px-2">
           <Text as="h2" size="base" weight="medium">Tasks</Text>
-          {connected.length > 0 && (
+          {issuesTabConnected && (
             <Button
               variant="icon"
               onClick={sync}
@@ -134,7 +138,7 @@ export function TasksSidebar() {
             className={SIDEBAR_PRIMARY_ACTION_CLASS}
             icon={<Inbox className="size-3.5 shrink-0" />}
             label={tab === "issues" ? "All issues" : "All pull requests"}
-            count={tab === "issues" ? counts.total : null}
+            count={issuesTabConnected ? counts?.total ?? null : null}
             capped={countsCapped}
             active={!scope.provider}
             onClick={() => setScope(ALL_SCOPE)}
@@ -147,7 +151,6 @@ export function TasksSidebar() {
           <ConnectionGroup
             key={connection.id}
             connection={connection}
-            tab={tab}
             scope={scope}
             counts={counts}
             countsCapped={countsCapped}
@@ -155,11 +158,6 @@ export function TasksSidebar() {
             onManage={() => setActiveModal(connection.id)}
           />
         ))}
-        {connectionsLoaded && connected.length === 0 && (
-          <Text size="xs" tone="subtle" className="block px-2.5 py-2">
-            Connect a service to see its issues and pull requests here.
-          </Text>
-        )}
       </div>
 
       {available.length > 0 && (
@@ -222,7 +220,6 @@ export function TasksSidebar() {
 
 function ConnectionGroup({
   connection,
-  tab,
   scope,
   counts,
   countsCapped,
@@ -230,9 +227,8 @@ function ConnectionGroup({
   onManage,
 }: {
   connection: ConnectionState;
-  tab: TasksTab;
   scope: TasksScope;
-  counts: IssueScopeCounts;
+  counts: IssueScopeCounts | null;
   countsCapped: boolean;
   onSelect: (scope: TasksScope, options?: { replace?: boolean }) => void;
   onManage: () => void;
@@ -243,8 +239,6 @@ function ConnectionGroup({
     () => (data?.items ?? []) as Array<Record<string, unknown> & { id: string }>,
     [data],
   );
-  const showCounts = tab === "issues";
-  const unsupported = tab === "pull_requests" && !supportsPullRequests(provider);
 
   // A resource unlinked from the connection no longer has issues to filter to.
   useEffect(() => {
@@ -267,31 +261,23 @@ function ConnectionGroup({
       }}
     >
       <nav aria-label={`${connection.displayName} scope`} className="space-y-0.5 pb-1 [&>button]:pl-7">
-        {unsupported ? (
-          <Text size="xs" tone="subtle" className="block pl-7 pr-2 py-1.5">
-            No pull request support yet
-          </Text>
-        ) : (
-          <>
-            <ScopeRow
-              label="All"
-              count={showCounts ? (counts.byProvider.get(provider) ?? 0) : null}
-              capped={countsCapped}
-              active={scope.provider === provider && !scope.resourceId}
-              onClick={() => onSelect({ provider, resourceId: null })}
-            />
-            {resources.map((resource) => (
-              <ScopeRow
-                key={resource.id}
-                label={resourceLabel(resource)}
-                count={showCounts ? (counts.byResource.get(resource.id) ?? 0) : null}
-                capped={countsCapped}
-                active={scope.provider === provider && scope.resourceId === resource.id}
-                onClick={() => onSelect({ provider, resourceId: resource.id })}
-              />
-            ))}
-          </>
-        )}
+        <ScopeRow
+          label="All"
+          count={counts ? counts.byProvider.get(provider) ?? 0 : null}
+          capped={countsCapped}
+          active={scope.provider === provider && !scope.resourceId}
+          onClick={() => onSelect({ provider, resourceId: null })}
+        />
+        {resources.map((resource) => (
+          <ScopeRow
+            key={resource.id}
+            label={resourceLabel(resource)}
+            count={counts ? counts.byResource.get(resource.id) ?? 0 : null}
+            capped={countsCapped}
+            active={scope.provider === provider && scope.resourceId === resource.id}
+            onClick={() => onSelect({ provider, resourceId: resource.id })}
+          />
+        ))}
       </nav>
     </SidebarGroupSection>
   );

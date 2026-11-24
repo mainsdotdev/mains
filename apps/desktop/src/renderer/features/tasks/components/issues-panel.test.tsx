@@ -3,10 +3,12 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IssueWithEntity } from "@/lib/redux/api";
 
-const mocks = vi.hoisted(() => ({ issues: [] as unknown[] }));
+const mocks = vi.hoisted(() => ({ issues: [] as unknown[], isError: false, refetch: vi.fn() }));
 
 vi.mock("@/lib/redux/api", () => ({
-  useGetIssuesInboxQuery: () => ({ currentData: mocks.issues, isLoading: false, isFetching: false }),
+  useGetIssuesInboxQuery: () => ({
+    currentData: mocks.issues, isLoading: false, isFetching: false, isError: mocks.isError, refetch: mocks.refetch,
+  }),
   useGetIssueStatusesQuery: () => ({
     data: [
       { id: "backlog", name: "Backlog", category: "open", sortOrder: 0 },
@@ -55,6 +57,8 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  mocks.isError = false;
+  mocks.refetch.mockClear();
   // The view tabs measure their sliding highlight.
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   mocks.issues = [
@@ -83,6 +87,31 @@ function openGroup(name: string) {
 }
 
 const titles = () => screen.queryAllByText(/^Issue /).map((node) => node.textContent);
+
+describe("IssuesPanel query states", () => {
+  it("distinguishes a failed read from an empty list and retries it", () => {
+    mocks.issues = [];
+    mocks.isError = true;
+    const { rerender } = renderPanel();
+
+    expect(screen.getByRole("alert").textContent).toBe("Unable to load issues.");
+    expect(screen.queryByText("No open issues synced yet.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(mocks.refetch).toHaveBeenCalledOnce();
+
+    mocks.isError = false;
+    rerender(<IssuesPanel scope={{ provider: null, resourceId: null }} activeEntityId={null} onSelectIssue={() => {}} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("No open issues synced yet.")).toBeTruthy();
+  });
+
+  it("retains loaded rows when a refresh fails", () => {
+    mocks.isError = true;
+    renderPanel();
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(titles()).toHaveLength(5);
+  });
+});
 
 describe("IssuesPanel filters", () => {
   it("counts within the sidebar scope, not across every connection", () => {

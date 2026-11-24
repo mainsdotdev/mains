@@ -16,11 +16,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/redux/api", () => ({
   useGetConnectionStatesQuery: () => ({
-    data: mocks.connections,
+    currentData: mocks.connections,
     isSuccess: true,
     refetch: mocks.refetch,
   }),
-  useGetIssuesInboxQuery: () => ({ currentData: mocks.issues }),
+  useGetIssuesInboxQuery: (_arg: unknown, { skip }: { skip: boolean }) => ({
+    currentData: skip ? undefined : mocks.issues,
+  }),
   useGetSelectedResourcesQuery: (provider: string) => ({
     data: { items: mocks.resources[provider] ?? [], connectionId: "c" },
     isSuccess: true,
@@ -148,7 +150,7 @@ describe("TasksSidebar", () => {
     expect(search()).toBe("?provider=linear");
   });
 
-  it("only lists GitHub and GitLab on the pull request tab, keeping GitLab's placeholder", () => {
+  it("lists only providers with pull request support on the pull request tab", () => {
     mocks.connections.push(
       connection("gitlab", "GitLab", true),
       connection("asana", "Asana", true),
@@ -157,11 +159,7 @@ describe("TasksSidebar", () => {
     renderSidebar("/tasks?tab=pull_requests");
     expect(screen.getByText("All pull requests")).toBeTruthy();
     expect(screen.getByText("GitHub")).toBeTruthy();
-    expect(screen.getByText("GitLab")).toBeTruthy();
-    expect(screen.getByLabelText("GitLab scope").textContent).toContain(
-      "No pull request support yet",
-    );
-    for (const provider of ["Linear", "Asana", "Trello", "Jira", "Sentry"]) {
+    for (const provider of ["GitLab", "Linear", "Asana", "Trello", "Jira", "Sentry"]) {
       expect(screen.queryByText(provider)).toBeNull();
     }
     expect(screen.queryByRole("button", { name: /Add connection/ })).toBeNull();
@@ -189,7 +187,17 @@ describe("TasksSidebar", () => {
     renderSidebar();
     expect(screen.getByRole("button", { name: /GitHub/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Add connection/ })).toBeNull();
-    expect(screen.getByText(/Connect a service/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^All issues$/ })).toBeTruthy();
+  });
+
+  it("only offers GitHub when the pull request tab has no connection", () => {
+    mocks.connections = [
+      connection("github", "GitHub", false),
+      connection("gitlab", "GitLab", false),
+    ];
+    renderSidebar("/tasks?tab=pull_requests");
+    expect(screen.getByRole("button", { name: /GitHub.*Connect/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /GitLab.*Connect/ })).toBeNull();
   });
 
   it("leaves a scope whose connection was revoked", () => {
