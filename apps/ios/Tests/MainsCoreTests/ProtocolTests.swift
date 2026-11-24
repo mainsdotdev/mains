@@ -58,12 +58,18 @@ import Testing
     }
 }
 
+@Test func savedNetworkEndpointsRequireTLSBeforeCreatingADeviceSocket() throws {
+    #expect(throws: MainsError.invalidLink) { try Wire.webSocketURL(URL(string: "http://192.168.1.10:8787")!) }
+    #expect(try Wire.webSocketURL(URL(string: "https://desktop.local:8787")!).scheme == "wss")
+    #expect(try Wire.webSocketURL(URL(string: "http://127.0.0.1:8787")!).scheme == "ws")
+}
+
 @Test func pairingLinkPreservesEncodedEndpointsAndAcceptsVariants() throws {
     for scheme in ["mains", "mains-dev", "mains-preview", "mains-native"] {
         let link = try PairingLink("\(scheme)://pair#code=a%2Bb&name=Work+Mac&endpoint=http%3A%2F%2F192.168.1.2%3A8787&endpoint=https%3A%2F%2Fmac.example.com&endpoint=javascript%3Abad")
         #expect(link.code == "a+b")
         #expect(link.name == "Work Mac")
-        #expect(link.endpoints.map(\.absoluteString) == ["http://192.168.1.2:8787", "https://mac.example.com"])
+        #expect(link.endpoints.map(\.absoluteString) == ["https://mac.example.com"])
     }
     #expect(throws: MainsError.invalidLink) { try PairingLink("https://example.com/#code=secret") }
     #expect(throws: MainsError.invalidLink) { try PairingLink("mains://pair#code=x&endpoint=http%3A%2F%2Fu%3Ap%40host") }

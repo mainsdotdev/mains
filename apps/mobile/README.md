@@ -45,7 +45,7 @@ npm run android
 | `preview` | Mains Preview | `dev.mains.mobile.preview` | `preview` |
 | `production` | Mains | `dev.mains.mobile` | `production` |
 
-Development and preview builds permit plain local-network traffic for connecting to a Mac over LAN. Production expects a secure `wss://` endpoint such as Tailscale HTTPS.
+Pair using HTTPS/WSS on the LAN or via Tailscale Serve. Only a loopback endpoint supports HTTP/WS. Pair again over HTTPS if a saved pairing has only a plain LAN address.
 
 ## EAS setup
 

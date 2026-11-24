@@ -37,8 +37,10 @@ public final class WebSocketTransport: BackendTransport {
     public init() {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 10
-        session = URLSession(configuration: configuration)
+        session = URLSession(configuration: configuration, delegate: ConnectRedirectPolicy(), delegateQueue: nil)
     }
+
+    deinit { session.invalidateAndCancel() }
 
     public func open(endpoint: URL, token: String) throws {
         close()

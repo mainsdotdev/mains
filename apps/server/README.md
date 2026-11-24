@@ -9,7 +9,7 @@ argument separator:
 
 ```bash
 npm install --global ./dist/mains-server.tgz
-mains serve --lan --port 8787
+mains serve --tailscale-serve --port 8787
 ```
 
 The commands below are the source-development equivalents and rebuild before
@@ -18,10 +18,10 @@ starting.
 ```bash
 npm --prefix ../desktop install
 npm install
-npm run serve -- --lan --port 8787
+npm run serve -- --tailscale-serve --port 8787
 ```
 
-`--lan` listens on the machine's private network interfaces. On startup the
+Tailscale Serve provides a tailnet HTTPS endpoint. On startup the
 server prints a five-minute, single-use `mains://pair` link and a terminal QR
 code. Scan it in the mobile app; the phone receives its own revocable device
 token, so the full-access owner token never needs to leave the server machine.
@@ -80,8 +80,17 @@ npm run service -- restart
 npm run service -- uninstall
 ```
 
-Use `--lan` instead of `--tailscale-serve` for a trusted local network. Service
-uninstall keeps the database, owner token, and logs. Do not configure the
+For direct LAN access, use `--lan --tls-cert <chain.pem> --tls-key <key.pem>`.
+The certificate must be trusted by each client and cover the advertised IP, or use
+`--public-url https://<certificate-hostname>:8787` for a matching DNS name.
+Desktop reads the same paths from `MAINS_TLS_CERT` and `MAINS_TLS_KEY` when LAN access
+is enabled. SSH and local CLI commands continue to use the loopback listener.
+A proxy that terminates TLS can read Connect traffic. To keep contents private
+from an intermediary, forward TCP through to the Mains TLS listener.
+After upgrading a phone with only an old HTTP address, pair again over HTTPS.
+Update both desktop and backend for owner-token connections.
+
+Service uninstall keeps the database, owner token, and logs. Do not configure the
 background service to run while Mains Desktop is in use.
 
 Build and verify the installable archive:

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createPairingFlow } from "../src/features/pairing/pairing-flow.ts";
 import { createCredentialPersistence } from "../src/backend/credential-persistence.ts";
 
-const link = { code: "first", name: "Computer", endpoints: ["http://computer:8787"] };
+const link = { code: "first", name: "Computer", endpoints: ["https://computer:8787"] };
 const backend = { backendId: "computer", name: "Computer", endpoints: link.endpoints, deviceId: "phone", deviceToken: "token", pairedAt: "2026-01-01", appVersion: "1", protocolVersion: 1 };
 
 test("clipboard refusal leaves pairing usable without an unhandled rejection", async () => {
@@ -76,8 +76,8 @@ test("a pending paste cannot overwrite a later manual selection", async () => {
   const flow = createPairingFlow(null, { redeem: async () => backend, save: async () => {}, complete: () => {} });
   const detach = flow.attach();
   const pasting = flow.paste(() => new Promise((resolve) => { finish = resolve; }), () => { shown++; });
-  flow.accept("mains://pair#code=manual&endpoint=http%3A%2F%2Fcomputer%3A8787");
-  finish("mains://pair#code=clipboard&endpoint=http%3A%2F%2Fcomputer%3A8787");
+  flow.accept("mains://pair#code=manual&endpoint=https%3A%2F%2Fcomputer%3A8787");
+  finish("mains://pair#code=clipboard&endpoint=https%3A%2F%2Fcomputer%3A8787");
   await pasting;
   assert.equal(shown, 0); assert.equal(flow.getSnapshot().link.code, "manual");
   detach();

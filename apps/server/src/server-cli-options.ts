@@ -5,6 +5,8 @@ import { validateStandaloneOwnerToken } from "./server-token";
 
 export interface CliOptions {
   host: string;
+  tlsCert?: string;
+  tlsKey?: string;
   port: number;
   token?: string;
   webRoot?: string;
@@ -74,6 +76,8 @@ interface ParsedCliOptions {
 const SERVER_OPTION_SCHEMA = {
   "--host": { kind: "value" },
   "--lan": { kind: "flag" },
+  "--tls-cert": { kind: "value" },
+  "--tls-key": { kind: "value" },
   "--port": { kind: "value" },
   "--token": { kind: "value" },
   "--data-dir": { kind: "value" },
@@ -210,6 +214,8 @@ export function parseServerCliOptions(argv: string[]): CliOptions {
     optionValue(parsed, "--tailscale-serve-port") ??
     process.env.MAINS_TAILSCALE_SERVE_PORT;
   return {
+    tlsCert: optionValue(parsed, "--tls-cert") ?? process.env.MAINS_TLS_CERT,
+    tlsKey: optionValue(parsed, "--tls-key") ?? process.env.MAINS_TLS_KEY,
     host: parsed.flags.has("--lan")
       ? "0.0.0.0"
       : (configuredHost ?? "127.0.0.1"),

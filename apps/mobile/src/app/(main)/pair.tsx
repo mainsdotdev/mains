@@ -2,6 +2,7 @@ import { type BarcodeScanningResult, CameraView, useCameraPermissions } from "ex
 import * as Clipboard from "expo-clipboard";
 import Constants from "expo-constants";
 import * as Linking from "expo-linking";
+import { fetch as expoFetch } from "expo/fetch";
 import { Stack, useRouter } from "expo-router";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from "react-native";
@@ -41,7 +42,7 @@ export default function PairScreen() {
         deviceName: Constants.deviceName ?? "Phone",
         platform: devicePlatform(),
         appVersion: Constants.expoConfig?.version,
-      }, { signal }),
+      }, { signal, request: expoFetch }),
       save: (backend, signal) => savePairedBackend(backend, { signal }),
       complete: () => {
         void backendSession.start().catch(() => console.warn("Could not start paired backend"));

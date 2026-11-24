@@ -3,7 +3,7 @@ import { afterEach, test } from "node:test";
 import { pairWithBackend } from "../src/backend/pair-device.ts";
 
 const originalFetch = globalThis.fetch;
-const link = { code: "pair-code", name: "Computer", endpoints: ["http://first:8787", "https://second.example"] };
+const link = { code: "pair-code", name: "Computer", endpoints: ["https://first:8787", "https://second.example"] };
 const device = { deviceName: "Phone", platform: "ios" };
 const reply = { deviceId: "device", deviceToken: "secret", backend: { backendId: "backend", name: "Computer", appVersion: "1", protocolVersion: 1, capabilities: [], serverTime: new Date().toISOString() } };
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -54,4 +54,9 @@ test("malformed successful replies cannot install empty device credentials", asy
   globalThis.fetch = async () => { calls++; return new Response(JSON.stringify({ ...reply, deviceToken: "" })); };
   await assert.rejects(pairWithBackend(link, device), /Unexpected reply/);
   assert.equal(calls, 1);
+});
+
+test("an old LAN HTTP link is refused before sending a pairing code", async () => {
+  globalThis.fetch = async () => assert.fail("unexpected request");
+  await assert.rejects(pairWithBackend({ ...link, endpoints: ["http://192.168.1.5"] }, device), /HTTPS/);
 });

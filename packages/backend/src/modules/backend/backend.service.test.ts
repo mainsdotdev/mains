@@ -26,7 +26,7 @@ import {
 
 const ok = (data: unknown) => ({ success: true as const, data });
 
-const ENDPOINTS = ["https://mac.tailnet.ts.net", "http://192.168.1.5:8787"];
+const ENDPOINTS = ["https://mac.tailnet.ts.net", "https://192.168.1.5:8787"];
 const CODE_TTL_MS = 5 * 60 * 1000;
 const UUID = /^[0-9a-f-]{36}$/;
 const TOKEN = /^[A-Za-z0-9_-]{40,}$/;

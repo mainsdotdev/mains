@@ -3,6 +3,8 @@ import { shutdownUserDecisions } from "./modules/runs";
 import { shutdownRecordLifecycles } from "./runtime/record-lifecycle";
 import { createResourceLifecycle } from "./runtime/resource-lifecycle";
 import DatabaseClient, { closeDatabase, initializeDatabase } from "./db/client";
+import { readLanTls } from "./ipc-kit/lan-listeners";
+import { isConnectLoopback } from "@mains/contracts/connect-endpoint";
 import { startWsHost, type WsHost } from "./ipc-kit/ws-server-host";
 import { generateToken } from "./ipc-kit/ws-auth";
 
@@ -101,6 +103,8 @@ export interface ServeOptions {
   port?: number;
   /** Interface to bind. Default loopback (127.0.0.1) — pair via SSH tunnel. */
   host?: string;
+  tlsCert?: string;
+  tlsKey?: string;
   /**
    * Owner token full-access clients must present. Falls back to MAINS_SERVE_TOKEN,
    * then to a freshly generated one returned to the host for secure persistence.
@@ -226,11 +230,13 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
     const wsHost: WsHost = await startWsHost({
       port: options.port ?? DEFAULT_PORT,
       host,
+      tls: isConnectLoopback(host) ? undefined : readLanTls(options.tlsCert, options.tlsKey),
       token,
       webRoot,
       fetchProxiedImage: (url) => imageProxyService.proxyImage(url),
       serveLocalImage: (url) => serveLocalImage(url),
       serveLocalDocument: (url) => serveLocalDocument(url),
+      getBackendId: () => backendService.getBackendId(),
       verifyDeviceToken: (deviceToken) =>
         backendService.verifyDeviceToken(deviceToken),
       retirePairingCodes: clearPairingCodes,
@@ -252,8 +258,10 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
     assistantWork.start();
     automationsService.start();
     pulseService.start();
-    console.log(`[serve] mains backend listening on ws://${host}:${wsHost.port}`);
-    if (webRoot) console.log(`[serve] web UI ready at http://${host}:${wsHost.port}/ (serving ${webRoot})`);
+    const localHost = isConnectLoopback(host) ? host.replace(/^::1$/, "[::1]") : "127.0.0.1";
+    console.log(`[serve] mains backend listening on ws://${localHost}:${wsHost.port}`);
+    for (const address of wsHost.lanAddresses) console.log(`[serve] LAN TLS listening on ${address} port ${wsHost.port}`);
+    if (webRoot) console.log(`[serve] web UI ready at http://${localHost}:${wsHost.port}/ (serving ${webRoot})`);
     else console.log("[serve] web UI disabled — no renderer build found. Run `npm run build:web` first.");
     let tailscaleUrl: string | null = null;
     if (options.tailscaleServe) {
@@ -279,6 +287,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
     startAttachmentMaintenance();
     return {
       sink: wsHost.sink,
+      lanAddresses: wsHost.lanAddresses,
       port: wsHost.port,
       webUiAvailable: wsHost.webUiAvailable,
       token,

@@ -502,7 +502,7 @@ describe("startWsHost — paired devices and POST /pair", () => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            endpoints: ["http://192.168.1.12:8787/"],
+            endpoints: ["https://192.168.1.12:8787/"],
           }),
         },
       );
@@ -510,8 +510,8 @@ describe("startWsHost — paired devices and POST /pair", () => {
       expect(res.status).toBe(200);
       expect(res.headers.get("cache-control")).toBe("no-store");
       expect(await res.json()).toEqual({
-        link: "mains://pair#endpoint=http%3A%2F%2F192.168.1.12%3A8787",
-        endpoints: ["http://192.168.1.12:8787"],
+        link: "mains://pair#endpoint=https%3A%2F%2F192.168.1.12%3A8787",
+        endpoints: ["https://192.168.1.12:8787"],
       });
     });
 
@@ -526,7 +526,7 @@ describe("startWsHost — paired devices and POST /pair", () => {
 
       const unauthorized = await fetch(url, {
         method: "POST",
-        body: JSON.stringify({ endpoints: ["http://192.168.1.12:8787"] }),
+        body: JSON.stringify({ endpoints: ["https://192.168.1.12:8787"] }),
       });
       expect(unauthorized.status).toBe(401);
 

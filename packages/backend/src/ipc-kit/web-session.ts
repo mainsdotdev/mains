@@ -1,3 +1,4 @@
+import { isSecureConnectEndpoint } from "@mains/contracts/connect-endpoint";
 import { generateToken, hashToken } from "./ws-auth";
 import { createAuthGrants } from "@mains/contracts/auth-lifecycle";
 
@@ -71,6 +72,7 @@ function normalizeBaseUrl(value: string): URL {
   ) {
     throw new Error("Browser login URL must be an origin without a path or credentials");
   }
+  if (!isSecureConnectEndpoint(value)) throw new Error("Remote browser login requires HTTPS");
   return new URL(`${url.origin}/`);
 }
 

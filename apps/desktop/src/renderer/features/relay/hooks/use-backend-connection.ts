@@ -109,7 +109,7 @@ export function useBackendConnection() {
         const connection = await connectRemoteBackend(
           url,
           token ? { token } : undefined,
-          { attempt, onActivated: (current) => {
+          { attempt, expectedBackendId: backend.lastDescriptor?.backendId, onActivated: (current) => {
             dispatch(setActiveBackend(id));
             dispatch(markConnected({ id, at: Date.now(), descriptor: current.descriptor }));
           } },

@@ -82,10 +82,17 @@ public enum Wire {
         }
         return encoder
     }
+    static func isSecureConnectEndpoint(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased(), !host.isEmpty, url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil else { return false }
+        let scheme = url.scheme?.lowercased()
+        return scheme == "https" || (scheme == "http" && ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host))
+    }
+
     public static func webSocketURL(_ endpoint: URL) throws -> URL {
         guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false),
-              ["http", "https"].contains(components.scheme?.lowercased() ?? "") else { throw MainsError.invalidLink }
-        components.scheme = components.scheme == "https" ? "wss" : "ws"
+              isSecureConnectEndpoint(endpoint) else { throw MainsError.invalidLink }
+        components.scheme = components.scheme?.lowercased() == "https" ? "wss" : "ws"
         guard let url = components.url else { throw MainsError.invalidLink }
         return url
     }

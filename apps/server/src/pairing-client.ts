@@ -50,6 +50,7 @@ async function adminFetch(
     adminUrl(options.controlUrl, pathname),
     {
       ...init,
+      redirect: "error",
       headers,
       signal: AbortSignal.timeout(8_000),
     },

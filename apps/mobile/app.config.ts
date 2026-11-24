@@ -93,8 +93,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       "expo-font",
       "expo-sharing",
       ["expo-build-properties", {
-        // Local development/preview pairing can use LAN HTTP/WebSockets.
-        // Production follows iOS and uses HTTPS/WSS endpoints.
+        // Development builds can reach the local Metro server over HTTP.
+        // Connect pairing always requires HTTPS outside loopback.
         android: { usesCleartextTraffic: allowsDevelopmentLan },
       }],
       [

@@ -37,7 +37,7 @@ beforeEach(() => {
   native.closeTunnel.mockResolvedValue({ success: true }); native.cancelTunnelOpen.mockResolvedValue({ success: true });
   Object.defineProperty(window, "api", { configurable: true, value: { ssh: native, remoteBackends: native } });
   store.dispatch(addBackend({ id: "ssh", label: "SSH", ssh: { host: "dev", remotePort: 8787 } }));
-  store.dispatch(addBackend({ id: "direct", label: "Direct", wsUrl: "ws://direct" }));
+  store.dispatch(addBackend({ id: "direct", label: "Direct", wsUrl: "wss://direct" }));
 });
 afterEach(async () => { cleanup(); await disconnectRemoteBackend(); vi.resetAllMocks(); vi.unstubAllGlobals(); });
 
@@ -47,7 +47,7 @@ it("does not open a WebSocket from a retired SSH preparation and releases a late
   let connecting!: Promise<unknown>;
   act(() => { connecting = view.result.current.connect("ssh").catch((error: Error) => error); });
   await act(() => view.result.current.disconnect());
-  await act(async () => { tunnel.resolve({ success: true, data: { id: "late", localUrl: "ws://late" } }); await connecting; });
+  await act(async () => { tunnel.resolve({ success: true, data: { id: "late", localUrl: "ws://127.0.0.1:36200" } }); await connecting; });
   expect(await connecting).toBeInstanceOf(Error);
   expect(Socket.all).toHaveLength(0);
   expect(native.closeTunnel).toHaveBeenCalledWith("late");
@@ -85,13 +85,13 @@ it("removing the pending saved backend retires its late native preparation", asy
   const view = mount(); let connecting!: Promise<unknown>;
   act(() => { connecting = view.result.current.connect("ssh").catch((error: Error) => error); });
   act(() => view.result.current.remove("ssh"));
-  await act(async () => { tunnel.resolve({ success: true, data: { id: "removed", localUrl: "ws://removed" } }); await connecting; });
+  await act(async () => { tunnel.resolve({ success: true, data: { id: "removed", localUrl: "ws://127.0.0.1:36201" } }); await connecting; });
   expect(await connecting).toBeInstanceOf(Error); expect(Socket.all).toHaveLength(0);
   expect(store.getState().backends.saved.some((backend) => backend.id === "ssh")).toBe(false);
 });
 
 it("retains the active SSH tunnel through a failed candidate and releases it after verified replacement", async () => {
-  native.openTunnel.mockResolvedValue({ success: true, data: { id: "active-tunnel", localUrl: "ws://ssh" } });
+  native.openTunnel.mockResolvedValue({ success: true, data: { id: "active-tunnel", localUrl: "ws://127.0.0.1:36202" } });
   const view = mount(); let first!: Promise<unknown>;
   act(() => { first = view.result.current.connect("ssh"); });
   await vi.waitFor(() => expect(Socket.all).toHaveLength(1));
@@ -119,13 +119,13 @@ it("retires an unmounted view's pending preparation while leaving committed conn
   const view = mount(); let connecting!: Promise<unknown>;
   act(() => { connecting = view.result.current.connect("ssh").catch((error: Error) => error); });
   view.unmount();
-  await act(async () => { tunnel.resolve({ success: true, data: { id: "unmounted", localUrl: "ws://unmounted" } }); await connecting; });
+  await act(async () => { tunnel.resolve({ success: true, data: { id: "unmounted", localUrl: "ws://127.0.0.1:36203" } }); await connecting; });
   expect(await connecting).toBeInstanceOf(Error); expect(Socket.all).toHaveLength(0);
   expect(native.closeTunnel).toHaveBeenCalledWith("unmounted");
 });
 
 it("does not use credentials returned after a newer backend choice", async () => {
-  store.dispatch(addBackend({ id: "token", label: "Token", wsUrl: "ws://token", hasToken: true }));
+  store.dispatch(addBackend({ id: "token", label: "Token", wsUrl: "wss://token", hasToken: true }));
   const token = deferred<any>(); native.getToken.mockReturnValue(token.promise);
   const view = mount(); let old!: Promise<unknown>, current!: Promise<unknown>;
   act(() => { old = view.result.current.connect("token").catch((error: Error) => error); });

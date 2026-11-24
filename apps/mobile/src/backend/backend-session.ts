@@ -1,3 +1,4 @@
+import { isSecureConnectEndpoint } from "@mains/contracts/connect-endpoint";
 import { createDecisionOwner } from "@mains/contracts/decision-owner";
 import * as Network from "expo-network";
 import { useSyncExternalStore } from "react";
@@ -227,8 +228,13 @@ class BackendSession {
       refreshing: false,
     });
 
+    const endpoints = backend.endpoints.filter(endpoint => isDemoEndpoint(endpoint) || isSecureConnectEndpoint(endpoint));
+    if (!endpoints.length) {
+      this.publish({ ...this.snapshot, connection: { kind: "authBlocked", reason: "Pair again using an HTTPS link from your computer." } });
+      return;
+    }
     const supervisor = new ConnectionSupervisor({
-      endpoints: backend.endpoints,
+      endpoints,
       createTransport: (endpoint) => {
         // The demo Mac lives inside the app; its endpoint only picks the socket.
         const transport = isDemoEndpoint(endpoint)
@@ -242,6 +248,7 @@ class BackendSession {
       },
       onConnected: async (transport) => {
         const descriptor = await describeBackend(transport);
+        if (descriptor.backendId !== backend.backendId) throw new Error("The paired computer changed. Pair again.");
         upsertBackend(descriptor);
         const account = await transport.invoke(CHANNELS.account.get);
         if (account.success && account.data) {

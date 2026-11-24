@@ -111,12 +111,13 @@ mains serve
 ```
 
 The first run creates a persistent full-access owner token. To connect a phone
-on the same trusted network, expose private interfaces and scan the printed,
-five-minute pairing QR:
+over Tailscale HTTPS, start Serve and scan the five-minute pairing QR.
 
 ```bash
-mains serve --lan
+mains serve --tailscale-serve
 ```
+
+For direct LAN access, supply a trusted certificate and key with `--lan --tls-cert <chain.pem> --tls-key <key.pem>`. The certificate must cover the LAN address the client uses.
 
 The phone exchanges that one-time code for its own revocable device token. Use
 `mains pair` for another link, `mains web` for a one-use browser login, and
@@ -130,9 +131,7 @@ The standalone server can stay available without Electron or an open terminal:
 mains service install --tailscale-serve
 ```
 
-This installs a macOS LaunchAgent or Linux systemd user service. Direct public
-exposure should sit behind a TLS proxy and be advertised explicitly with
-`--public-url`.
+This installs a macOS LaunchAgent or Linux systemd user service. For a public endpoint, advertise its HTTPS address with `--public-url`. A proxy that terminates TLS can read Connect traffic. TCP passthrough keeps TLS between the client and Mains.
 
 By default the server opens the desktop app's Mains data directory, so existing
 workspaces, collections, and run history appear without an import. Quit the
@@ -188,7 +187,7 @@ Standalone server commands (from `apps/server`; packaging also needs
 ```bash
 npm --prefix ../desktop install
 npm install
-npm run serve -- --lan         # Build, run, and print a phone pairing QR
+npm run serve -- --tailscale-serve  # Build, run, and print a phone pairing QR
 npm run pair                    # Refresh the one-time pairing link
 npm run service -- status       # Inspect the background service
 npm run package                 # Build dist/mains-server.tgz

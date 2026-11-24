@@ -1,3 +1,4 @@
+import { isSecureConnectEndpoint } from "@mains/contracts/connect-endpoint";
 import {
   isPairDeviceResult,
   type PairDeviceInput,
@@ -12,9 +13,18 @@ const PAIR_TIMEOUT_MS = 8000;
 /** The backend answered and said no — the code is spent or invalid. */
 export class PairingRejectedError extends Error {}
 
+type PairFetch = (url: string, init: {
+  method: "POST";
+  redirect: "error";
+  headers: Record<string, string>;
+  body: string;
+  signal: AbortSignal;
+}) => Promise<Pick<Response, "ok" | "status" | "json">>;
+
 async function postPair(
   endpoint: string,
   input: PairDeviceInput,
+  request: PairFetch,
   signal?: AbortSignal,
 ): Promise<PairDeviceResult> {
   assertAuthActive(signal, "Pairing canceled");
@@ -23,8 +33,9 @@ async function postPair(
   signal?.addEventListener("abort", cancel, { once: true });
   const timer = setTimeout(() => controller.abort(), PAIR_TIMEOUT_MS);
   try {
-    const res = await fetch(`${endpoint}/pair`, {
+    const res = await request(`${endpoint}/pair`, {
       method: "POST",
+      redirect: "error",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
       signal: controller.signal,
@@ -58,17 +69,19 @@ async function postPair(
 export async function pairWithBackend(
   link: PairingLink,
   device: Omit<PairDeviceInput, "code">,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; request?: PairFetch } = {},
 ): Promise<PairedBackend> {
   let lastError: Error | null = null;
-  for (const endpoint of link.endpoints) {
+  const endpoints = link.endpoints.filter(endpoint => isSecureConnectEndpoint(endpoint));
+  if (!endpoints.length) throw new PairingRejectedError("Use an HTTPS pairing link from your computer");
+  for (const endpoint of endpoints) {
     assertAuthActive(options.signal, "Pairing canceled");
     try {
-      const result = await postPair(endpoint, { code: link.code, ...device }, options.signal);
+      const result = await postPair(endpoint, { code: link.code, ...device }, options.request ?? fetch, options.signal);
       return {
         backendId: result.backend.backendId,
         name: result.backend.name,
-        endpoints: [endpoint, ...link.endpoints.filter((e) => e !== endpoint)],
+        endpoints: [endpoint, ...endpoints.filter((e) => e !== endpoint)],
         deviceId: result.deviceId,
         deviceToken: result.deviceToken,
         pairedAt: new Date().toISOString(),
