@@ -252,7 +252,7 @@ private struct ContextTextInput: UIViewRepresentable {
             let selected = view.attributedText.attributedSubstring(from: range)
             UIPasteboard.general.string = ContextMentions.strippingMarkers(coordinator.source(selected))
         }
-        let wantsFocus = focused && !mainPaneCovered
+        let wantsFocus = focused && !mainPaneCovered && !coordinator.isEndingEditing
         view.wantsFocus = wantsFocus
         if wantsFocus, !view.isFirstResponder { view.requestFocus() }
         else if !wantsFocus, view.isFirstResponder { view.resignFirstResponder() }
@@ -273,6 +273,7 @@ private struct ContextTextInput: UIViewRepresentable {
         var skills: [ContextSkill] = []
         var scope: ContextScope?
         var signature = ""
+        private(set) var isEndingEditing = false
         init(_ parent: ContextTextInput) { self.parent = parent }
         func source(_ value: NSAttributedString) -> String {
             var result = ""
@@ -301,8 +302,20 @@ private struct ContextTextInput: UIViewRepresentable {
         func textViewDidChangeSelection(_ view: UITextView) {
             view.typingAttributes = [.font: UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor.label]
         }
-        func textViewDidBeginEditing(_ view: UITextView) { if !parent.focused { parent.focused = true } }
-        func textViewDidEndEditing(_ view: UITextView) { if parent.focused { parent.focused = false } }
+        func textViewDidBeginEditing(_ view: UITextView) {
+            isEndingEditing = false
+            if !parent.focused { parent.focused = true }
+        }
+        func textViewDidEndEditing(_ view: UITextView) {
+            // Cancel queued focus before the keyboard resize can update this view.
+            isEndingEditing = true
+            (view as? ComposerTextView)?.wantsFocus = false
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self, let view, view.delegate === self, self.isEndingEditing else { return }
+                if !view.isFirstResponder, self.parent.focused { self.parent.focused = false }
+                self.isEndingEditing = false
+            }
+        }
     }
 }
 

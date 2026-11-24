@@ -289,7 +289,9 @@ underlying tooling.
   retained conversation/output workspace fits the remaining width. Chat, composer,
   keyboard and mentions stay usable beside it; gallery/table swipes do not close
   it. Navigation keeps an opened wide sidebar visible. In narrow windows the
-  sidebar opens over a blurred backdrop while the main pane stays in place.
+  sidebar opens over a left-tinted blur and scales a temporary rendering of the
+  current pane slightly toward its center. It fills the window and restores the
+  keyboard when dismissed back to the same editor. Reduce Motion disables the scale.
   All app profiles support portrait and both landscape directions. Demo uses its
   prepared PDF/Markdown outputs for the same workflow.
 - Page options include **Move to project**, **Export as Markdown** and **Move to Trash**.
@@ -797,9 +799,15 @@ Manual Duo/adaptive workspace checks (prepared demo files work offline):
   messages and Send must fit on screen, typing/mentions and gallery/table swipes
   must work, and selecting another chat must keep the wide sidebar open. Close it
   with the sidebar button, its trailing-edge swipe or the accessibility Escape
-  action. In a narrow window, check the blurred overlay keeps the main pane in
-  place, blocks its controls, and closes with the close button or a tap or swipe
-  in the area beside the sidebar. Reduce Transparency uses a solid background.
+  action. In a narrow window, check that the current pane scales slightly toward
+  its center from Home and from a destination, the overlay blocks main-pane
+  controls, and the close button or a tap or swipe beside the sidebar dismisses
+  it. With the keyboard visible, check that an incomplete edge swipe leaves it
+  visible, then use a quick edge swipe to open the sidebar. The menu should fill
+  the window and dismiss the keyboard. Close the menu and check that the
+  keyboard stays dismissed and the draft is still there. In a chat with
+  messages, tap a blank part of the transcript and check that it dismisses the keyboard.
+  Reduce Motion disables the scale and Reduce Transparency uses a solid background.
 
 The attachment UI test needs at least five library photos. Before running it,
 seed only your dedicated QA simulator and grant that test app library access:

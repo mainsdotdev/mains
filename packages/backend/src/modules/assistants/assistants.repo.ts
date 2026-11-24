@@ -140,17 +140,15 @@ export const assistantsRepo = {
             .where(and(inArray(runs.id, runIds), eq(runs.accountId, accountId), eq(runs.isArchived, false), ownedHere(runs.ownerBackendId))).all();
     },
     assignmentsForMate(mate: Pick<Assistant, "id" | "accountId" | "teamId">, taskId?: string, offset = 0) {
-        // Match canAccessAssistantAssignment before applying the page limit.
-        const scope = and(eq(assistantAssignments.accountId, mate.accountId), or(
-            and(isNull(assistantAssignments.teamId), eq(assistantAssignments.toAssistantId, mate.id)),
-            mate.teamId ? eq(assistantAssignments.teamId, mate.teamId) : undefined,
-        ));
+        // Filter the profile list before paging. Detail reads also serve existing teammate follow-ups.
+        const owned = eq(assistantAssignments.toAssistantId, mate.id);
+        const scope = taskId !== undefined && mate.teamId ? or(owned, eq(assistantAssignments.teamId, mate.teamId)) : owned;
         return getDb().select({ task: assignmentProjection, workerRunId: runs.id,
             activeCount: sql<number>`sum(CASE WHEN ${activeAssignment} THEN 1 ELSE 0 END) OVER ()`,
         }).from(assistantAssignments)
             .leftJoin(runs, and(eq(runs.id, assistantAssignments.workerRunId), eq(runs.accountId, mate.accountId),
                 eq(runs.assistantId, assistantAssignments.toAssistantId), eq(runs.isArchived, false), ownedHere(runs.ownerBackendId)))
-            .where(and(scope, taskId === undefined ? undefined : eq(assistantAssignments.id, taskId)))
+            .where(and(eq(assistantAssignments.accountId, mate.accountId), scope, taskId === undefined ? undefined : eq(assistantAssignments.id, taskId)))
             .orderBy(desc(activeAssignment), desc(assistantAssignments.createdAt), assistantAssignments.id)
             .limit(taskId === undefined ? 101 : 1).offset(offset).all()
             .map(row => ({ ...row, task: assignment(row.task) }));

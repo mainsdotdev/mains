@@ -974,7 +974,9 @@ public final class BackendSession {
     public func loadMateTasks(_ mateID: String, offset: Int) async throws -> MateTasks {
         let tasks = try await mateInfoRead("assistants:mobileAssignments", mateID: mateID, selection: .number(Double(offset)), as: MateTasks.self)
         guard tasks.items.count <= 100, tasks.activeCount >= 0 else { throw MainsError.invalidReply }
-        return tasks
+        // Older hosts return team-wide pages. Keep their page boundaries and count this Mate's open tasks on page one.
+        let ownTasks = tasks.items.filter { $0.assignee?.id == mateID }
+        return MateTasks(items: ownTasks, activeCount: ownTasks.filter(\.isOpen).count, hasMore: tasks.hasMore)
     }
 
     public func readMateTask(_ id: String, mateID: String) async throws -> MateTask {

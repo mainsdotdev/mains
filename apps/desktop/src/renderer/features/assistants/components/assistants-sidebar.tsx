@@ -6,7 +6,6 @@ import { AgentTeams, AssistantSteps, Info, Pin, PinFilled, Warning } from "@/com
 import NewButton from "@/components/layout/sidebar/new-button";
 import SearchBar from "@/components/layout/sidebar/search-bar";
 import { SidebarGroupSection, SIDEBAR_ACTION_ICON } from "@/components/layout/sidebar/sidebar-group-section";
-import { SidebarItemHoverCard } from "@/components/layout/sidebar/sidebar-item-hover-card";
 import { SidebarTopRows } from "@/components/layout/sidebar/sidebar-top-rows";
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery, useSetAssistantPinnedMutation } from "@/lib/redux/api/assistantsApi";
@@ -134,44 +133,42 @@ function AssistantItem({ assistant, needsSetup, working, active, open, onOpenDet
   const pinLabel = pinned ? "Unpin mate" : "Pin mate";
   const PinIcon = pinned ? PinFilled : Pin;
   const select = () => open(assistantHref(assistant.id));
-  const pinVisibility = "opacity-0 group-hover/assistant:opacity-100 group-focus-within/assistant:opacity-100 pointer-coarse:opacity-100";
+  const actionVisibility = "opacity-0 group-hover/assistant:opacity-100 group-focus-within/assistant:opacity-100 pointer-coarse:opacity-100";
   return (
-    <div className="min-w-0">
-      <SidebarItemHoverCard title={assistant.name} description={assistant.description} updatedAt={assistant.updatedAt}
-        actions={[
-          ...(pinned ? [{ label: `About ${assistant.name}`, icon: <Info className="size-4" />, onSelect: onOpenDetails }] : []),
-          ...(onTogglePin && !changingPin ? [{ label: pinLabel, icon: <PinIcon className="size-4" />, pressed: pinned, onSelect: onTogglePin }] : []),
-        ]}>
-        <div className={`group/assistant rounded-2xl transition-colors ${pinned ? "relative" : "flex items-center gap-2 px-2.5 py-2.5"} ${active ? "glass-outline-soft glass-outline bg-primary/50 dark:bg-primary/5" : "hover:bg-primary/50 dark:hover:bg-primary/5"}`}>
-          {pinned ? <Button variant="bare" role="button" title={assistant.name} aria-label={`Open ${assistant.name}${needsSetup ? ", finish setup" : ""}`}
-            aria-current={active ? "page" : undefined} onClick={select}
-            className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl px-1 py-2.5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent">
-            <AssistantAvatar avatar={assistant.avatar} working={working} seed={assistant.name} className="size-11 max-w-full shrink-0" />
-            <span className="flex w-full min-w-0 items-center justify-center gap-1">
-              <Text as="span" size="xs" weight="medium" className="min-w-0 truncate">{assistant.name}</Text>
-              {needsSetup && (
-                <Warning aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
-              )}
-            </span>
-          </Button> : <>
-            <AssistantMonogram avatar={assistant.avatar} name={assistant.name} providerId={assistant.providerId} working={working} onClick={onOpenDetails} />
-            <Button variant="bare" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" aria-current={active ? "page" : undefined} onClick={select}>
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <Text as="span" size="s" weight="medium" className="truncate">{assistant.name}</Text>
-                {needsSetup ? <span className="flex min-w-0 items-center gap-1.5 text-xs text-primary-500">
-                  <span className="truncate">Finish setup</span>
-                  <Warning aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
-                </span> : <span className="truncate text-xs text-primary-500">{assistant.description || assistant.spaceSnapshot.name}</span>}
-              </span>
-            </Button>
-          </>}
-          {onTogglePin && <Button variant="icon" iconSize="xs" aria-label={`${pinLabel} ${assistant.name}`} aria-pressed={pinned}
-            tooltip={pinLabel} onClick={onTogglePin} disabled={changingPin}
-            className={pinned ? `absolute top-1 right-1 ${pinVisibility}` : `shrink-0 ${pinVisibility}`}>
-            <PinIcon className="size-3.5" />
-          </Button>}
-        </div>
-      </SidebarItemHoverCard>
+    <div className={`group/assistant min-w-0 rounded-2xl transition-colors ${pinned ? "relative" : "flex items-center gap-2 px-2.5 py-2.5"} ${active ? "glass-outline-soft glass-outline bg-primary/50 dark:bg-primary/5" : "hover:bg-primary/50 dark:hover:bg-primary/5"}`}>
+      {pinned ? <>
+        <Button variant="bare" title={assistant.name} aria-label={`Open ${assistant.name}${needsSetup ? ", finish setup" : ""}`}
+          aria-current={active ? "page" : undefined} onClick={select}
+          className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl px-1 py-2.5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent">
+          <AssistantAvatar avatar={assistant.avatar} working={working} seed={assistant.name} className="size-11 max-w-full shrink-0" />
+          <span className="flex w-full min-w-0 items-center justify-center gap-1">
+            <Text as="span" size="xs" weight="medium" className="min-w-0 truncate">{assistant.name}</Text>
+            {needsSetup && (
+              <Warning aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
+            )}
+          </span>
+        </Button>
+        <Button variant="icon" iconSize="xs" aria-label={`About ${assistant.name}`}
+          onClick={onOpenDetails} className={`absolute top-1 left-1 ${actionVisibility}`}>
+          <Info aria-hidden="true" className="size-3.5" />
+        </Button>
+      </> : <>
+        <AssistantMonogram avatar={assistant.avatar} name={assistant.name} providerId={assistant.providerId} working={working} onClick={onOpenDetails} />
+        <Button variant="bare" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" aria-current={active ? "page" : undefined} onClick={select}>
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <Text as="span" size="s" weight="medium" className="truncate">{assistant.name}</Text>
+            {needsSetup ? <span className="flex min-w-0 items-center gap-1.5 text-xs text-primary-500">
+              <span className="truncate">Finish setup</span>
+              <Warning aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
+            </span> : <span className="truncate text-xs text-primary-500">{assistant.description || assistant.spaceSnapshot.name}</span>}
+          </span>
+        </Button>
+      </>}
+      {onTogglePin && <Button variant="icon" iconSize="xs" aria-label={`${pinLabel} ${assistant.name}`} aria-pressed={pinned}
+        tooltip={pinLabel} onClick={onTogglePin} disabled={changingPin}
+        className={pinned ? `absolute top-1 right-1 ${actionVisibility}` : `shrink-0 ${actionVisibility}`}>
+        <PinIcon className="size-3.5" />
+      </Button>}
     </div>
   );
 }

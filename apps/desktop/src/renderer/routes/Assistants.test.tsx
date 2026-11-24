@@ -25,6 +25,14 @@ const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 const createTeam = vi.hoisted(() => vi.fn());
 const createMate = vi.hoisted(() => vi.fn());
 const archiveMate = vi.hoisted(() => vi.fn());
+const archiveResult = vi.hoisted(() => ({
+  current: {} as {
+    originalArgs?: { accountId: string; id: string; archived: boolean };
+    isLoading?: boolean;
+    isSuccess?: boolean;
+    reset?: () => void;
+  },
+}));
 const setPinned = vi.hoisted(() => vi.fn());
 const removeMate = vi.hoisted(() => vi.fn());
 const updateProfile = vi.hoisted(() => vi.fn());
@@ -46,7 +54,7 @@ vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantAssignmentQuery: readAssignment,
   useAssignAssistantTaskMutation: () => [assignTask, {}],
   useAssistantConversationsQuery: ({ id }: { id: string }) => ({ currentData: mocks.loadingChats ? undefined : id === "website" ? mocks.websiteChats : mocks.chats, error: mocks.chatsError, refetch: mocks.refetchChats }),
-  useArchiveAssistantMutation: () => [archiveMate, {}],
+  useArchiveAssistantMutation: () => [archiveMate, archiveResult.current],
   useSetAssistantPinnedMutation: () => [setPinned, {}],
   useRemoveAssistantMutation: () => [removeMate, {}],
   useUpdateAssistantProfileMutation: () => [updateProfile, { isLoading: mocks.savingProfile }],
@@ -108,6 +116,7 @@ beforeEach(() => {
   assignTask.mockReset();
   pendingApprovals.length = 0;
   archiveMate.mockReset().mockReturnValue({ unwrap: async () => undefined });
+  archiveResult.current = {};
   setPinned.mockReset().mockReturnValue({ unwrap: async () => undefined });
   removeMate.mockReset().mockReturnValue({ unwrap: async () => undefined });
   welcomes.length = 0;
@@ -148,6 +157,30 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView; else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
 
 describe("assistant profile and conversation", () => {
+  it("keeps mate hover cards closed and opens pinned mate details from the tile", async () => {
+    mocks.assistants[1].pinnedAt = new Date(1);
+    setup();
+    const sidebar = within(screen.getByRole("navigation", { name: "Mates" }));
+    const release = sidebar.getByRole("button", { name: /^Release/ });
+    const website = sidebar.getByRole("button", { name: "Open Website" });
+
+    vi.useFakeTimers();
+    try {
+      for (const mate of [release, website]) {
+        const row = mate.parentElement!;
+        fireEvent.mouseEnter(row);
+        act(() => vi.advanceTimersByTime(500));
+        expect(screen.queryByRole("dialog", { name: /^(Release|Website)$/ })).toBeNull();
+        fireEvent.mouseLeave(row);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+
+    fireEvent.click(sidebar.getByRole("button", { name: "About Website" }));
+    expect(await screen.findByRole("complementary", { name: "About Website" })).toBeTruthy();
+  });
+
   it("puts pinned mates first by pin date and returns an unpinned mate to its team", async () => {
     const [release, website] = mocks.assistants;
     release.pinnedAt = null;
@@ -200,6 +233,72 @@ describe("assistant profile and conversation", () => {
     const header = screen.getByRole("button", { name: "Website profile" });
     expect(within(header).getByText("Archived")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Restore mate" })).toBeTruthy();
+  });
+
+  it("keeps the outgoing chat hidden until archiving opens the empty Mates screen", async () => {
+    let finishArchive!: () => void;
+    const pendingArchive = new Promise<void>(resolve => { finishArchive = resolve; });
+    archiveMate.mockReturnValueOnce({ unwrap: () => pendingArchive });
+    const { refresh } = setup("/assistants?assistant=release&run=first&tab=profile");
+    const panel = await screen.findByRole("complementary", { name: "About Release" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Archive mate" }));
+    const request = { accountId: "account", id: "release", archived: true };
+    const reset = vi.fn(() => { archiveResult.current = {}; });
+    archiveResult.current = { originalArgs: request, isLoading: true, reset };
+    refresh();
+    expect(screen.getByText("Archiving mate…")).toBeTruthy();
+    expect(screen.queryByTestId("conversation")).toBeNull();
+
+    mocks.assistants[0].isArchived = true;
+    archiveResult.current = { originalArgs: request, isSuccess: true, reset };
+    refresh();
+    expect(screen.getByText("Archiving mate…")).toBeTruthy();
+    expect(screen.queryByTestId("conversation")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(reset).not.toHaveBeenCalled();
+
+    await act(async () => finishArchive());
+    const heading = await screen.findByRole("heading", { name: "Your mates" });
+    expect(archiveMate).toHaveBeenCalledExactlyOnceWith(request);
+    expect(reset).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId("conversation")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Release profile" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "About Release" })).toBeNull();
+    const sidebar = within(screen.getByRole("navigation", { name: "Mates" }));
+    expect(sidebar.getByRole("button", { name: "About Website" })).toBeTruthy();
+    expect(sidebar.queryByRole("button", { name: "About Release" })).toBeNull();
+
+    fireEvent.click(within(heading.parentElement!).getByRole("button", { name: "New mate" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close new mate" }));
+    expect(screen.getByRole("heading", { name: "Your mates" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    expect(screen.getByRole("menuitem", { name: "Open Release" })).toBeTruthy();
+  });
+
+  it("keeps the selected chat and shows the error when archiving fails", async () => {
+    archiveMate.mockReturnValueOnce({ unwrap: async () => { throw new Error("Stop the running conversation first."); } });
+    setup("/assistants?assistant=release&run=first&tab=profile");
+    const panel = within(await screen.findByRole("complementary", { name: "About Release" }));
+    fireEvent.click(panel.getByRole("button", { name: "Archive mate" }));
+
+    expect((await panel.findByRole("alert")).textContent).toBe("Stop the running conversation first.");
+    expect(screen.getByTestId("conversation").textContent).toBe("first");
+  });
+
+  it("keeps a different mate selected if an earlier archive request completes", async () => {
+    let finishArchive!: () => void;
+    const pendingArchive = new Promise<void>(resolve => { finishArchive = resolve; });
+    archiveMate.mockReturnValueOnce({ unwrap: () => pendingArchive });
+    setup("/assistants?assistant=release&run=first&tab=profile");
+    const panel = within(await screen.findByRole("complementary", { name: "About Release" }));
+    fireEvent.click(panel.getByRole("button", { name: "Archive mate" }));
+
+    const sidebar = within(screen.getByRole("navigation", { name: "Mates" }));
+    fireEvent.click(sidebar.getByRole("button", { name: /^Website\s*Own the website$/ }));
+    await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("website-first"));
+    await act(async () => finishArchive());
+    expect(screen.getByTestId("conversation").textContent).toBe("website-first");
   });
 
   it("asks before permanent deletion and clears the deleted mate's selection", async () => {

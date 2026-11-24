@@ -544,6 +544,33 @@ describe("archived Mate history", () => {
     });
 });
 
+describe("mobile Mate assignments", () => {
+    it("filters and counts by assignee before paging, including work from a prior team", async () => {
+        const mate = await makeAssistant("Release"), teammate = await makeAssistant("Build");
+        const previousTeam = assistantsService.createTeam({ accountId: mate.accountId, name: "Previous team" });
+        const base = {
+            accountId: mate.accountId, taskKey: "release", title: "Review release", prompt: "Check the build.",
+        };
+        const add = (id: string, assignee: string, team: string, status: "queued" | "completed") => assistantsRepo.enqueue(
+            { ...base, id, dedupeKey: id, toAssistantId: assignee, teamId: team, status },
+            { id: `request-${id}`, assignmentId: id, kind: "request", content: base.prompt },
+        );
+        add("old-review", mate.id, previousTeam.id, "completed");
+        add("new-review", mate.id, teamId, "queued");
+        add("teammate-open", teammate.id, teamId, "queued");
+        for (let index = 0; index < 100; index++) add(`teammate-${index}`, teammate.id, teamId, "completed");
+
+        expect(await assistantsMobile.assignments(mate.accountId, mate.id, 0)).toMatchObject({
+            items: [{ id: "new-review", assignee: { id: mate.id } }, { id: "old-review", assignee: { id: mate.id } }],
+            activeCount: 1, hasMore: false,
+        });
+        expect(await assistantsMobile.assignments(mate.accountId, mate.id, "old-review")).toMatchObject({ id: "old-review" });
+        expect(await assistantsMobile.assignments(mate.accountId, mate.id, "teammate-open")).toMatchObject({
+            id: "teammate-open", assignee: { id: teammate.id },
+        });
+    });
+});
+
 describe("archived Mate deletion", () => {
     it("removes owned data and leaves shared memories and a teammate's delegated work in place", async () => {
         const mate = await makeAssistant("Release");

@@ -39,6 +39,7 @@ struct ConversationMessageActions: View {
     let copyIsPreview: Bool
     let forkRunID: String?
     let fork: () -> Void
+    @Environment(ActionToast.self) private var actionToast: ActionToast?
     @State private var copied = false
     @State private var copyID: UUID?
 
@@ -47,6 +48,7 @@ struct ConversationMessageActions: View {
             if let copyText, !copyText.isEmpty {
                 Button {
                     UIPasteboard.general.string = copyText
+                    actionToast?.show(copyIsPreview ? "Message preview copied" : "Message copied")
                     copied = true; copyID = UUID()
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 } label: {

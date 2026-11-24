@@ -141,12 +141,12 @@ export const assistantsMobile = {
         const mate = await ownedMate(accountId, mateId);
         const full = typeof selection === "string";
         const rows = assistantsRepo.assignmentsForMate(mate, full ? text(selection, "Assignment") : undefined, full ? 0 : offset(selection));
-        const identities = new Map(assistantsRepo.list(accountId).map(profile => [profile.id, mateIdentity(profile)]));
         const items = rows.slice(0, 100).map(({ task, workerRunId }) => {
             const { id, title, taskKey, status, result, prompt, error, evidence, toAssistantId, pullRequestReview } = task;
+            const assignee = toAssistantId === mate.id ? mate : assistantsService.get(toAssistantId, accountId);
             const brief = pullRequestReview ? pullRequestReview.focus ?? "" : prompt;
             return { id, title: title === "Assistant request" && taskKey.startsWith("mention:") ? "Mate request" : title, status, workerRunId,
-                assignee: identities.get(toAssistantId) ?? null, brief: full ? brief : brief.slice(0, 400),
+                assignee: assignee ? mateIdentity(assignee) : null, brief: full ? brief : brief.slice(0, 400),
                 result: full ? result : result?.slice(0, 400) ?? null, error: error?.slice(0, 2000) ?? null, evidence: full ? evidence : [] };
         });
         if (!full) return { items, activeCount: rows[0]?.activeCount ?? 0, hasMore: rows.length > 100 };

@@ -1,7 +1,7 @@
 import type { ComponentType, ReactNode, SVGProps } from "react";
 import { cn } from "@/lib/cn";
 
-export type StatusTone = "neutral" | "info" | "success" | "warning" | "danger";
+export type StatusTone = "neutral" | "info" | "progress" | "success" | "warning" | "danger";
 type StatusIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
 type StatusBadgeProps = {

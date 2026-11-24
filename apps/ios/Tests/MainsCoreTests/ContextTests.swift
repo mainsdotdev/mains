@@ -12,6 +12,7 @@ import Testing
     var overrideSkills: JSONValue?
     var supportsMates = false
     var supportsMateInfo = false
+    var mateTaskPages: [Double: JSONValue] = [:]
     var mateTaskAssignee: JSONValue = .object([
         "id": .string("reviewer"), "name": .string("Reviewer"), "isArchived": .bool(false),
         "avatar": .object(["shape": .string("sphere"), "color": .string("mint")]),
@@ -48,6 +49,7 @@ import Testing
                     "avatar": .object(["shape": .string("sphere"), "color": .string("mint")]),
                 ])])])
             case "assistants:mobileAssignments":
+                if let offset = args.last?.number, let page = faults.mateTaskPages[offset] { return page }
                 return .object(["id": .string("review"), "title": .string("Review"), "status": .string("blocked"),
                                 "brief": .string("Review the sample"), "evidence": .array([]), "assignee": faults.mateTaskAssignee])
             case "assistants:mobileManage":
@@ -158,6 +160,38 @@ import Testing
         #expect(payload["workspaceId"] == .null)
         #expect(payload["clientPromptId"].string == call.id)
         #expect(!Experience.allowsMateMentions("work", isMateConversation: true, hasLocalWorkspace: false))
+    }
+
+    @Test @MainActor func mateAssignmentPagesFilterLegacyTeamRowsAndCountOnlyTheSelectedMate() async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+        let faults = ContextFaults(), storage = MemoryStorage()
+        faults.supportsMates = true
+        faults.supportsMateInfo = true
+        storage.pairing = backend.pairing
+        let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        try await eventually { session.isConnected && session.supportsMateInfo }
+
+        func task(_ id: String, for mate: String, status: String) -> JSONValue {
+            .object(["id": .string(id), "title": .string(id), "status": .string(status), "brief": .string("Review the sample"),
+                     "evidence": .array([]), "assignee": .object(["id": .string(mate), "name": .string(mate), "isArchived": .bool(false),
+                        "avatar": .object(["shape": .string("sphere"), "color": .string("mint")])])])
+        }
+        faults.mateTaskPages[0] = .object(["items": .array([task("own", for: "release", status: "blocked"),
+            task("teammate", for: "reviewer", status: "running")]), "activeCount": .number(2), "hasMore": .bool(true)])
+        faults.mateTaskPages[100] = .object(["items": .array([task("older-teammate", for: "reviewer", status: "completed")]),
+            "activeCount": .number(2), "hasMore": .bool(true)])
+        faults.mateTaskPages[200] = .object(["items": .array([task("own-history", for: "release", status: "completed")]),
+            "activeCount": .number(2), "hasMore": .bool(false)])
+
+        let first = try await session.loadMateTasks("release", offset: 0)
+        #expect(first.items.map(\.id) == ["own"])
+        #expect(first.activeCount == 1 && first.hasMore)
+        let empty = try await session.loadMateTasks("release", offset: 100)
+        #expect(empty.items.isEmpty && empty.hasMore)
+        let history = try await session.loadMateTasks("release", offset: 200)
+        #expect(history.items.map(\.id) == ["own-history"])
     }
 
     @Test @MainActor func newAssignmentsFollowupsAndManualRoutinesRequireTheWorkerProvidersConsent() async throws {

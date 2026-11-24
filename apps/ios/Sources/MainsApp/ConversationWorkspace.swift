@@ -9,17 +9,22 @@ struct ConversationWorkspace<ConversationContent: View, OutputContent: View>: Vi
     @ObserveHotReload private var hotReload
     #endif
     let plan: ConversationPanePlan
+    let fillsViewport: Bool
     let extendsConversationUnderHeader: Bool
     let conversation: ConversationContent
     let output: OutputContent
 
-    init(plan: ConversationPanePlan, extendsConversationUnderHeader: Bool = false,
+    init(plan: ConversationPanePlan, fillsViewport: Bool, extendsConversationUnderHeader: Bool = false,
          @ViewBuilder conversation: () -> ConversationContent, @ViewBuilder output: () -> OutputContent) {
-        self.plan = plan; self.extendsConversationUnderHeader = extendsConversationUnderHeader
+        self.plan = plan; self.fillsViewport = fillsViewport
+        self.extendsConversationUnderHeader = extendsConversationUnderHeader
         self.conversation = conversation(); self.output = output()
     }
     var body: some View {
-        ConversationReaderLayout(plan: plan) {
+        // A single full-size pane can follow the native keyboard layout directly.
+        // Keep the same readers when switching to geometry-based split placement.
+        let layout = fillsViewport ? AnyLayout(ZStackLayout()) : AnyLayout(ConversationReaderLayout(plan: plan))
+        layout {
             ZStack { conversation }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipShape(ConversationReaderClip(extendsAbove: extendsConversationUnderHeader))

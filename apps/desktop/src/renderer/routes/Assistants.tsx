@@ -41,6 +41,7 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
   const { isOpen: previewOpen, ownerKey: previewOwner, hide: hidePreview } = usePreviewPanel();
   const selectedId = params.get("assistant");
   const selected = overview?.assistants.find(a => a.id === selectedId);
+  const firstActiveMate = overview?.assistants.find(a => !a.isArchived);
   const setupWelcome = selected?.isArchived ? undefined : overview?.welcomes?.find(welcome => welcome.assistantId === selectedId &&
     welcome.question?.profileSetup && !welcome.question.profileSetup.saved);
   const requestedRun = params.get("run");
@@ -48,6 +49,7 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
   const runId = runParam && runParam !== "new" ? runParam : null;
   const tab = params.get("tab");
   const creating = params.get("new") === "1";
+  const emptyRequested = params.get("empty") === "1";
   const createdMateId = (location.state as { createdMateId?: string } | null)?.createdMateId;
   const animateWelcome = selectedId === createdMateId;
   const { currentData: chats, error: chatsError, isFetching: loadingChats, refetch: refetchChats } = useAssistantConversationsQuery({ accountId, id: selectedId ?? "" }, { skip: !selected });
@@ -71,18 +73,28 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
     dispatch(visitAssistantConversation({ ownerKey, runId: runParam, initialIds: chats.map(chat => chat.id) }));
   }, [selected, chats, runParam, dispatch, ownerKey]);
   const [archive, archiving] = useArchiveAssistantMutation();
+  const { originalArgs: archiveRequest, isLoading: archiveLoading, isSuccess: archiveSucceeded, reset: resetArchive } = archiving;
+  const archivingSelected = archiveRequest?.archived === true && archiveRequest.id === selectedId && (archiveLoading || archiveSucceeded);
   const [failure, setFailure] = useState("");
+  const activeSelection = useRef<{ id: string | null; creating: boolean } | null>(null);
+  useLayoutEffect(() => {
+    activeSelection.current = { id: selectedId, creating };
+    return () => { activeSelection.current = null; };
+  }, [creating, selectedId]);
+  useEffect(() => {
+    // Keep the outgoing chat hidden until the route has committed.
+    if (archiveSucceeded && archiveRequest?.archived && archiveRequest.id !== selectedId) resetArchive();
+  }, [archiveRequest, archiveSucceeded, resetArchive, selectedId]);
   useEffect(() => {
     if (!overview || creating) return;
     if (!selectedId) {
-      const first = overview.assistants.find(a => !a.isArchived);
-      if (first) setParams({ assistant: first.id }, { replace: true });
+      if (!emptyRequested && firstActiveMate) setParams({ assistant: firstActiveMate.id }, { replace: true });
     } else if (setupWelcome && requestedRun !== setupWelcome.runId) {
       setParams(previous => { const next = new URLSearchParams(previous); next.set("run", setupWelcome.runId); return next; }, { replace: true });
     } else if (selected && !selected.isArchived && chats && !runParam) {
       setParams(previous => { const next = new URLSearchParams(previous); next.set("run", savedView?.activeRunId ?? chats[0]?.id ?? "new"); return next; }, { replace: true });
     }
-  }, [overview, creating, selectedId, selected, chats, runParam, requestedRun, setupWelcome, savedView?.activeRunId, setParams]);
+  }, [overview, creating, emptyRequested, firstActiveMate, selectedId, selected, chats, runParam, requestedRun, setupWelcome, savedView?.activeRunId, setParams]);
   const changeTab = useCallback((value?: string, replace = false) => setParams(previous => { const next = new URLSearchParams(previous); if (value) next.set("tab", value); else next.delete("tab"); next.delete("new"); return next; }, { replace }), [setParams]);
   const panelRequested = !!selected && !!tab && !creating;
   const panelOpen = panelRequested && !previewOpen;
@@ -133,15 +145,25 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
   };
   const toggleArchive = async () => {
     if (!selected) return;
+    const { id, isArchived } = selected;
     setFailure("");
-    try { await archive({ accountId, id: selected.id, archived: !selected.isArchived }).unwrap(); }
-    catch (e) { setFailure(errorText(e)); }
+    try {
+      await archive({ accountId, id, archived: !isArchived }).unwrap();
+      const active = activeSelection.current;
+      if (!isArchived && active?.id === id) {
+        setParams(active.creating ? { empty: "1", new: "1" } : { empty: "1" }, { replace: true });
+      }
+    } catch (e) {
+      if (activeSelection.current?.id === id) setFailure(errorText(e));
+    }
   };
   return <div className="@container/assistant-layout relative flex h-full min-h-0 overflow-hidden text-primary-900 dark:text-primary-100">
     {!creating && <AssistantProfileHeader assistant={selected} chatColumnRef={chatColumnRef} working={working} avatarState={avatarState} isPanelOpen={panelOpen} onOpenDetails={toggleInfoPanel} pending={isLoading} />}
     <div ref={chatColumnRef} data-assistant-chat-column="" className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
     {creating ? <div className="scroll-bounce min-h-0 flex-1 overflow-y-auto noscrollbar">
       <AssistantProfileForm accountId={accountId} onClose={closeCreation} onCreated={openCreatedMate} />
+    </div> : archivingSelected ? <div role="status" className="flex flex-1 items-center justify-center text-sm text-primary-500">
+      Archiving mate…
     </div> : selected ? <>
       {selected.isArchived && !runId ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 text-sm text-primary-500">
@@ -186,15 +208,15 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
           </div>
         )}
         <h1 className="text-xl font-medium">{selectedId ? "Mate unavailable" : "Your mates"}</h1>
-        <p className="max-w-sm text-sm text-primary-500">{selectedId ? "Choose a mate from the sidebar." : "Create a mate, then start a conversation. Your team can share memory and work together."}</p>
-        <Button variant="subtle" onClick={() => setParams({ new: "1" })}><Plus className="size-4" />New mate</Button>
+        <p className="max-w-sm text-sm text-primary-500">{selectedId || firstActiveMate ? "Choose a mate from the sidebar." : "Create a mate, then start a conversation. Your team can share memory and work together."}</p>
+        <Button variant="subtle" onClick={() => setParams(emptyRequested ? { empty: "1", new: "1" } : { new: "1" })}><Plus className="size-4" />New mate</Button>
       </>}
     </div>}
     </div>
     {selected && overview && !previewOpen && <AssistantInfoPanel key={selected.id} assistant={selected} overview={overview} avatarState={avatarState} isOpen={panelOpen}
       chats={chats} selectedRunId={runId} chatsError={chatsError} onSelectChat={openChat} onRetryChats={() => void refetchChats()}
       tab={tab === "routines" || tab === "chats" || tab === "memory" || tab === "tasks" ? tab : "profile"} onTabChange={changeTab} onClose={closeInfoPanel}
-      onToggleArchive={() => void toggleArchive()} archiving={archiving.isLoading} error={failure}
+      onToggleArchive={() => void toggleArchive()} archiving={archiveLoading || archivingSelected} error={failure}
       openAssistant={(id, chatId) => navigate(assistantHref(id, chatId))} />}
   </div>;
 }

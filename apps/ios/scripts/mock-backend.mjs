@@ -668,7 +668,9 @@ wss.on('connection', socket => {
           const [account, mateID, change] = args;
           const pinChange = change.action === 'setPinned' && descriptor.capabilities.includes('matePinning') &&
             typeof change.pinned === 'boolean' && fixtureMates.some(mate => mate.id === mateID);
-          if (account !== 'fixture-account' || !commandId || (mateID !== fixtureMate.id && !pinChange)) {
+          const claudeFollowup = descriptor.backendId.startsWith('ios-fixture-mate-consent-') &&
+            mateID === fixtureClaudeMate.id && change.action === 'followup' && change.id === fixtureBlockedTask.id;
+          if (account !== 'fixture-account' || !commandId || (mateID !== fixtureMate.id && !pinChange && !claudeFollowup)) {
             throw new Error('Invalid fixture Mate change');
           }
           if (change.action === 'archive' && change.archived === false && mateArchived && descriptor.capabilities.includes('mateInfo')) {

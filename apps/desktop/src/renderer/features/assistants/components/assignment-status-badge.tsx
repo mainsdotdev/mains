@@ -3,8 +3,8 @@ import { StatusBadge, type StatusTone } from "@/components/ui";
 import { Archive, Check, Clock, Close, Play, Stop, Warning } from "@/components/ui/icons";
 
 const statusStyle = {
-  queued: { label: "Queued", tone: "info", icon: Clock },
-  running: { label: "Running", tone: "info", icon: Play },
+  queued: { label: "Queued", tone: "progress", icon: Clock },
+  running: { label: "Running", tone: "progress", icon: Play },
   blocked: { label: "Blocked", tone: "warning", icon: Warning },
   completed: { label: "Completed", tone: "success", icon: Check },
   failed: { label: "Failed", tone: "danger", icon: Close },

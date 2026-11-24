@@ -214,6 +214,7 @@ struct ConversationView: View {
                     }
                 }
         }
+        .actionToastHost()
         .environment(\.openMateAssignment, presentMateAssignment)
         .fullScreenCover(item: $presentedMateProfile, onDismiss: navigateAfterMatePresentation, content: mateInfoPage)
         .sheet(item: $presentedMateTask, onDismiss: navigateAfterMatePresentation) { link in
@@ -288,7 +289,9 @@ struct ConversationView: View {
             rightToLeft: layoutDirection == .rightToLeft, state: companion, divisions: divisions)
         let action = companion.outputsAction(twoReaders: twoReaders)
         let displayedOutputID = outputSelection?.id
-        return ConversationWorkspace(plan: plan, extendsConversationUnderHeader: !focusedVoice) {
+        let viewport = CGRect(origin: .zero, size: geometry.size)
+        let fillsViewport = plan.conversation == viewport && plan.output == viewport
+        return ConversationWorkspace(plan: plan, fillsViewport: fillsViewport, extendsConversationUnderHeader: !focusedVoice) {
             conversationContent.simultaneousGesture(TapGesture().onEnded {
                 if outputSelection?.id == displayedOutputID { companion.focusConversation() }
             })
@@ -483,7 +486,7 @@ struct ConversationView: View {
             }
             #endif
         }
-        .background(Color(.systemBackground))
+        .background(alignment: .center) { KeyboardDismissBackground(color: Color(.systemBackground)) }
         .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
         .environment(\.mateChatTint, composerMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
         .environment(\.solidChatNotices, true)
@@ -743,6 +746,7 @@ struct ConversationView: View {
             }
         }
         .padding(.top, 8).padding(.bottom, 8)
+        .background(alignment: .center) { KeyboardDismissBackground() }
     }
 
     private func applyGoalChange(_ change: MobileGoalChange, revision: String) {

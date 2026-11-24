@@ -57,6 +57,7 @@ final class TranscriptScrollState {
     }
     @ObservationIgnored var toolFrames: [Int: CGRect] = [:] { didSet { updateVisibleTools() } }
     @ObservationIgnored var transcriptFrame = CGRect.zero { didSet { updateVisibleTools() } }
+    @ObservationIgnored var keyboardTransition: KeyboardTransition?
 
     func showsJump(hasNewer: Bool) -> Bool { hasNewer ? !paging : showsJumpOnLatestPage }
 
@@ -91,6 +92,7 @@ struct ConversationTranscript: View {
     let readContent: (Int) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationPaneVisible) private var paneVisible
+    @Environment(\.mainPaneCovered) private var mainPaneCovered
     @State private var scrollPosition = ScrollPosition(idType: String.self)
     @State private var sectionFrames: [String: TranscriptFrame] = [:]
     @State private var navigationID: UUID?
@@ -221,7 +223,6 @@ struct ConversationTranscript: View {
             .padding(.top, centersEmptyState ? 0 : 24).padding(.bottom, centersEmptyState ? 0 : 12)
             // Keep a tappable blank area around short conversations to dismiss the keyboard.
             .frame(minHeight: centersEmptyState ? nil : minimumHeight, alignment: .top)
-            .background(alignment: .center) { KeyboardDismissBackground() }
             .coordinateSpace(name: "transcript-content")
             .animation(nil, value: rows)
         }
@@ -254,9 +255,7 @@ struct ConversationTranscript: View {
         .defaultScrollAnchor(centersEmptyState ? .center : .top, for: .alignment)
         .defaultScrollAnchor(nil, for: .sizeChanges)
         .contentShape(.rect)
-        .simultaneousGesture(TapGesture().onEnded {
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        }, isEnabled: centersEmptyState && !session.waitingForDecision && session.pendingQuestions == nil)
+        .background(alignment: .center) { TranscriptKeyboardDismissArea(active: paneVisible && !mainPaneCovered) }
         .onScrollPhaseChange { _, phase in
             guard paneVisible else { return }
             if phase == .tracking || phase == .interacting {
@@ -278,10 +277,24 @@ struct ConversationTranscript: View {
             let direction = scroll.viewport.update(next, hasNewer: page?.hasNewer == true, hasOlder: page?.hasOlder == true)
             if scroll.viewport.following != followed { session.setHistoryFollowing(scroll.viewport.following) }
             if paneVisible, let direction, session.historyError == nil { navigate(direction.rawValue) }
-            if !centersEmptyState && paneVisible && scroll.viewport.chasing && page?.hasNewer != true &&
-                (old.content != next.content || old.frame != next.frame || old.topInset != next.topInset || old.bottomInset != next.bottomInset) {
+            guard !centersEmptyState, paneVisible, scroll.viewport.chasing, page?.hasNewer != true else { return }
+            let viewportChanged = old.frame != next.frame || old.topInset != next.topInset || old.bottomInset != next.bottomInset
+            guard viewportChanged || old.content != next.content else { return }
+            if !reduceMotion, let transition = scroll.keyboardTransition,
+               let animation = transition.animation(duration: transition.remainingDuration) {
+                // The keyboard can change only the scroll insets, so explicitly
+                // move to the new visible end using its remaining animation time.
+                withAnimation(animation) {
+                    scrollPosition.scrollTo(edge: .bottom)
+                }
+            } else {
                 scrollPosition.scrollTo(edge: .bottom)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
+            .merge(with: NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification))) { notification in
+            guard paneVisible, notification.userInfo?[UIResponder.keyboardIsLocalUserInfoKey] as? Bool != false else { return }
+            scroll.keyboardTransition = KeyboardTransition(notification)
         }
         .onChange(of: paneVisible) { _, visible in
             if !visible { scroll.viewport.interruptInteraction() }

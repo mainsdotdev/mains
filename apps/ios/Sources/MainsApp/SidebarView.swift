@@ -93,7 +93,9 @@ struct SidebarView: View {
         }
         .onChange(of: space?.id) { _, _ in providersExpanded = false }
         .onChange(of: session.ownership) { _, _ in providersExpanded = false; pendingMode = nil }
-        .onDisappear { providersExpanded = false }
+        .onChange(of: isVisible) { _, visible in
+            if !visible { providersExpanded = false }
+        }
     }
     private var shortcuts: some View {
         VStack(spacing: 0) {
@@ -196,7 +198,7 @@ struct SidebarView: View {
                 .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 22))
                 .accessibilityLabel("Search").accessibilityIdentifier("sidebarSearch")
                 .frame(width: searchWidth, alignment: providersExpanded ? .trailing : .center)
-                RoundControl(symbol: "gearshape", label: "Settings", size: control) {
+                RoundControl(symbol: "gearshape", label: "Settings", size: control, rectangularHitArea: true) {
                     setProvidersExpanded(false)
                     settings()
                 }.accessibilityIdentifier("openSettings")

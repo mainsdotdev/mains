@@ -262,6 +262,9 @@ describe("backend host acquisition and shutdown", () => {
       expect(await manage(teammate.id, assignment, "new-assignment")).toEqual(accepted);
       expect(await manage(teammate.id, assignment, "new-assignment")).toEqual(accepted);
       expect(await invoke(CHANNELS.assistants.mobileAssignments, [accountId, reviewer.id])).toMatchObject({
+        success: true, data: { activeCount: 0, items: [], hasMore: false },
+      });
+      expect(await invoke(CHANNELS.assistants.mobileAssignments, [accountId, teammate.id])).toMatchObject({
         success: true, data: { activeCount: 1, items: [{ title: assignment.title, assignee: { id: teammate.id } }] },
       });
 

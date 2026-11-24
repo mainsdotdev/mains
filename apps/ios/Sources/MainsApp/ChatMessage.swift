@@ -26,6 +26,7 @@ struct ChatMessage: View {
     var fork: () -> Void = {}
     @Environment(\.openVoiceConversation) private var openVoiceConversation
     @Environment(\.mateChatTint) private var mateTint
+    @Environment(ActionToast.self) private var actionToast: ActionToast?
     var body: some View {
         VStack(alignment: row.kind == .prompt ? .trailing : .leading, spacing: row.kind == .response ? 4 : 10) {
             switch row.kind {
@@ -88,7 +89,10 @@ struct ChatMessage: View {
         }
         .frame(maxWidth: .infinity, alignment: row.kind == .prompt ? .trailing : .leading)
         .contextMenu {
-            Button(row.live ? "Copy current text" : row.deferredArtifactID != nil ? "Copy message preview" : "Copy message", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.text }
+            Button(row.live ? "Copy current text" : row.deferredArtifactID != nil ? "Copy message preview" : "Copy message", systemImage: "doc.on.doc") {
+                UIPasteboard.general.string = row.text
+                actionToast?.show(row.deferredArtifactID != nil && !row.live ? "Message preview copied" : "Message copied")
+            }
         }
     }
 }
@@ -519,6 +523,7 @@ private struct CodeBlock: View {
     let language: String
     let code: String
     var presentation: MarkdownPresentation = .chat
+    @Environment(ActionToast.self) private var actionToast: ActionToast?
     private var title: String {
         guard !language.isEmpty else { return "Code" }
         return language.replacingOccurrences(of: "\\", with: "/").split(separator: "/").last.map(String.init) ?? language
@@ -530,8 +535,11 @@ private struct CodeBlock: View {
                     .lineLimit(1).truncationMode(.middle)
                     .accessibilityLabel(language.isEmpty ? "Code" : language)
                 Spacer()
-                Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = code }
-                    .labelStyle(.iconOnly).font(.caption).frame(width: 44, height: 44)
+                Button("Copy code", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = code
+                    actionToast?.show("Code copied")
+                }
+                .labelStyle(.iconOnly).font(.caption).frame(width: 44, height: 44)
             }.padding(.leading, 14).padding(.trailing, 6)
             ScrollView(.horizontal) {
                 Text(code).font(.system(presentation.isAtlas ? .footnote : .callout, design: .monospaced)).lineSpacing(4).textSelection(.enabled)

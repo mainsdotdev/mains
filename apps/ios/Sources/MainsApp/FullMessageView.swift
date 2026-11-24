@@ -37,6 +37,7 @@ struct FullMessageView: View {
                 }.padding().background(.bar)
             }
             .navigationHeaderFade()
+            .actionToastHost()
             .expandedNavigationTitle(source == "plan" ? "Plan" : source == "tool-output" ? "Tool output" : source == "tool-input" ? "Tool input" : "Full message")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task(id: offset) { await load() }

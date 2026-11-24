@@ -352,19 +352,11 @@ struct SearchView: View {
 
     private func moveKeyboard(to inset: CGFloat, notification: Notification) {
         guard isPresented, searching || inset == 0 || keyboardInset > 0 else { return }
-        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval ?? 0.25
-        let curve = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int
-        let animation: Animation = switch curve {
-        case UIView.AnimationCurve.easeIn.rawValue: .easeIn(duration: duration)
-        case UIView.AnimationCurve.easeInOut.rawValue: .easeInOut(duration: duration)
-        case UIView.AnimationCurve.linear.rawValue: .linear(duration: duration)
-        case UIView.AnimationCurve.easeOut.rawValue: .easeOut(duration: duration)
-        default: .timingCurve(0.16, 0.78, 0.24, 1, duration: duration)
-        }
+        let transition = KeyboardTransition(notification)
         // Use one animated inset so the field and the centered illustration move through the same layout.
-        keyboardAnimation = duration > 0 ? animation : nil
+        keyboardAnimation = transition.animation(duration: transition.duration)
         keyboardInset = inset
-        if inset == 0, dismissal != nil { finishDismissal(keyboardDuration: duration) }
+        if inset == 0, dismissal != nil { finishDismissal(keyboardDuration: transition.duration) }
     }
     private func resultRow(title: String, context: String, snippet: String?, date: Date, now: Date) -> some View {
         HStack(alignment: .top, spacing: 16) {

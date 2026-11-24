@@ -23,6 +23,7 @@ struct AppShell: View {
     @ObserveHotReload private var hotReload
     #endif
     private enum ActivityWatch { case hidden, events, polling }
+    private enum DrawerCoordinateSpace: Hashable { case shell }
 
     let session: BackendSession
     let openPairing: () -> Void
@@ -32,7 +33,10 @@ struct AppShell: View {
     @State private var homeRunID: String?
     @State private var drawerOpen = false
     @State private var drag: CGFloat = 0
-    @GestureState private var drawerDragActive = false
+    @GestureState private var closingDragActive = false
+    @State private var drawerViewport = DrawerViewport()
+    @State private var drawerSnapshot: UIView?
+    @State private var drawerTransition = 0
     @State private var searchMounted = false
     @State private var searchExpanded = false
     @State private var searchTransitionID = 0
@@ -51,16 +55,19 @@ struct AppShell: View {
         ZStack(alignment: .topLeading) {
             GeometryReader { geometry in
                 let regular = horizontalSizeClass == .regular
-                let canPin = SidebarPanePlan.supportsInline(width: geometry.size.width, regular: regular) && path.isEmpty && homeRunID == nil && session.pairing != nil
+                let supportsInline = SidebarPanePlan.supportsInline(width: geometry.size.width, regular: regular)
+                let isHome = path.isEmpty && homeRunID == nil
+                let canPin = supportsInline && isHome && session.pairing != nil
                 let pinned = canPin && !wideSidebarHidden
-                let sidebar = SidebarPanePlan.make(width: geometry.size.width, regular: regular, pinned: pinned, open: drawerOpen, drag: drag)
+                let sidebar = SidebarPanePlan.make(width: geometry.size.width, regular: regular, pinned: pinned,
+                                                   open: drawerOpen, drag: drag)
                 let width = sidebar.sidebarWidth
                 let sidebarLayoutWidth = sidebar.isInline ? width : geometry.size.width
                 let progress = sidebar.overlayProgress
-                let overlayMounted = sidebar.blocksContent || progress > 0
                 let sidebarVisible = (pinned || drawerOpen) && !searchMounted
+                // Keep the live pane's input state stable while the pan is undecided.
                 let mainPaneCovered = sidebar.blocksContent || searchMounted
-                ZStack(alignment: .leading) {
+                ZStack(alignment: .topLeading) {
                     Color(.systemBackground).ignoresSafeArea()
                     ZStack {
                         NavigationStack(path: $path) {
@@ -71,13 +78,13 @@ struct AppShell: View {
                                         .id("\(session.ownership):\(homeRunID)")
                                         .toolbar {
                                             ToolbarItem(placement: .topBarLeading) {
-                                                SidebarControl(action: toggleDrawer, isOpen: drawerOpen)
-                                            }
+                                                SidebarControl(action: { toggleDrawer(overlay: !supportsInline) }, isOpen: drawerOpen)
+                                            }.sharedBackgroundVisibility(.hidden)
                                         }
                                 } else {
                                     HomeView(session: session, openSidebar: {
                                         if canPin { toggleWideSidebar(visible: pinned || drawerOpen) }
-                                        else { toggleDrawer() }
+                                        else { toggleDrawer(overlay: !supportsInline) }
                                     }, openComputer: showSettings, openPairing: openPairing,
                                              onCreated: { id in
                                                  var transaction = Transaction(animation: nil)
@@ -152,24 +159,32 @@ struct AppShell: View {
                     .frame(width: sidebar.contentWidth)
                     .allowsHitTesting(!mainPaneCovered)
                     .accessibilityHidden(mainPaneCovered)
-                    .clipShape(MainPaneClip(cornerRadius: 0, safeAreaInsets: geometry.safeAreaInsets))
+                    .clipShape(MainPaneClip(safeAreaInsets: geometry.safeAreaInsets))
                     .offset(x: sidebar.contentOffset)
-                    ZStack(alignment: .leading) {
-                        if overlayMounted {
-                            sidebarBackdrop
-                                .opacity(progress)
-                                .ignoresSafeArea()
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                                .transition(.opacity)
+                }
+                .overlay {
+                    DrawerPanePreview(viewport: drawerViewport, snapshot: drawerSnapshot, progress: progress)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+                .overlay(alignment: .topLeading) {
+                    ZStack(alignment: .topLeading) {
+                        // Drive every visible layer from the same progress, including the first frame.
+                        sidebarBackdrop
+                            .opacity(progress)
+                            .ignoresSafeArea()
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
 
+                        if sidebar.blocksContent {
                             Color.clear.contentShape(.rect)
                                 .onTapGesture(perform: closeDrawer)
-                                .simultaneousGesture(drawerGesture(width: width, closingEdge: width))
+                                .simultaneousGesture(drawerClosingGesture(width: width, edge: width))
                                 .accessibilityHidden(true)
                                 .zIndex(1)
                         }
-                        if sidebar.isInline || overlayMounted {
+                        if isHome || sidebar.isInline || sidebar.blocksContent || progress > 0 {
                             SidebarView(session: session, collapsed: $collapsedCollections, isVisible: sidebarVisible, menuWidth: width,
                                         openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
                                         openProject: { open(.project($0)) },
@@ -179,7 +194,7 @@ struct AppShell: View {
                                 .opacity(sidebar.isInline ? 1 : progress)
                                 .offset(x: sidebar.isInline || reduceMotion ? 0 : -sidebarLayoutWidth * (1 - progress))
                                 .transition(sidebar.isInline || reduceMotion ? .opacity : .offset(x: -sidebarLayoutWidth))
-                                .simultaneousGesture(drawerGesture(width: width, closingEdge: width - 24),
+                                .simultaneousGesture(drawerClosingGesture(width: width, edge: width - 24),
                                                      isEnabled: sidebar.isInline && drawerOpen && !pinned && !searchMounted)
                                 .zIndex(2)
                         }
@@ -193,36 +208,48 @@ struct AppShell: View {
                         }
                     }
                     .allowsHitTesting(sidebarVisible)
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
                     .accessibilityElement(children: .contain)
                     .accessibilityHidden(!sidebarVisible)
                     .accessibilityAction(.escape) {
                         if pinned { toggleWideSidebar(visible: true) } else { closeDrawer() }
                     }
-                    .zIndex(1)
+                }
+                .overlay(alignment: .leading) {
                     if !drawerOpen && !pinned && !searchMounted {
-                        Color.clear.frame(width: 24).contentShape(.rect).gesture(drawerGesture(width: width))
+                        DrawerOpeningHandle { translation in
+                            if !supportsInline && drag == 0 && translation > 0 { captureDrawerPreview() }
+                            drag = translation
+                        } finish: { projected in
+                            settleDrawer(open: projected > width / 2)
+                        }
+                            .frame(width: 24)
+                            .padding(.top, AppNavigationStyle.inlineToolbarHeight)
+                            .ignoresSafeArea(.keyboard, edges: .bottom)
                             .accessibilityHidden(true)
                     }
-                }.onChange(of: pinned, initial: true) { _, value in
-                    if value { drawerOpen = false }
+                }
+                .onChange(of: pinned, initial: true) { _, value in
+                    if value {
+                        drawerOpen = false
+                        drag = 0
+                        drawerSnapshot = nil
+                    }
                 }
                 .onChange(of: sidebar.isInline, initial: true) { _, value in inlineSidebarVisible = value }
-                .onChange(of: sidebar.blocksContent) { _, covered in
-                    if covered { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
-                }
-                .onChange(of: drawerDragActive) { _, active in
+                .onChange(of: geometry.size.width) { _, _ in drawerSnapshot = nil }
+                .onChange(of: closingDragActive) { _, active in
                     guard !active, drag != 0 else { return }
                     DispatchQueue.main.async {
-                        // An ended drag settles in onEnded. Reset only an interrupted drag here.
-                        guard !drawerDragActive, drag != 0 else { return }
-                        withAnimation(drawerAnimation) { drag = 0 }
+                        // An ended drag settles in onEnded. Reset only an interrupted close here.
+                        guard !closingDragActive, drawerOpen, drag < 0 else { return }
+                        settleDrawer(open: drawerOpen)
                     }
                 }
             }
-            // The inactive main pane and sidebar must not follow Search's keyboard.
-            // Keep this on their geometry root so clipping and composer insets share
-            // the same stable bounds, including after Search leaves the screen.
-            .ignoresSafeArea(drawerOpen && !inlineSidebarVisible || searchMounted ? .keyboard : [], edges: .bottom)
+            // Search has its own keyboard. When the drawer dismisses the main keyboard,
+            // let the main pane follow the system animation from its current bounds.
+            .ignoresSafeArea(searchMounted ? .keyboard : [], edges: .bottom)
             if searchMounted {
                 SearchView(session: session, isPresented: searchExpanded, finish: finishSearch)
                     .allowsHitTesting(searchExpanded)
@@ -231,6 +258,7 @@ struct AppShell: View {
                     .zIndex(2)
             }
         }
+        .coordinateSpace(.named(DrawerCoordinateSpace.shell))
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 ForkDeliveryNotice(session: session, open: { open(.conversation($0)) })
@@ -258,7 +286,10 @@ struct AppShell: View {
         .onChange(of: activityWatch, initial: true) { _, watch in
             session.setWorkInboxVisible(watch != .hidden, poll: watch == .polling)
         }
-        .onDisappear { session.setWorkInboxVisible(false) }
+        .onDisappear {
+            session.setWorkInboxVisible(false)
+            drawerSnapshot = nil
+        }
         .onChange(of: session.retiredConversation) { _, retired in
             guard let retired else { return }
             if homeRunID == retired.runID { homeRunID = nil }
@@ -272,8 +303,12 @@ struct AppShell: View {
         .onChange(of: session.pairing?.deviceId) { _, _ in
             resetSearch()
             showingArchivedMates = false
+            drawerSnapshot = nil
             path = []; homeRunID = nil; drawerOpen = false
         }
+        .onChange(of: path) { _, _ in drawerSnapshot = nil }
+        .onChange(of: homeRunID) { _, _ in drawerSnapshot = nil }
+        .onChange(of: reduceMotion) { _, _ in drawerSnapshot = nil }
     }
 
     private var closeSidebarControl: some View {
@@ -292,15 +327,20 @@ struct AppShell: View {
     }
 
     @ViewBuilder private var sidebarBackdrop: some View {
-        let background = Color(.systemBackground)
         if reduceTransparency {
-            background
+            Color(.systemBackground)
         } else {
             let dark = colorScheme == .dark
+            let haze = dark ? Color.white : .black
             Rectangle().fill(.regularMaterial)
                 .overlay {
-                    LinearGradient(colors: [.black.opacity(dark ? 0.84 : 0.13), .black.opacity(dark ? 0.98 : 0.23)],
-                                   startPoint: .leading, endPoint: .trailing)
+                    ZStack {
+                        Color.black.opacity(dark ? 0.90 : 0.09)
+                        EllipticalGradient(colors: [haze.opacity(dark ? 0.09 : 0.08), .clear],
+                                           center: UnitPoint(x: 0, y: 0.32), endRadiusFraction: 0.88)
+                        EllipticalGradient(colors: [haze.opacity(dark ? 0.06 : 0.05), .clear],
+                                           center: UnitPoint(x: 0.04, y: 0.76), endRadiusFraction: 0.7)
+                    }
                 }
         }
     }
@@ -364,19 +404,40 @@ struct AppShell: View {
         closeDrawerAfterNavigation()
     }
     private var drawerAnimation: Animation? {
-        reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.86)
+        reduceMotion ? nil : .easeInOut(duration: 0.34)
     }
     private func toggleWideSidebar(visible: Bool) {
+        if !visible { drawerViewport.dismissKeyboard() }
         withAnimation(drawerAnimation) {
             wideSidebarHidden = visible; drawerOpen = false
         }
     }
-    private func toggleDrawer() {
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        withAnimation(drawerAnimation) { drawerOpen.toggle() }
+    private func toggleDrawer(overlay: Bool) {
+        if overlay && !drawerOpen { captureDrawerPreview() }
+        settleDrawer(open: !drawerOpen)
     }
     private func closeDrawer() {
-        withAnimation(drawerAnimation) { drawerOpen = false }
+        settleDrawer(open: false)
+    }
+    private func captureDrawerPreview() {
+        // A frame captured at keyboard height would jump back to that layout
+        // on close. Keep the live pane visible under the backdrop while editing.
+        guard !reduceMotion, drawerSnapshot == nil, !drawerViewport.hasFocusedTextInput else { return }
+        drawerSnapshot = drawerViewport.capture()
+    }
+    private func settleDrawer(open: Bool) {
+        if open && !drawerOpen { drawerViewport.dismissKeyboard() }
+        drawerTransition += 1
+        let transition = drawerTransition
+        withAnimation(drawerAnimation, completionCriteria: .logicallyComplete) {
+            drag = 0
+            drawerOpen = open
+        } completion: {
+            DispatchQueue.main.async {
+                guard transition == drawerTransition, !drawerOpen, drag == 0 else { return }
+                drawerSnapshot = nil
+            }
+        }
     }
     private func closeDrawerAfterNavigation() { if !inlineSidebarVisible { closeDrawer() } }
     private func open(_ route: AppRoute) {
@@ -412,6 +473,7 @@ struct AppShell: View {
             var transaction = Transaction(animation: nil)
             transaction.disablesAnimations = true
             withTransaction(transaction) {
+                drawerSnapshot = nil
                 drawerOpen = false
                 open(route)
             }
@@ -433,41 +495,162 @@ struct AppShell: View {
     private func leaveCurrentConversation() {
         if let runID = session.viewingRunID { session.leaveConversation(runID) }
     }
-    private func drawerGesture(width: CGFloat, closingEdge: CGFloat? = nil) -> some Gesture {
-        DragGesture(minimumDistance: 10)
-            .updating($drawerDragActive) { _, active, _ in active = true }
+    private func drawerClosingGesture(width: CGFloat, edge: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .named(DrawerCoordinateSpace.shell))
+            .updating($closingDragActive) { _, active, _ in active = true }
             .onChanged { value in
-                if let closingEdge, value.startLocation.x < closingEdge { return }
-                if abs(value.translation.width) > abs(value.translation.height) { drag = value.translation.width }
+                guard value.startLocation.x >= edge,
+                      drag < 0 || abs(value.translation.width) > abs(value.translation.height) else { return }
+                drag = min(0, value.translation.width)
             }
             .onEnded { value in
-                if let closingEdge, value.startLocation.x < closingEdge { return }
-                guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                let projected = (drawerOpen ? width : 0) + value.predictedEndTranslation.width
-                withAnimation(drawerAnimation) {
-                    drag = 0
-                    drawerOpen = projected > width / 2
-                }
+                guard value.startLocation.x >= edge,
+                      drag < 0 || abs(value.translation.width) > abs(value.translation.height) else { return }
+                let projected = width + value.predictedEndTranslation.width
+                settleDrawer(open: projected > width / 2)
             }
     }
 }
 
-private struct MainPaneClip: Shape {
-    var cornerRadius: CGFloat
-    let safeAreaInsets: EdgeInsets
-    var animatableData: CGFloat {
-        get { cornerRadius }
-        set { cornerRadius = newValue }
+private struct DrawerOpeningHandle: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    var update: (CGFloat) -> Void
+    var finish: (CGFloat) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UIView {
+        // A dedicated hit area keeps the scroll view and its interactive keyboard
+        // dismissal out of the swipe, even before the pan recognizer has begun.
+        let view = UIView()
+        let recognizer = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pan(_:)))
+        recognizer.maximumNumberOfTouches = 1
+        recognizer.delegate = context.coordinator
+        view.addGestureRecognizer(recognizer)
+        return view
     }
 
-    func path(in rect: CGRect) -> Path {
-        guard cornerRadius > 0 else {
-            // Native navigation controls expand into the safe area when pressed.
-            // Keep that feedback visible without changing the page's layout.
-            return Path(rect.inset(by: UIEdgeInsets(top: -safeAreaInsets.top, left: -safeAreaInsets.leading,
-                                                  bottom: -safeAreaInsets.bottom, right: -safeAreaInsets.trailing)))
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.handle = self
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var handle: DrawerOpeningHandle
+        init(_ handle: DrawerOpeningHandle) { self.handle = handle }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let recognizer = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            let translation = recognizer.translation(in: recognizer.view?.window)
+            return translation.x > abs(translation.y)
         }
-        return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .path(in: rect)
+
+        @objc func pan(_ recognizer: UIPanGestureRecognizer) {
+            let window = recognizer.view?.window
+            let translation = recognizer.translation(in: window).x
+            switch recognizer.state {
+            case .began, .changed:
+                handle.update(max(0, translation))
+            case .ended:
+                handle.finish(translation + recognizer.velocity(in: window).x * 0.18)
+            case .cancelled, .failed:
+                handle.finish(0)
+            default: break
+            }
+        }
+    }
+}
+
+@MainActor
+private final class DrawerViewport {
+    weak var marker: UIView?
+
+    var hasFocusedTextInput: Bool { marker?.window?.focusedTextInput != nil }
+
+    func dismissKeyboard() { marker?.window?.endEditing(true) }
+
+    func capture() -> UIView? {
+        guard let marker, let window = marker.window else { return nil }
+        let frame = marker.convert(marker.bounds, to: window).intersection(window.bounds)
+        guard !frame.isEmpty else { return nil }
+        return window.resizableSnapshotView(from: frame, afterScreenUpdates: false, withCapInsets: .zero)
+    }
+
+}
+
+private struct DrawerPanePreview: View, Animatable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let viewport: DrawerViewport
+    let snapshot: UIView?
+    nonisolated var progress: CGFloat
+
+    nonisolated var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    var body: some View {
+        ZStack {
+            DrawerViewportMarker(viewport: viewport)
+            if let snapshot {
+                ZStack {
+                    Color(.systemBackground)
+                    DrawerSnapshotView(snapshot: snapshot).scaleEffect(1 - 0.04 * progress)
+                }
+                // Blend back to the live pane near the resting position, where their sizes match.
+                .opacity(min(1, max(0, progress * 6)))
+                .transition(.identity)
+            }
+        }
+    }
+}
+
+private struct DrawerViewportMarker: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let viewport: DrawerViewport
+
+    func makeUIView(context: Context) -> UIView {
+        let marker = UIView()
+        marker.isUserInteractionEnabled = false
+        viewport.marker = marker
+        return marker
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {}
+}
+
+private struct DrawerSnapshotView: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let snapshot: UIView
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        guard snapshot.superview !== view else { return }
+        view.subviews.forEach { $0.removeFromSuperview() }
+        snapshot.frame = view.bounds
+        snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(snapshot)
+    }
+}
+
+private struct MainPaneClip: Shape {
+    let safeAreaInsets: EdgeInsets
+
+    func path(in rect: CGRect) -> Path {
+        // Native navigation controls expand into the safe area when pressed.
+        Path(rect.inset(by: UIEdgeInsets(top: -safeAreaInsets.top, left: -safeAreaInsets.leading,
+                                        bottom: -safeAreaInsets.bottom, right: -safeAreaInsets.trailing)))
     }
 }

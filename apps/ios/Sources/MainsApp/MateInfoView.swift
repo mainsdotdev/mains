@@ -515,7 +515,9 @@ struct MateInfoView: View {
             }
         }
         MateInfoSection {
-            if tasks.items.isEmpty { Text("No assignments yet").foregroundStyle(.secondary) }
+            if tasks.items.isEmpty {
+                Text(offset > 0 || tasks.hasMore ? "No assignments on this page" : "No assignments yet").foregroundStyle(.secondary)
+            }
             ForEach(tasks.items) { task in
                 Button { sheet = .task(task.id) } label: {
                     MateInfoRow(title: task.title, subtitle: [task.assignee?.name, mateTaskStatus(task.status)].compactMap { $0 }.joined(separator: " · "),
@@ -646,7 +648,7 @@ struct MateInfoView: View {
             case .routines: content = .routines(try await session.loadMateRoutines(mateID, offset: request.offset))
             }
             guard !Task.isCancelled, request == paneRequest else { return }
-            if case .assignments(let tasks) = content, request.offset == 0 || !tasks.items.isEmpty {
+            if case .assignments(let tasks) = content, request.offset == 0 {
                 activeTasks = tasks.activeCount
             }
             panes[request.tab] = (request, content)

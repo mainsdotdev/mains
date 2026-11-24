@@ -210,7 +210,8 @@ html:not(.app-ready) *::after {
 }
 
 .status-badge[data-status-tone="info"] { --status-badge-color: var(--color-accent); }
-.dark .status-badge[data-status-tone="info"] { --status-badge-ink-strength: 62%; }
+.status-badge[data-status-tone="progress"] { --status-badge-color: var(--color-action); }
+.dark .status-badge:is([data-status-tone="info"], [data-status-tone="progress"]) { --status-badge-ink-strength: 62%; }
 .status-badge[data-status-tone="success"] { --status-badge-color: var(--color-success); }
 .status-badge[data-status-tone="warning"] { --status-badge-color: var(--color-warning); }
 .status-badge[data-status-tone="danger"] { --status-badge-color: var(--color-danger); }

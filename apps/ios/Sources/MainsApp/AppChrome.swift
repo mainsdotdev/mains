@@ -12,6 +12,10 @@ enum AppNavigationStyle {
 }
 
 extension View {
+    func actionToastHost() -> some View {
+        modifier(ActionToastHost())
+    }
+
     func navigationHeaderFade(background: Color = Color(.systemBackground), coversSafeAreaAtRest: Bool = true,
                               height: CGFloat = HeaderFade.defaultHeight) -> some View {
         modifier(NavigationHeaderFade(background: background, coversSafeAreaAtRest: coversSafeAreaAtRest, height: height))
@@ -395,6 +399,30 @@ enum AppBrand {
     }
 }
 
+struct KeyboardTransition {
+    let duration: TimeInterval
+    private let curve: Int?
+    private let start = ProcessInfo.processInfo.systemUptime
+
+    init(_ notification: Notification) {
+        duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval ?? 0.25
+        curve = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int
+    }
+
+    var remainingDuration: TimeInterval { max(0, duration - (ProcessInfo.processInfo.systemUptime - start)) }
+
+    func animation(duration: TimeInterval) -> Animation? {
+        guard duration > 0 else { return nil }
+        return switch curve {
+        case UIView.AnimationCurve.easeIn.rawValue: .easeIn(duration: duration)
+        case UIView.AnimationCurve.easeInOut.rawValue: .easeInOut(duration: duration)
+        case UIView.AnimationCurve.linear.rawValue: .linear(duration: duration)
+        case UIView.AnimationCurve.easeOut.rawValue: .easeOut(duration: duration)
+        default: .timingCurve(0.16, 0.78, 0.24, 1, duration: duration)
+        }
+    }
+}
+
 /// A hit target behind the page content, never a gesture on the composer or
 /// its controls. Ending editing also updates ContextTextEditor's focus binding.
 struct KeyboardDismissBackground: View {
@@ -410,6 +438,68 @@ struct KeyboardDismissBackground: View {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             }
             .accessibilityHidden(true)
+    }
+}
+
+struct TranscriptKeyboardDismissArea: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let active: Bool
+
+    func makeUIView(context: Context) -> TapArea { TapArea(frame: .zero) }
+    func updateUIView(_ view: TapArea, context: Context) { view.active = active }
+
+    final class TapArea: UIView, UIGestureRecognizerDelegate {
+        var active = false
+        private weak var composer: ComposerTextView?
+        private lazy var tap: UITapGestureRecognizer = {
+            let tap = UITapGestureRecognizer(target: self, action: #selector(dismissComposer))
+            tap.cancelsTouchesInView = false
+            tap.delegate = self
+            return tap
+        }()
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard tap.view !== window else { return }
+            tap.view?.removeGestureRecognizer(tap)
+            // Observe taps even when the scroll view or a message owns the hit.
+            window?.addGestureRecognizer(tap)
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard active, bounds.contains(touch.location(in: self)),
+                  let composer = window?.focusedTextInput as? ComposerTextView,
+                  touch.view?.isDescendant(of: composer) != true else { return false }
+            self.composer = composer
+            return true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+
+        @objc private func dismissComposer() {
+            if active, let composer, composer.isFirstResponder { composer.resignFirstResponder() }
+            composer = nil
+        }
+    }
+}
+
+extension UIView {
+    var focusedTextInput: UIView? {
+        if isFirstResponder, self is UITextView || self is UITextField { return self }
+        for subview in subviews {
+            if let input = subview.focusedTextInput { return input }
+        }
+        return nil
     }
 }
 
@@ -441,6 +531,69 @@ struct GlassSurface: ViewModifier {
         } else {
             content.glassEffect(.regular.tint(tint).interactive(interactive), in: .rect(cornerRadius: radius))
         }
+    }
+}
+
+@MainActor
+@Observable
+final class ActionToast {
+    struct Message {
+        let id = UUID()
+        let text: LocalizedStringResource
+    }
+
+    private(set) var message: Message?
+
+    func show(_ text: LocalizedStringResource) {
+        withAnimation(.easeInOut(duration: 0.18)) { message = Message(text: text) }
+        AccessibilityNotification.Announcement(String(localized: text)).post()
+    }
+
+    func dismiss() {
+        withAnimation(.easeInOut(duration: 0.18)) { message = nil }
+    }
+}
+
+private struct ActionToastHost: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var toast = ActionToast()
+
+    func body(content: Content) -> some View {
+        content
+            .environment(toast)
+            .overlay(alignment: .top) {
+                if let message = toast.message {
+                    HStack(spacing: 12) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.title3)
+                            .accessibilityHidden(true)
+                        Text(message.text)
+                            .font(.subheadline.weight(.semibold))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("actionToast")
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                    .modifier(GlassSurface(radius: 24, interactive: false))
+                    .frame(maxWidth: 460)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+                    .transition(reduceMotion ? .opacity : .offset(y: -8).combined(with: .opacity))
+                }
+            }
+            .task(id: toast.message?.id) {
+                guard let id = toast.message?.id else { return }
+                do { try await Task.sleep(for: .seconds(2.4)) } catch { return }
+                guard toast.message?.id == id, !Task.isCancelled else { return }
+                toast.dismiss()
+            }
+            .onDisappear { toast.dismiss() }
     }
 }
 
@@ -482,11 +635,13 @@ struct RoundControl: View {
     let symbol: String
     let label: String
     var size: CGFloat = 46
+    var rectangularHitArea = false
     let action: () -> Void
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 21, weight: .regular))
-                .frame(width: size, height: size).contentShape(.circle)
+                .frame(width: size, height: size)
+                .contentShape(.rect(cornerRadius: rectangularHitArea ? 0 : size / 2))
         }
         .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: size / 2))
         .accessibilityLabel(label)
@@ -519,9 +674,16 @@ struct SidebarControl: View {
     let action: () -> Void
     var isOpen = false
     var body: some View {
-        Button(action: action) { SidebarIcon() }
-            .accessibilityLabel(isOpen ? "Close sidebar" : "Open sidebar")
-            .accessibilityIdentifier("openSidebar")
+        let size = AppNavigationStyle.inlineToolbarHeight
+        Button(action: action) {
+            SidebarIcon()
+                .frame(width: size, height: size)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .modifier(GlassSurface(radius: size / 2, interactive: false))
+        .accessibilityLabel(isOpen ? "Close sidebar" : "Open sidebar")
+        .accessibilityIdentifier("openSidebar")
     }
 }
 

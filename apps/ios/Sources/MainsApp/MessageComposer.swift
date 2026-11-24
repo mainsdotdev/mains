@@ -52,6 +52,7 @@ struct MessageComposer: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.conversationPaneVisible) private var paneVisible
+    @Environment(\.mainPaneCovered) private var mainPaneCovered
     @Environment(\.mateChatTint) private var mateTint
     @State private var attachmentError: String?
     private var settings: ComposerSettings { context.settings(session) }
@@ -126,6 +127,7 @@ struct MessageComposer: View {
         }
         .onChange(of: draft.text) { _, _ in draft.reconcileContext() }
         .onChange(of: focused) { _, focused in focusChanged?(focused) }
+        .onChange(of: mainPaneCovered) { _, covered in if covered { focused = false } }
         .onChange(of: contextScope, initial: true) { _, scope in draft.synchronizeContext(scope); pluginsOpen = false }
         .attachmentOverlay(isPresented: attachmentsOpen, id: attachmentPresentationID, accent: Provider.accent(context.providerId),
                            maxCount: 5 - draft.attachments.count, maxBytes: remainingBytes, add: addFromPanel, close: closeAttachments)

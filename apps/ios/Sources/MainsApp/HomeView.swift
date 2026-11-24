@@ -38,6 +38,7 @@ struct HomeView: View {
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { SidebarControl(action: openSidebar) }
+                .sharedBackgroundVisibility(.hidden)
             if session.isDemo || session.pairing != nil && !session.isConnected {
                 ToolbarItem(placement: .principal) {
                     ConnectionPill(session: session, action: openComputer)
