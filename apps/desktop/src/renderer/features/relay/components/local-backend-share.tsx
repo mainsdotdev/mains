@@ -315,7 +315,7 @@ export function LocalBackendShare() {
         )}
       </SettingsSection>
 
-      <DevicePairing canPair={lanOn || tailscaleOn} />
+      <DevicePairing canPair={lanOn || tailscaleOn} remoteAccess={remoteOn} />
     </>
   );
 }
