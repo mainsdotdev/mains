@@ -25,10 +25,11 @@ import Testing
 }
 
 @Test func mathHTMLRetainsMarkdownAndLinksWhileEscapingUntrustedTeXAndHTML() throws {
-    let source = #"**Bold** [output](report.pdf) [unsafe](javascript:alert) $\text{</span><script>alert(1)</script>}$"# + "\n\n| Value | Math |\n| --- | --- |\n| a | $x^2$ |"
+    let source = #"**Bold** [output](report.pdf) [notes](/atlas/page-123) [unsafe](javascript:alert) $\text{</span><script>alert(1)</script>}$"# + "\n\n| Value | Math |\n| --- | --- |\n| a | $x^2$ |"
     let document = try #require(MathMarkdown.prepare(source))
     let html = document.html
     #expect(html.contains("<strong>Bold</strong>") && html.contains("href=\"report.pdf\""))
+    #expect(html.contains("href=\"/atlas/page-123\""))
     #expect(!html.contains("href=\"javascript:") && !html.contains("<script>"))
     #expect(html.contains("&lt;script&gt;") && html.contains("<table>"))
     #expect(document.formulas.count == 2)

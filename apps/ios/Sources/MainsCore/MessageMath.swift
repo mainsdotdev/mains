@@ -74,7 +74,8 @@ public struct MathMarkdown: Sendable {
                     if intent.contains(.emphasized) { text = "<em>" + text + "</em>" }
                     if intent.contains(.strikethrough) { text = "<s>" + text + "</s>" }
                 }
-                if let url = run.link, ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") || RunFileReference(url.relativeString) != nil {
+                if let url = run.link, ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "")
+                    || RunFileReference(url.relativeString) != nil || AtlasLink(url) != nil {
                     text = "<a href=\"" + Self.escape(url.relativeString) + "\">" + text + "</a>"
                 }
                 return text

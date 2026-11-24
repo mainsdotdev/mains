@@ -238,10 +238,12 @@ function startReply(runId, message, commandId, input = {}) {
   replies.set(runId, reply);
   const mentions = (input.initialContext ?? input.additionalContext ?? []).filter(item => item.metadata?.source === 'assistant_mention')
     .map(({ metadata }) => ({ id: metadata.assistantId, name: metadata.name, token: metadata.token }));
+  // Exercise a whole-second computer clock behind the phone's optimistic timestamp.
+  const promptDate = mentions.length ? new Date(Math.floor(date.getTime() / 1000) * 1000 - 1000) : date;
   artifacts.get(runId).push({ id: nextID++, runId, kind: 'user-prompt', content: message,
     metadata: { source: 'user', clientUserMessageId: input.clientUserMessageId, skills: input.contextSkills,
       assistantMentions: mentions.length ? mentions : undefined, clientPromptId: input.clientPromptId,
-      attachments: input.attachments?.map(({ name, type, mimeType }) => ({ name, type, mimeType })) }, createdAt: date });
+      attachments: input.attachments?.map(({ name, type, mimeType }) => ({ name, type, mimeType })) }, createdAt: promptDate });
   const run = runs.find(run => run.id === runId);
   const goalMode = run.providerId === 'codex' && input.conversationSettings?.config?.goalMode === true;
   if (goalMode) later(850, () => {
@@ -271,7 +273,7 @@ function startReply(runId, message, commandId, input = {}) {
       runs.push({ ...run, id: workerRunId, title: 'Mate workspace review', assistantId: mate.id, status: 'succeeded' });
       artifacts.set(workerRunId, [{ id: nextID++, runId: workerRunId, kind: 'report', content: 'Mate chat opened.', createdAt: new Date() }]);
       artifacts.get(runId).push({ id: nextID++, runId, kind: 'report', content: 'Mate request',
-        metadata: { source: 'assistant_assignment', assignmentId }, createdAt: new Date() });
+        metadata: { source: 'assistant_assignment', assignmentId }, createdAt: promptDate });
     }
     artifacts.get(runId).push({ id: nextID++, runId, kind: 'report', content: 'Native reply delivered.', metadata: { streamId }, createdAt: new Date() });
     run.status = 'succeeded'; run.updatedAt = new Date();
@@ -822,6 +824,12 @@ wss.on('connection', socket => {
                   startedAt: date, createdAt: date, endedAt: at(10_000),
                   changes: { id: 'fixture-mate-diff', files: [{ path: 'src/Mate.swift', status: 'modified', additions: 2, deletions: 1, binary: false }],
                     fileCount: 1, additions: 2, deletions: 1, truncated: false } }]);
+              } else if (index === 2) {
+                artifacts.set(id, [
+                  { id: 1, runId: id, kind: 'user-prompt', content: 'Save these notes to Atlas.', metadata: { source: 'user' }, createdAt: date },
+                  { id: 2, runId: id, kind: 'report', content: '[Open saved travel notes](/atlas/fixture-atlas-page)',
+                    createdAt: new Date(date.getTime() + 1_000) },
+                ]);
               }
             }
             return { id, title, updatedAt: run.updatedAt };

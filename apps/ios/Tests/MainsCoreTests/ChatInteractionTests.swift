@@ -334,6 +334,28 @@ func attachmentOnlyDraftsPreserveFilesAcrossRefusalRecoveryAndUncertainDelivery(
     #expect(transcript.rows.first?.id == "artifact:1", "Presentation aliases leave memory with their bounded history page.")
 }
 
+@Test(arguments: [10.5, 80.0, 2.0])
+func mateRequestFollowsItsSavedPromptWhenDeviceTimeDiffers(_ phoneTime: Double) throws {
+    let pending = PendingMessage(runID: "run", text: "Ask Kitchen Mate", date: Date(timeIntervalSince1970: phoneTime),
+                                 status: .sending, commandID: "mate-send", channel: "runs:continue",
+                                 payload: .object(["clientPromptId": .string("mate-send")]), backendID: "computer", owner: 1,
+                                 previousArtifactID: 1, contextSkills: [.mate(id: "kitchen", name: "Kitchen Mate")])
+    let page = try samplePage(artifacts: """
+        [{"id":1,"runId":"run","kind":"user-prompt","content":"Earlier prompt","createdAt":{"$date":"1970-01-01T00:00:05Z"}},
+         {"id":2,"runId":"run","kind":"user-prompt","content":"Ask Kitchen Mate","metadata":{"clientPromptId":"mate-send"},"createdAt":{"$date":"1970-01-01T00:00:10Z"}},
+         {"id":3,"runId":"run","kind":"report","content":"Mate request","metadata":{"source":"assistant_assignment","assignmentId":"kitchen-task"},"createdAt":{"$date":"1970-01-01T00:00:10Z"}},
+         {"id":4,"runId":"run","kind":"report","content":"Request sent","createdAt":{"$date":"1970-01-01T00:00:11Z"}}]
+        """)
+    var transcript = Transcript()
+    #expect(transcript.rows(pending: pending, runID: "run").map(\.id) == ["pending:mate-send"])
+    transcript.replace(page, pending: pending)
+    #expect(transcript.rows(pending: pending, runID: "run").map(\.id) == ["artifact:1", "pending:mate-send", "artifact:3", "artifact:4"])
+    #expect(transcript.rows.first(where: { $0.id == "pending:mate-send" })?.delivery == .accepted)
+    #expect(transcript.rows.first(where: { $0.id == "artifact:3" })?.mateTask?.id == "kitchen-task")
+    transcript.replace(page)
+    #expect(transcript.rows.map(\.id) == ["artifact:1", "pending:mate-send", "artifact:3", "artifact:4"])
+}
+
 @Test func durableResponseAcknowledgementDoesNotMoveItPastFollowingToolActivity() throws {
     var transcript = Transcript()
     transcript.receive(delta("Inspecting the workspace"))

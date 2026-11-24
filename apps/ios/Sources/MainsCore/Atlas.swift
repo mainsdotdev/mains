@@ -305,15 +305,29 @@ public struct AtlasImage: Decodable, Sendable {
     }
 }
 
-/// Links inside a Page may name another Page or an explicitly stored Atlas file.
+/// An in-app reference to a Page or an explicitly stored Atlas file.
 public enum AtlasLink: Equatable, Sendable {
     case page(String), file(String)
     public init?(_ url: URL) {
         if url.scheme == "atlas-file", let host = url.host, Self.validID(host), url.path.isEmpty || url.path == "/" { self = .file(host); return }
-        guard url.scheme == nil, url.host == nil else { return nil }
-        let parts = url.path.split(separator: "/")
-        guard parts.count == 2, parts[0] == "atlas", Self.validID(String(parts[1])) else { return nil }
-        self = .page(String(parts[1]))
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return nil }
+        let route: String
+        if components.scheme == nil, components.host == nil {
+            route = components.percentEncodedPath.isEmpty ? components.percentEncodedFragment ?? "" : components.percentEncodedPath
+        } else {
+            // Older agent messages sometimes link to the desktop's local entry point.
+            guard ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
+                  ["localhost", "127.0.0.1", "[::1]"].contains(components.host?.lowercased() ?? ""),
+                  components.user == nil, components.password == nil,
+                  ["/", "/index.html"].contains(components.percentEncodedPath),
+                  let fragment = components.percentEncodedFragment, fragment.hasPrefix("/atlas/") else { return nil }
+            route = fragment
+        }
+        let path = route.prefix { $0 != "?" && $0 != "#" }
+        let parts = path.split(separator: "/")
+        guard parts.count == 2, parts[0] == "atlas",
+              let id = parts[1].removingPercentEncoding, Self.validID(id) else { return nil }
+        self = .page(id)
     }
     private static func validID(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 128 && value.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil

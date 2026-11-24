@@ -39,7 +39,7 @@ struct ConversationView: View {
     let onFork: (String) -> Void
     let initialCursor: HistoryCursor?
     let mateSource: MateConversationSource?
-    let onMateNavigation: (AppRoute) -> Void
+    let onNavigate: (AppRoute) -> Void
     @Bindable private var draft: ConversationDraft
     @Bindable private var queue: ConversationQueue
     @State private var owner: Int?
@@ -184,14 +184,14 @@ struct ConversationView: View {
 
     init(session: BackendSession, runID: String, openComputer: @escaping () -> Void, onNew: @escaping () -> Void,
          onFork: @escaping (String) -> Void, initialCursor: HistoryCursor? = nil, mateSource: MateConversationSource? = nil,
-         onMateNavigation: @escaping (AppRoute) -> Void = { _ in }) {
+         onNavigate: @escaping (AppRoute) -> Void = { _ in }) {
         self.session = session; self.runID = runID
         self.openComputer = openComputer
         self.onNew = onNew
         self.onFork = onFork
         self.initialCursor = initialCursor
         self.mateSource = mateSource
-        self.onMateNavigation = onMateNavigation
+        self.onNavigate = onNavigate
         draft = session.draft(for: runID)
         queue = session.messageQueue(for: runID)
     }
@@ -270,7 +270,7 @@ struct ConversationView: View {
         guard let next = mateRouteAfterDismissal else { return }
         mateRouteAfterDismissal = nil
         guard next.owner == session.ownership, session.viewingRunID == runID else { return }
-        onMateNavigation(next.route)
+        onNavigate(next.route)
     }
 
     private func workspace(in geometry: GeometryProxy) -> some View {
@@ -378,7 +378,11 @@ struct ConversationView: View {
         .sheet(item: $selectedAgent) { SubagentDetailSheet(session: session, selection: $0) }
         .onChange(of: agents.isEmpty) { _, empty in if empty { agentsExpanded = false } }
         .sensoryFeedback(.impact(weight: .light), trigger: acceptedCount)
-        .runFileLinks(session: session, runID: runID)
+        .runFileLinks(session: session, runID: runID) { id in
+            guard owner == session.ownership, session.viewingRunID == runID else { return false }
+            onNavigate(.atlasPage(id))
+            return true
+        }
         .toolbar {
             standardConversationTitle
             conversationToolbar(outputsAction: action)
@@ -594,7 +598,7 @@ struct ConversationView: View {
                     .padding(.top, 2)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Archived Mate").font(.subheadline.weight(.semibold).width(.expanded))
+                    Text("Archived Mate").font(.subheadline.weight(.semibold))
                     Text(message).font(.footnote).foregroundStyle(Color(.secondaryLabel))
                         .fixedSize(horizontal: false, vertical: true)
                 }

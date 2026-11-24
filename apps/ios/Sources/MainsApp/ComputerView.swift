@@ -35,7 +35,7 @@ struct ComputerView: View {
     private var needsPairing: Bool { [.unauthorized, .incompatible].contains(session.connection) }
 
     var body: some View {
-        SettingsScrollView {
+        SettingsScrollView(spacing: 32) {
             PageTitle("Settings")
             SettingsSection(session.isDemo ? "Demo Mode" : "Connected computer") {
                 if session.isDemo {
@@ -517,11 +517,12 @@ private struct SettingsScrollView<Content: View>: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
+    var spacing: CGFloat = 26
     @ViewBuilder let content: Content
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) { content }
+            VStack(alignment: .leading, spacing: spacing) { content }
                 .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
         }
         .background(Color(.systemBackground))

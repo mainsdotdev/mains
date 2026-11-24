@@ -53,7 +53,7 @@ struct ChatMessage: View {
                     Button { openVoiceConversation(task.id) } label: {
                         HStack(spacing: 10) {
                             Image(systemName: "bubble.left")
-                            Text(task.title).font(.subheadline.weight(.medium).width(.expanded)).lineLimit(2)
+                            Text(task.title).font(.subheadline.weight(.medium)).lineLimit(2)
                             Spacer(minLength: 8)
                             Image(systemName: "arrow.up.right").font(.caption)
                         }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
@@ -210,7 +210,7 @@ private struct MateTaskCard: View {
 
     private var taskTitle: some View {
         let title = assignment?.title ?? "Mate request"
-        return Text(title).font(.headline).fontWidth(title == "Mate request" ? nil : .expanded).foregroundStyle(.primary)
+        return Text(title).font(.headline).foregroundStyle(.primary)
     }
 }
 
@@ -588,7 +588,7 @@ struct ChatNotice<Actions: View>: View {
                 .foregroundStyle(warning ? Color.orange : Color(.secondaryLabel))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.subheadline.weight(.semibold).width(.expanded))
+                Text(title).font(.subheadline.weight(.semibold))
                 Text(message).font(.footnote).foregroundStyle(Color(.secondaryLabel))
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 16) { actions() }.font(.footnote.weight(.semibold)).buttonStyle(.plain)

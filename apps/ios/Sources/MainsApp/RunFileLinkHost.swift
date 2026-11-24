@@ -9,8 +9,9 @@ struct RunLinkedFileSelection: Identifiable {
 }
 
 extension View {
-    func runFileLinks(session: BackendSession, runID: String, relativeTo base: String? = nil) -> some View {
-        modifier(RunFileLinkHost(session: session, runID: runID, base: base))
+    func runFileLinks(session: BackendSession, runID: String, relativeTo base: String? = nil,
+                      openAtlasPage: ((String) -> Bool)? = nil) -> some View {
+        modifier(RunFileLinkHost(session: session, runID: runID, base: base, openAtlasPage: openAtlasPage))
     }
 }
 
@@ -21,10 +22,14 @@ private struct RunFileLinkHost: ViewModifier {
     let session: BackendSession
     let runID: String
     let base: String?
+    let openAtlasPage: ((String) -> Bool)?
     @Environment(\.openConversationOutput) private var openCompanion
     @State private var selection: RunLinkedFileSelection?
     func body(content: Content) -> some View {
         content.environment(\.openURL, OpenURLAction { url in
+            if let openAtlasPage, case .page(let id) = AtlasLink(url) {
+                return openAtlasPage(id) ? .handled : .discarded
+            }
             if ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") { return .systemAction }
             guard RunFileReference(url.relativeString, relativeTo: base) != nil else { return .discarded }
             let file = RunLinkedFileSelection(runID: runID, href: url.relativeString, base: base, owner: session.ownership)

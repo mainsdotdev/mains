@@ -856,6 +856,9 @@ final class MainsUITests: XCTestCase {
 
         let review = app.staticTexts["Fixture Mate reviewed the workspace."]
         XCTAssertTrue(review.waitForExistence(timeout: 10))
+        let request = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "openMateAssignment-")).firstMatch
+        XCTAssertTrue(request.exists)
+        XCTAssertGreaterThan(request.frame.minY, bubble.frame.maxY)
         let openChat = app.buttons["Open Mate chat"]
         XCTAssertTrue(openChat.exists)
         XCTAssertGreaterThan(openChat.frame.minY, review.frame.maxY)
@@ -1220,6 +1223,35 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "New Mate – setup history in the first chat")
 
         app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars["Chats"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMateChatOpensSavedAtlasPageAndReturnsToTheConversation() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        mate.tap()
+        let chat = app.staticTexts["Release check 3"]
+        XCTAssertTrue(chat.waitForExistence(timeout: 5))
+        chat.tap()
+
+        let link = app.descendants(matching: .any).matching(identifier: "artifact:2").firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 10))
+        link.tap()
+        let title = app.staticTexts["atlasPageTitle"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertEqual(title.label, "Travel notes")
+
+        let back = app.navigationBars.buttons["BackButton"]
+        back.tap()
+        XCTAssertTrue(link.waitForExistence(timeout: 10))
+        back.tap()
+        XCTAssertTrue(chat.waitForExistence(timeout: 5))
         app.navigationBars["Chats"].buttons["BackButton"].tap()
         app.navigationBars["Mates"].buttons["BackButton"].tap()
         forgetFixture(app)

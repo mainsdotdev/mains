@@ -60,7 +60,10 @@ public struct Transcript: Sendable {
         let artifactIDs = Set(page.artifacts.map(\.id))
         promptIdentities = promptIdentities.filter { artifactIDs.contains($0.key) }
         if let pending, !pending.isSteering, !pending.isQueueOwned, let artifact = page.artifacts.first(where: pending.matches) {
-            promptIdentities[artifact.id] = PromptIdentity(id: "pending:" + pending.id, date: pending.date)
+            // Mate requests are saved after their prompt and can share its server timestamp.
+            // Keep the optimistic row ID and use server order once the prompt is saved.
+            let date = pending.contextSkills.contains { $0.mateID != nil } ? artifact.createdAt : pending.date
+            promptIdentities[artifact.id] = PromptIdentity(id: "pending:" + pending.id, date: date)
         }
         if previousPrompt != page.artifacts.last(where: { $0.kind == "user-prompt" })?.id { suppressStoredThoughts = false }
         if direction == "latest" { following = true; frozenEnd = nil; isHistorical = false }

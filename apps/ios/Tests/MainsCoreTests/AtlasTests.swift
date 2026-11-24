@@ -271,8 +271,14 @@ import ImageIO
 
     @Test func pageLinksAdmitOnlyAtlasIdentitiesAndNeverComputerPaths() {
         #expect(AtlasLink(URL(string: "atlas-file://photo-123")!) == .file("photo-123"))
-        #expect(AtlasLink(URL(string: "/atlas/page-123")!) == .page("page-123"))
-        for value in ["file:///private/notes.md", "https://example.com/atlas/page-123", "atlas-file://image/other", "/atlas/../secret", "atlas-file://../private"] {
+        for value in ["/atlas/page-123", "#/atlas/page-123", "http://localhost:5173/#/atlas/page-123",
+                      "http://127.0.0.1:5173/index.html#/atlas/page-123", "http://[::1]:5173/#/atlas/page-123"] {
+            #expect(AtlasLink(URL(string: value)!) == .page("page-123"))
+        }
+        for value in ["file:///private/notes.md", "file:///tmp/index.html#/atlas/page-123",
+                      "https://example.com/atlas/page-123", "https://example.com/#/atlas/page-123",
+                      "http://localhost:5173/docs#/atlas/page-123", "http://user@localhost:5173/#/atlas/page-123",
+                      "atlas-file://image/other", "/atlas/../secret", "/atlas/page%2F123", "atlas-file://../private"] {
             #expect(AtlasLink(URL(string: value)!) == nil)
         }
     }

@@ -64,7 +64,7 @@ struct AppShell: View {
                             Group {
                                 if let homeRunID {
                                     ConversationView(session: session, runID: homeRunID, openComputer: showSettings, onNew: goHome,
-                                                     onFork: { path.append(.conversation($0)) }, onMateNavigation: { path.append($0) })
+                                                     onFork: { path.append(.conversation($0)) }, onNavigate: { path.append($0) })
                                         .id("\(session.ownership):\(homeRunID)")
                                         .toolbar {
                                             ToolbarItem(placement: .topBarLeading) {
@@ -87,11 +87,11 @@ struct AppShell: View {
                                 switch route {
                                 case .conversation(let id, let mate):
                                     ConversationView(session: session, runID: id, openComputer: showSettings, onNew: { newConversation(from: id) },
-                                                     onFork: { path.append(.conversation($0)) }, mateSource: mate, onMateNavigation: { path.append($0) })
+                                                     onFork: { path.append(.conversation($0)) }, mateSource: mate, onNavigate: { path.append($0) })
                                     .id("\(session.ownership):\(id)")
                                 case .searchMessage(let id, let cursor): ConversationView(session: session, runID: id, openComputer: showSettings,
                                     onNew: { newConversation(from: id) }, onFork: { path.append(.conversation($0)) }, initialCursor: cursor,
-                                    onMateNavigation: { path.append($0) })
+                                    onNavigate: { path.append($0) })
                                     .id("\(session.ownership):\(id):\(cursor.timestamp):\(cursor.id)")
                                 case .workspace(let id): TargetConversationsView(session: session, target: .workspace(id),
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)

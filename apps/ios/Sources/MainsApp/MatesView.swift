@@ -1271,8 +1271,8 @@ struct MateView: View {
                 Text(draft.instructions)
             }
             ViewThatFits(in: .horizontal) {
-                HStack { draftActions(draft, profile: profile, mateID: mate.id, busy: busy) }
-                VStack(alignment: .leading) { draftActions(draft, profile: profile, mateID: mate.id, busy: busy) }
+                HStack(spacing: 8) { draftActions(draft, profile: profile, mateID: mate.id, busy: busy) }
+                VStack(spacing: 8) { draftActions(draft, profile: profile, mateID: mate.id, busy: busy) }
             }
         }
         .padding(16)
@@ -1303,17 +1303,16 @@ struct MateView: View {
     }
 
     @ViewBuilder private func draftActions(_ draft: MateProfile, profile: MateProfile, mateID: String, busy: Bool) -> some View {
+        Button(editedProfile == nil ? "Edit" : "Discard edits") { editedProfile = editedProfile == nil ? draft : nil }
+            .buttonStyle(DecisionActionStyle(accent: AppBrand.accent))
+            .disabled(busy)
+            .accessibilityIdentifier("editMateProfile")
         Button("Save profile") { Task { await saveSetupProfile(profile, mateID: mateID) } }
-            .buttonStyle(.borderedProminent)
-            .tint(AppBrand.accent)
+            .buttonStyle(DecisionActionStyle(accent: AppBrand.accent, prominent: true))
             .disabled(busy || !session.isConnected || profile.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                       || profile.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                       || profile.description.utf16.count > 1_000 || profile.instructions.utf16.count > 16_000)
             .accessibilityIdentifier("saveMateProfile")
-        Button(editedProfile == nil ? "Edit" : "Discard edits") { editedProfile = editedProfile == nil ? draft : nil }
-            .buttonStyle(.bordered)
-            .disabled(busy)
-            .accessibilityIdentifier("editMateProfile")
     }
 
     private var checkMateChange: some View {

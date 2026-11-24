@@ -89,7 +89,10 @@ struct MessageComposer: View {
     }
 
     private var optionsTint: Color {
-        if context.supportsGoalMode && settings.config["goalMode"]?.bool == true { return AppBrand.accent }
+        if context.supportsGoalMode {
+            let planEnabled = context.mode == "developer" && settings.config["planMode"]?.bool == true
+            if planEnabled || settings.config["goalMode"]?.bool == true { return AppBrand.accent }
+        }
         return speed?.isFast(in: settings) == true ? ComposerSpeed.activeTint(in: colorScheme) : .secondary
     }
     var body: some View {

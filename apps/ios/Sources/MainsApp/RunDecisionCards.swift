@@ -75,7 +75,7 @@ private struct PendingApprovalCard: View {
                         Text(remaining).font(.caption.monospacedDigit()).foregroundStyle(.secondary).accessibilityLabel("Time remaining: \(remaining)")
                     }
                 }
-                Text(display.title).font((isTool ? Font.subheadline.weight(.medium) : .headline).width(.expanded))
+                Text(display.title).font(isTool ? .subheadline.weight(.medium) : .headline)
                     .accessibilityIdentifier("approvalTitle")
                 if isTool {
                     ApprovalPreviewViewport {
@@ -315,7 +315,7 @@ private struct AsyncQuestionCard: View {
                     Spacer()
                     Text("\(index + 1) of \(pending.questions.count)").foregroundStyle(.secondary)
                 }.font(.subheadline.weight(.semibold))
-                Text(question.title).font(.headline.width(.expanded)).accessibilityIdentifier("asyncQuestionTitle")
+                Text(question.title).font(.headline).accessibilityIdentifier("asyncQuestionTitle")
                 VStack(spacing: 10) {
                     ForEach(Array(question.options.enumerated()), id: \.offset) { _, option in
                         DecisionOption(title: option, selected: answers[index] == option, accent: accent) { answers[index] = option }
@@ -488,7 +488,7 @@ private struct DecisionTextInput: View {
     }
 }
 
-private struct DecisionActionStyle: ButtonStyle {
+struct DecisionActionStyle: ButtonStyle {
     let accent: Color
     var prominent = false
     @Environment(\.isEnabled) private var enabled
