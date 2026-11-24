@@ -22,6 +22,10 @@ struct ComputerView: View {
     @ObserveHotReload private var hotReload
     #endif
     let session: BackendSession
+    #if MAINS_GPT_LIVE
+    @Binding var demoVoiceOrbStyle: VoiceOrbStyle
+    @AppStorage(VoiceOrbStyle.storageKey) private var voiceOrbStyle = VoiceOrbStyle.water
+    #endif
     @AppStorage("appearancePreference") private var appearance = AppAppearance.system
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -97,6 +101,11 @@ struct ComputerView: View {
                                     value: session.selectedRealtimeVoice?.capitalized)
                     }
                     .accessibilityIdentifier("voiceSettings")
+                    let style = session.isDemo ? $demoVoiceOrbStyle : $voiceOrbStyle
+                    NavigationLink { VoiceOrbSettingsView(selection: style) } label: {
+                        SettingsRow(title: "Orb Style", value: style.wrappedValue.title)
+                    }
+                    .accessibilityIdentifier("voiceOrbSettings")
                 }
             }
             #endif

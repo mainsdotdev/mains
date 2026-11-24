@@ -133,9 +133,12 @@ stops when the voice settings page closes or the app becomes inactive. An unconf
 retains its original command identity for **Check saved voice** before another
 selection or a new voice call. Demo voice preferences remain in memory only.
 
-The water material is a bundled Metal shader with spherical refraction, moving
-surface normals, highlights and caustics. It samples the existing audio-level
-meters through a local attack/release envelope; it never opens another microphone.
+**Settings → GPT Live → Orb Style** previews Water and the desktop Cloud, Sphere
+and Aurora styles in the stock desktop palette. Water is the default. The phone
+remembers the style and applies it to Focus, Conversation and the call dock.
+Demo selections stay in memory.
+The bundled Metal shaders use the existing microphone and GPT audio-level
+meters through a local attack/release envelope.
 Rendering pauses offscreen/inactive, uses 30 fps (15 in Low Power Mode), and becomes
 static with Reduce Motion. Both light and dark appearances are supported.
 Xcode's optional Metal Toolchain component is required to compile the shader;
@@ -145,6 +148,7 @@ Debug builds of the opt-in v2 profile accept `--voice-preview` for an entirely i
 `--voice-preview-conversation` and `--voice-preview-light` select its initial
 layout and appearance. Preview preferences use a separate UserDefaults suite;
 no pairing, drafts, microphone, files or external service is accessed.
+Use `--voice-preview-orb water|cloud|sphere|aurora` to set the initial orb style.
 `--voice-preview-reduced-motion` also freezes its material for accessibility QA.
 
 Audio uses native WebRTC directly between the iPhone and OpenAI. The existing

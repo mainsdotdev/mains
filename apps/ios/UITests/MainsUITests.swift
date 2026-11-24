@@ -2328,8 +2328,10 @@ final class MainsUITests: XCTestCase {
         app.launch()
         let stage = app.descendants(matching: .any).matching(identifier: "voiceFocusStage").firstMatch
         XCTAssertTrue(stage.waitForExistence(timeout: 15))
-        XCTAssertFalse(app.scrollViews["conversationTranscript"].isHittable)
+        let transcript = app.scrollViews["conversationTranscript"]
+        XCTAssertFalse(transcript.staticTexts.firstMatch.isHittable)
         let orb = app.descendants(matching: .any).matching(identifier: "voiceOrb").firstMatch
+        XCTAssertEqual(orb.value as? String, "Water")
         XCTAssertGreaterThan(orb.frame.width, 180)
         let focusedOrbWidth = orb.frame.width
         XCTAssertEqual(orb.frame.midX, app.frame.midX, accuracy: 4)
@@ -2339,7 +2341,7 @@ final class MainsUITests: XCTestCase {
         app.buttons["voiceDisplayOptions"].tap()
         app.buttons["Conversation"].tap()
         XCTAssertTrue(stage.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.scrollViews["conversationTranscript"].waitForExistence(timeout: 5))
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5))
         let compactOrb = app.descendants(matching: .any).matching(identifier: "voiceComposerOrb").firstMatch
         XCTAssertTrue(compactOrb.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(compactOrb.frame.width, 80)
@@ -2367,12 +2369,29 @@ final class MainsUITests: XCTestCase {
     }
 
     func testWaterVoiceStaysStaticWithReduceMotion() async throws {
+        try await verifyStaticVoiceOrb(key: "water", name: "Water")
+    }
+
+    func testCloudVoiceStaysStaticWithReduceMotion() async throws {
+        try await verifyStaticVoiceOrb(key: "cloud", name: "Cloud")
+    }
+
+    func testSphereVoiceStaysStaticWithReduceMotion() async throws {
+        try await verifyStaticVoiceOrb(key: "sphere", name: "Sphere")
+    }
+
+    func testAuroraVoiceStaysStaticWithReduceMotion() async throws {
+        try await verifyStaticVoiceOrb(key: "aurora", name: "Aurora")
+    }
+
+    private func verifyStaticVoiceOrb(key: String, name: String) async throws {
         continueAfterFailure = false
         let app = makeApplication()
-        app.launchArguments = ["--voice-preview", "--voice-preview-reduced-motion"]
+        app.launchArguments = ["--voice-preview", "--voice-preview-reduced-motion", "--voice-preview-orb", key]
         app.launch()
         let orb = app.descendants(matching: .any).matching(identifier: "voiceOrb").firstMatch
         XCTAssertTrue(orb.waitForExistence(timeout: 15))
+        XCTAssertEqual(orb.value as? String, name)
         func pixels() throws -> Data {
             let screenshot = try XCTUnwrap(app.screenshot().image.cgImage)
             let scale = CGFloat(screenshot.width) / app.frame.width
@@ -2382,8 +2401,45 @@ final class MainsUITests: XCTestCase {
         }
         let first = try pixels()
         try await Task.sleep(for: .milliseconds(500))
-        XCTAssertEqual(first, try pixels())
+        XCTAssertEqual(first, try pixels(), "\(name) should stay still with Reduce Motion.")
+        attachScreenshot(app, name: "GPT Live – \(name) with Reduce Motion")
         app.buttons["endVoice"].tap()
+    }
+
+    func testGPTLiveOrbStylePickerPersistsSelection() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        func openPicker() {
+            openSidebar(app)
+            app.buttons["openSettings"].tap()
+            let row = app.buttons["voiceOrbSettings"]
+            scrollTo(row, in: app)
+            XCTAssertTrue(row.isHittable)
+            row.tap()
+        }
+
+        openPicker()
+        let styles = [("water", "Water"), ("cloud", "Cloud"), ("sphere", "Sphere"), ("aurora", "Aurora")]
+        let choices = styles.map { app.buttons["voiceOrbChoice-\($0.0)"] }
+        let back = app.navigationBars.buttons["BackButton"]
+        XCTAssertTrue(choices[0].waitForExistence(timeout: 5))
+        let original = choices.firstIndex(where: \.isSelected) ?? 0
+        for ((key, title), choice) in zip(styles, choices) {
+            choice.tap()
+            XCTAssertTrue(choice.isSelected)
+            if key != "water" { attachScreenshot(app, name: "GPT Live – \(title) picker preview") }
+        }
+        app.terminate()
+        app.launch()
+        openPicker()
+        let aurora = app.buttons["voiceOrbChoice-aurora"]
+        XCTAssertTrue(aurora.waitForExistence(timeout: 5))
+        XCTAssertTrue(aurora.isSelected)
+        choices[original].tap()
+        back.tap()
+        back.tap()
+        forgetFixture(app)
     }
 
     func testCodexEmptyComposerOffersVoiceAndDisclosesMicrophoneSharing() throws {

@@ -22,6 +22,10 @@ struct VoiceAppearancePreview: View {
         .preferredColorScheme(CommandLine.arguments.contains("--voice-preview-light") ? .light : .dark)
         .task {
             preferences.set(CommandLine.arguments.contains("--voice-preview-conversation") ? "conversation" : "focus", forKey: VoicePresentation.storageKey)
+            let style = CommandLine.arguments.firstIndex(of: "--voice-preview-orb").flatMap { index in
+                CommandLine.arguments.dropFirst(index + 1).first.flatMap(VoiceOrbStyle.init(rawValue:))
+            } ?? .water
+            preferences.set(style.rawValue, forKey: VoiceOrbStyle.storageKey)
             do {
                 session.setActive(true); try session.startDemo()
                 let end = ContinuousClock.now + .seconds(5)
@@ -50,7 +54,8 @@ struct VoiceAppearancePreview: View {
         onConnected?()
         levels = Task { [weak self] in
             while !Task.isCancelled {
-                self?.onLevels?(0, abs(sin(Date.timeIntervalSinceReferenceDate * 1.4)) * 0.22)
+                let phrase = sin(Date.timeIntervalSinceReferenceDate * 1.4)
+                self?.onLevels?(max(0, phrase) * 0.42, max(0, -phrase) * 0.60)
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
             }
         }

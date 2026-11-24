@@ -2,6 +2,51 @@ import SwiftUI
 import Observation
 @preconcurrency import AVFAudio
 
+struct VoiceOrbSettingsView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    @Binding var selection: VoiceOrbStyle
+    private let previewFrame = VoiceOrbFrame(levels: SIMD2(0.42, 0.58), flow: 1.4)
+
+    var body: some View {
+        List {
+            Section {
+                VoiceOrbArtwork(style: selection, size: 168, frame: previewFrame)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .accessibilityHidden(true)
+                    .listRowBackground(Color.clear)
+            }
+            Section {
+                ForEach(VoiceOrbStyle.allCases, id: \.self) { style in
+                    Button { selection = style } label: {
+                        HStack(spacing: 12) {
+                            VoiceOrbArtwork(style: style, size: 44, frame: previewFrame)
+                                .accessibilityHidden(true)
+                            Text(style.title)
+                            Spacer(minLength: 8)
+                            if selection == style {
+                                Image(systemName: "checkmark").font(.body.weight(.semibold))
+                                    .foregroundStyle(AppBrand.accent).accessibilityHidden(true)
+                            }
+                        }
+                        .foregroundStyle(.primary)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selection == style ? .isSelected : [])
+                    .accessibilityIdentifier("voiceOrbChoice-" + style.rawValue)
+                }
+            }
+        }
+        .navigationHeaderFade(background: Color(.systemGroupedBackground))
+        .expandedNavigationTitle("Orb Style")
+        .toolbar(.visible, for: .navigationBar)
+    }
+}
+
 struct VoiceSettingsView: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload

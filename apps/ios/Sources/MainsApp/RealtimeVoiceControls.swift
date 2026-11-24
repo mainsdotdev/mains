@@ -12,6 +12,39 @@ enum VoicePresentation: String, CaseIterable {
     var symbol: String { self == .focus ? "circle" : "text.bubble" }
 }
 
+enum VoiceOrbStyle: String, CaseIterable {
+    case water, cloud, sphere, aurora
+    static let storageKey = "voiceOrbStyle"
+
+    var title: String {
+        switch self {
+        case .water: String(localized: "Water")
+        case .cloud: String(localized: "Cloud")
+        case .sphere: String(localized: "Sphere")
+        case .aurora: String(localized: "Aurora")
+        }
+    }
+
+    fileprivate var shaderFunction: ShaderFunction {
+        switch self {
+        case .water: ShaderLibrary.voiceWater
+        case .cloud: ShaderLibrary.voiceCloud
+        case .sphere: ShaderLibrary.voiceSphere
+        case .aurora: ShaderLibrary.voiceAurora
+        }
+    }
+
+    fileprivate func flowSpeed(energy: Double) -> Double {
+        let desktopSpeed = 0.4 + energy * 4.2
+        return switch self {
+        case .water: 1.1 + energy * 8.4
+        case .cloud: desktopSpeed
+        case .sphere: desktopSpeed * 2.0
+        case .aurora: desktopSpeed * 2.4
+        }
+    }
+}
+
 struct VoicePresentationMenu: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -54,35 +87,50 @@ struct VoiceOrb: View {
     #endif
     let voice: RealtimeVoiceController
     var size: CGFloat = 104
+    @AppStorage(VoiceOrbStyle.storageKey) private var style = VoiceOrbStyle.water
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.voiceSurfaceVisible) private var surfaceVisible
     @Environment(\.voiceReduceMotionPreview) private var reduceMotionPreview
     @State private var visible = false
     @State private var envelope = VoiceOrbEnvelope()
     var body: some View {
+        let moving = visible && surfaceVisible && !reduceMotion && !reduceMotionPreview && scenePhase == .active
         TimelineView(.animation(minimumInterval: ProcessInfo.processInfo.isLowPowerModeEnabled ? 1.0 / 15 : 1.0 / 30,
-                                paused: !visible || !surfaceVisible || reduceMotion || reduceMotionPreview || scenePhase != .active)) { timeline in
-            let moving = visible && surfaceVisible && !reduceMotion && !reduceMotionPreview && scenePhase == .active
+                                paused: !moving)) { timeline in
             let frame = moving ? envelope.sample(input: voice.muted ? 0 : voice.inputLevel, output: voice.outputLevel,
-                                                time: timeline.date.timeIntervalSinceReferenceDate) : VoiceOrbFrame()
-            Rectangle().fill(.white)
-                .colorEffect(ShaderLibrary.voiceWater(
-                    .float2(Float(size), Float(size)), .float(frame.flow),
-                    .float(frame.levels.x), .float(frame.levels.y),
-                    .float(colorScheme == .dark ? 1 : 0)))
-                .frame(width: size, height: size)
+                                                time: timeline.date.timeIntervalSinceReferenceDate, style: style) : VoiceOrbFrame()
+            VoiceOrbArtwork(style: style, size: size, frame: frame)
         }
         .frame(width: size, height: size)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(voice.muted ? "Voice chat, microphone muted" : voice.phase == .connected ? "Voice chat connected" : "Connecting voice chat")
+        .accessibilityValue(style.title)
         .accessibilityIdentifier("voiceOrb")
         .onAppear { visible = true }.onDisappear { visible = false }
     }
 }
 
-private struct VoiceOrbFrame {
+struct VoiceOrbArtwork: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let style: VoiceOrbStyle
+    let size: CGFloat
+    var frame = VoiceOrbFrame()
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Rectangle().fill(.white)
+            .colorEffect(Shader(function: style.shaderFunction, arguments: [
+                .float2(Float(size), Float(size)), .float(frame.flow),
+                .float(frame.levels.x), .float(frame.levels.y), .float(colorScheme == .dark ? 1 : 0)
+            ]))
+            .frame(width: size, height: size)
+    }
+}
+
+struct VoiceOrbFrame {
     var levels = SIMD2<Float>.zero
     var flow: Float = 0
 }
@@ -92,15 +140,15 @@ private struct VoiceOrbFrame {
     private var input = 0.0
     private var output = 0.0
     private var flow = 0.0
-    func sample(input targetInput: Double, output targetOutput: Double, time: TimeInterval) -> VoiceOrbFrame {
+    func sample(input targetInput: Double, output targetOutput: Double, time: TimeInterval, style: VoiceOrbStyle) -> VoiceOrbFrame {
         let elapsed = min(0.1, max(0, time - (previous ?? time - 1.0 / 30)))
         previous = time
         // Match the React orb's fast speech attack and softer release.
         input += (targetInput - input) * (1 - exp(-elapsed / (targetInput > input ? 0.05 : 0.22)))
         output += (targetOutput - output) * (1 - exp(-elapsed / (targetOutput > output ? 0.05 : 0.22)))
-        // Integrate velocity rather than multiplying wall time by volume: both
-        // speakers accelerate the water without jumping its position on syllables.
-        flow += elapsed * (1.1 + max(input, output) * 8.4)
+        // Integrate velocity so both speakers accelerate the shader without
+        // jumping its position on syllables.
+        flow += elapsed * style.flowSpeed(energy: max(input, output))
         return VoiceOrbFrame(levels: SIMD2(Float(input), Float(output)), flow: Float(flow))
     }
 }

@@ -104,7 +104,7 @@ struct SidebarView: View {
                 let runningCount = live ? groups.running.count : 0
                 Button(action: openWorkInbox) {
                     shortcutLabel("Activity") {
-                        Image(systemName: "tray").font(.system(size: shortcutIconSize, weight: .medium))
+                        Image(systemName: "tray").font(.system(size: shortcutIconSize * 0.8, weight: .medium))
                     } trailing: {
                         HStack(spacing: 6) {
                             activityBadge(waitingCount, tint: .orange)

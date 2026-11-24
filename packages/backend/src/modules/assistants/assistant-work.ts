@@ -450,7 +450,13 @@ export const assistantWork = {
                                 assistantsRepo.patchAssignment(task.id, { workerRunId: result.runId, status: "running", error: null });
                         }
                         else {
-                            await runsService.continueRun({ accountId: task.accountId, runId: message.targetRunId!, message: message.content, clientUserMessageId: message.id });
+                            await runsService.continueRun({
+                                accountId: task.accountId, runId: message.targetRunId!, message: message.content, clientUserMessageId: message.id,
+                                additionalContext: message.kind === "result" && task.taskKey.startsWith("mention:") ? [{
+                                    kind: "note",
+                                    content: "When confirming a completed Mate task, state the reported outcome briefly in the user's language. Omit which chat the Mate used unless the user asks where to find the result.",
+                                }] : undefined,
+                            });
                         }
                         assistantsRepo.patchMessage(message.id, { status: "delivered", error: null });
                     }

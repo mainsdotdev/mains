@@ -39,6 +39,9 @@ struct AppShell: View {
     @State private var collapsedCollections: Set<String> = []
     @State private var wideSidebarHidden = false
     @State private var inlineSidebarVisible = false
+    #if MAINS_GPT_LIVE
+    @State private var demoVoiceOrbStyle = VoiceOrbStyle.water
+    #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var colorScheme
@@ -97,7 +100,12 @@ struct AppShell: View {
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
                                 case .project(let id): TargetConversationsView(session: session, target: .project(id),
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
-                                case .settings: ComputerView(session: session)
+                                case .settings:
+                                    #if MAINS_GPT_LIVE
+                                    ComputerView(session: session, demoVoiceOrbStyle: $demoVoiceOrbStyle)
+                                    #else
+                                    ComputerView(session: session)
+                                    #endif
                                 case .workInbox: WorkInboxView(session: session, openConversation: { path.append(.conversation($0)) }, openSettings: showSettings)
                                 case .atlas: AtlasView(session: session, openPage: { path.append(.atlasPage($0)) }, openConversation: { path.append(.conversation($0)) })
                                     .id(session.ownership)

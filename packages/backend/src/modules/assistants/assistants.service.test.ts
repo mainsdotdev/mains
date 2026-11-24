@@ -1547,6 +1547,13 @@ it("dispatches a Mate mention from a Work follow-up only once and returns its re
     await settled(task.workerRunId!);
     await assistantWork.report(task.workerRunId!, { assignmentId: task.id, status: "completed", result: "Rail routes compared", evidence: ["Timetable"] });
     await assistantWork.drain();
+    await vi.waitFor(() => {
+        const report = driver.calls.resumeSession.find(request => request.runId === source.runId && request.message.includes("Rail routes compared"));
+        expect(report?.context).toContainEqual(expect.objectContaining({
+            kind: "note", content: expect.stringContaining("Omit which chat the Mate used unless the user asks where to find the result."),
+        }));
+    });
+    await settled(source.runId);
     await assistantWork.stop(); assistantWork.start(); await assistantWork.drain();
     expect(assistantsRepo.assignments("default")).toEqual([
         expect.objectContaining({ id: task.id, status: "completed", result: "Rail routes compared" }),
