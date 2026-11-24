@@ -1,4 +1,3 @@
-import { isSecureConnectEndpoint } from "@mains/contracts/connect-endpoint";
 import { getTransport, onTransportChange, setTransport, WsTransport } from "@/lib/transport";
 import { isWeb } from "./platform";
 import { installWebApi } from "./web-api-shim";
@@ -28,12 +27,6 @@ if (isWeb && typeof window !== "undefined") {
   installWebApi();
 
   const loginCode = takeWebLoginCode();
-
-  if (!isSecureConnectEndpoint(window.location.origin)) {
-    const message = "Open Mains over HTTPS or through a local SSH tunnel.";
-    document.getElementById("root")?.replaceChildren(message);
-    throw new Error(message);
-  }
 
   const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
   const wsUrl = `${scheme}//${window.location.host}/__mains/ws`;

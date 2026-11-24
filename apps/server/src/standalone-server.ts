@@ -62,7 +62,6 @@ export async function startStandaloneServer(
 
     return {
       sink: server.sink,
-      lanAddresses: server.lanAddresses,
       port: server.port,
       webUiAvailable: server.webUiAvailable,
       token: server.token,

@@ -33,8 +33,8 @@ describe("discoverReachableEndpoints", () => {
       }),
     ).toEqual([
       "https://mac.example.ts.net",
-      "https://192.168.1.25:8787",
-      "https://100.90.80.70:8787",
+      "http://192.168.1.25:8787",
+      "http://100.90.80.70:8787",
     ]);
   });
 
@@ -54,13 +54,12 @@ describe("discoverReachableEndpoints", () => {
         host: "mains.internal",
         port: 9000,
       }),
-    ).toEqual(["https://mains.internal:9000"]);
+    ).toEqual(["http://mains.internal:9000"]);
   });
 });
 
 describe("endpoint validation", () => {
   it("rejects credentials and non-HTTP protocols", () => {
-    expect(() => normalizeEndpoint("http://192.168.1.25")).toThrow("HTTPS");
     expect(() => normalizeEndpoint("file:///tmp/mains")).toThrow("HTTP or HTTPS");
     expect(() => normalizeEndpoint("https://user:pass@example.com")).toThrow(
       "base URL",
@@ -69,6 +68,6 @@ describe("endpoint validation", () => {
 
   it("uses loopback to control wildcard listeners", () => {
     expect(resolveControlUrl("0.0.0.0", 8787)).toBe("http://127.0.0.1:8787");
-    expect(resolveControlUrl("::", 8787)).toBe("http://127.0.0.1:8787");
+    expect(resolveControlUrl("::", 8787)).toBe("http://[::1]:8787");
   });
 });

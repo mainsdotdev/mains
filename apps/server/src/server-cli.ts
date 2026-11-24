@@ -81,9 +81,7 @@ Usage: mains [serve] [options]
        npm run serve -- [options]  (development)
 
   --host <address>              Bind address (default: 127.0.0.1)
-  --lan                         Serve HTTPS/WSS on private IPv4 interfaces
-  --tls-cert <pem>              LAN certificate chain (or MAINS_TLS_CERT)
-  --tls-key <pem>               LAN private key file (or MAINS_TLS_KEY)
+  --lan                         Bind all interfaces and advertise private LAN IPs
   --port <number>               HTTP/WebSocket port (default: 8787)
   --token <token>               Full-access owner token (32+ URL-safe characters)
   --rotate-token                Generate and persist a new owner token
@@ -187,7 +185,6 @@ async function runServeCommand(argv: string[]): Promise<void> {
     const endpoints = discoverReachableEndpoints({
       host: serverOptions.host,
       port: server.port,
-      lanAddresses: server.lanAddresses,
       tailscaleUrl: server.tailscaleUrl,
       publicUrls,
     });
@@ -309,7 +306,7 @@ function resolveAdminClient(
       "The owner token is not stored in this data directory. Pass --token for the running server.",
     );
   }
-  return { state, admin: { controlUrl: normalizeEndpoint(controlUrl), token } };
+  return { state, admin: { controlUrl, token } };
 }
 
 async function runAuthCommand(argv: string[]): Promise<void> {

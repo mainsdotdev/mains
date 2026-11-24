@@ -51,7 +51,7 @@ const descriptor: BackendDescriptor = {
 };
 
 function startConnection(
-  url = "wss://test",
+  url = "ws://test",
   options: Pick<WsTransportOptions, "invokeTimeoutMs"> = {
     invokeTimeoutMs: 0,
   },
@@ -85,23 +85,17 @@ async function accept(
 }
 
 describe("remote backend activation", () => {
-  it("rejects remote plaintext before creating a socket for the saved credential", async () => {
-    const factory = vi.fn();
-    await expect(connectRemoteBackend("ws://192.168.1.10:8787", { token: "saved", factory })).rejects.toThrow(/WSS/);
-    expect(factory).not.toHaveBeenCalled();
-  });
-
   it("keeps the newer choice when an older handshake response was already queued", async () => {
-    const first = startConnection("wss://old");
+    const first = startConnection("ws://old");
     const oldResult = first.promise.catch((error: Error) => error);
     first.sockets[0].open(); first.sockets[0].respond({ success: true, data: descriptor });
-    const second = await accept(startConnection("wss://new"), { ...descriptor, backendId: "new" });
+    const second = await accept(startConnection("ws://new"), { ...descriptor, backendId: "new" });
     expect(await oldResult).toBeInstanceOf(Error);
     expect(getTransport()).toBe(second.transport);
     expect(first.sockets[0].closed).toBe(true);
   });
   it("does not reactivate a pending remote after the user returns to local", async () => {
-    const attempt = startConnection("wss://canceled");
+    const attempt = startConnection("ws://canceled");
     const result = attempt.promise.catch((error: Error) => error);
     disconnectRemoteBackend();
     const socket = attempt.sockets[0];
@@ -118,7 +112,7 @@ describe("remote backend activation", () => {
 
   it("keeps the normal invoke timeout after verification", async () => {
     vi.useFakeTimers();
-    const connection = await accept(startConnection("wss://test", {}));
+    const connection = await accept(startConnection("ws://test", {}));
     let settled = false;
     const pending = connection.transport.invoke("slow:operation");
     const outcome = pending.then(
@@ -143,7 +137,7 @@ describe("remote backend activation", () => {
 
   it("limits backend verification to ten seconds", async () => {
     vi.useFakeTimers();
-    const attempt = startConnection("wss://test", {});
+    const attempt = startConnection("ws://test", {});
     attempt.sockets[0].open();
 
     const outcome = attempt.promise.then(
@@ -179,8 +173,8 @@ describe("remote backend activation", () => {
   });
 
   it("does not dispose the current remote until its replacement is verified", async () => {
-    const first = await accept(startConnection("wss://a"));
-    const secondAttempt = startConnection("wss://b");
+    const first = await accept(startConnection("ws://a"));
+    const secondAttempt = startConnection("ws://b");
 
     expect(getActiveRemote()).toBe(first.transport);
     expect(first.transport.status()).toBe("connected");
@@ -196,8 +190,8 @@ describe("remote backend activation", () => {
   });
 
   it("leaves the current remote untouched when verification is rejected", async () => {
-    const current = await accept(startConnection("wss://current"));
-    const attempt = startConnection("wss://candidate");
+    const current = await accept(startConnection("ws://current"));
+    const attempt = startConnection("ws://candidate");
     attempt.sockets[0].open();
     attempt.sockets[0].respond({ success: false, error: "Unauthorized" });
 

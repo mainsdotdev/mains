@@ -1,4 +1,3 @@
-import { isSecureConnectEndpoint } from "@mains/contracts/connect-endpoint";
 import { getLocalBackendId } from "../../db/backend-identity";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
@@ -345,7 +344,6 @@ export const backendService = {
         "No address a device could reach — turn on network access or Tailscale HTTPS first",
       );
     }
-    if (endpoints.some(endpoint => !isSecureConnectEndpoint(endpoint))) throw new Error("Remote pairing requires HTTPS");
     const { name } = await this.describe();
     assertAuthActive(signal, "Pairing request is no longer active");
     const now = Date.now();

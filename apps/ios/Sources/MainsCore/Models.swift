@@ -20,7 +20,8 @@ public struct PairingLink: Equatable, Sendable {
             if key == "code" { code = value }
             if key == "name" { name = value }
             if key == "endpoint", let endpoint = URL(string: value),
-               Wire.isSecureConnectEndpoint(endpoint),
+               ["http", "https"].contains(endpoint.scheme?.lowercased() ?? ""), endpoint.host != nil,
+               endpoint.user == nil, endpoint.password == nil, endpoint.fragment == nil, endpoint.query == nil,
                !endpoints.contains(endpoint) { endpoints.append(endpoint) }
         }
         guard !code.isEmpty, !endpoints.isEmpty else { throw MainsError.invalidLink }

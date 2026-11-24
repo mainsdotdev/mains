@@ -47,16 +47,8 @@ host token are recorded only after native acquisition. Advertised addresses,
 the exposed session token and new browser/pairing grants require a ready host
 with the current token, no pending/failed host cleanup and a live exposure
 path. Tailscale URLs additionally require resolved status and no Serve cleanup.
-Direct LAN requires a trusted TLS certificate and key (`MAINS_TLS_CERT` and
-`MAINS_TLS_KEY`). Only the loopback listener accepts plain HTTP and WS.
-LAN addresses follow the actual HTTPS bindings. Rotation and shutdown cannot mint a
+LAN addresses follow the actual binding. Rotation and shutdown cannot mint a
 new grant for an obsolete or retiring host.
-
-On each desktop connection the two hosts prove knowledge of the owner token
-using fresh challenges. The desktop verifies the saved backend ID before
-releasing queued calls. Both hosts must support this handshake. A TLS-terminating
-proxy can still read the session. Direct TLS or TCP passthrough keeps TLS
-termination on the backend.
 
 The owner token remains outside browser JavaScript. Existing one-use login
 codes, cookie exchange, advertised-origin validation and wire DTOs retain

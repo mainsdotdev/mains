@@ -78,9 +78,7 @@ describe("parseServerCliOptions", () => {
   });
 
   it("supports a safe explicit LAN shorthand", () => {
-    expect(parseServerCliOptions(["--lan", "--tls-cert", "cert.pem", "--tls-key", "key.pem"])).toMatchObject({
-      host: "0.0.0.0", tlsCert: "cert.pem", tlsKey: "key.pem",
-    });
+    expect(parseServerCliOptions(["--lan"]).host).toBe("0.0.0.0");
     expect(() =>
       parseServerCliOptions(["--lan", "--host", "192.168.1.4"]),
     ).toThrow("cannot be combined");

@@ -1,6 +1,4 @@
-import { privateLanAddresses } from "@mains/backend/ipc-kit/lan-listeners";
-import { isConnectLoopback, isSecureConnectEndpoint } from "@mains/contracts/connect-endpoint";
-import { type NetworkInterfaceInfo } from "node:os";
+import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 
 type InterfaceMap = NodeJS.Dict<NetworkInterfaceInfo[]>;
 
@@ -10,7 +8,33 @@ export interface ReachableEndpointOptions {
   tailscaleUrl?: string | null;
   publicUrls?: readonly string[];
   interfaces?: InterfaceMap;
-  lanAddresses?: readonly string[];
+}
+
+function isIpv4(entry: NetworkInterfaceInfo): boolean {
+  return entry.family === "IPv4";
+}
+
+function ipv4Octets(address: string): number[] | null {
+  const octets = address.split(".").map(Number);
+  return octets.length === 4 && octets.every((value) => Number.isInteger(value))
+    ? octets
+    : null;
+}
+
+function isTailnetIpv4(address: string): boolean {
+  const octets = ipv4Octets(address);
+  return Boolean(octets && octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127);
+}
+
+function isPrivateIpv4(address: string): boolean {
+  const octets = ipv4Octets(address);
+  if (!octets) return false;
+  return (
+    octets[0] === 10 ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 192 && octets[1] === 168) ||
+    isTailnetIpv4(address)
+  );
 }
 
 function hostForUrl(host: string): string {
@@ -34,7 +58,6 @@ export function normalizeEndpoint(value: string): string {
   if (url.username || url.password || url.search || url.hash) {
     throw new Error(`Endpoint must be a base URL: ${value}`);
   }
-  if (!isSecureConnectEndpoint(value)) throw new Error("Remote endpoints require HTTPS.");
   return url.toString().replace(/\/$/, "");
 }
 
@@ -57,15 +80,29 @@ export function discoverReachableEndpoints(
 
   const host = options.host.trim();
   const wildcard = host === "0.0.0.0" || host === "::" || host === "[::]";
-  const loopback = isConnectLoopback(host);
+  const loopback =
+    host === "127.0.0.1" ||
+    host === "localhost" ||
+    host === "::1" ||
+    host === "[::1]";
 
   if (wildcard) {
-    const addresses = options.lanAddresses ?? privateLanAddresses(options.interfaces);
+    const addresses = Object.values(options.interfaces ?? networkInterfaces())
+      .flatMap((entries) => entries ?? [])
+      .filter(
+        (entry) =>
+          isIpv4(entry) && !entry.internal && isPrivateIpv4(entry.address),
+      )
+      .map((entry) => entry.address)
+      .sort((left, right) => {
+        const tailnetOrder = Number(isTailnetIpv4(left)) - Number(isTailnetIpv4(right));
+        return tailnetOrder || left.localeCompare(right);
+      });
     for (const address of addresses) {
-      appendUnique(endpoints, `https://${hostForUrl(address)}:${options.port}`);
+      appendUnique(endpoints, httpEndpoint(address, options.port));
     }
   } else if (!loopback) {
-    appendUnique(endpoints, `https://${hostForUrl(host)}:${options.port}`);
+    appendUnique(endpoints, httpEndpoint(host, options.port));
   }
 
   return endpoints;
@@ -73,5 +110,7 @@ export function discoverReachableEndpoints(
 
 /** URL the same-machine CLI uses for authenticated server administration. */
 export function resolveControlUrl(host: string, port: number): string {
-  return httpEndpoint(isConnectLoopback(host) ? host : "127.0.0.1", port);
+  if (host === "0.0.0.0") return httpEndpoint("127.0.0.1", port);
+  if (host === "::" || host === "[::]") return httpEndpoint("::1", port);
+  return httpEndpoint(host, port);
 }

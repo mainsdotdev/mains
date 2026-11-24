@@ -29,7 +29,8 @@ registers `mains-native` for direct URL opening in Debug; Release also registers
 the existing production `mains` scheme. Never commit or log a real pairing link
 or device token.
 
-LAN pairing requires HTTPS/WSS in every build. Development fixtures may use loopback HTTP/WS. The computer must be
+Debug permits local HTTP/WS pairing, including LAN IP addresses. Release retains
+normal App Transport Security and requires HTTPS/WSS. The computer must be
 reachable from the iPhone; this does not add a new mobile Bridge transport.
 
 ```sh
@@ -248,7 +249,7 @@ If an upload succeeds but Apple processing or notes fail, check TestFlight befor
 retrying: the build may already be present. Running `beta` again creates the next
 build rather than resuming a previous upload. First-time Apple processing may take
 longer. Test the actual TestFlight build on a phone: Release requires HTTPS/WSS,
-while Debug fixtures may use loopback HTTP/WS.
+while local HTTP/WS pairing is supported only in Debug.
 
 Offline release configuration/orchestration tests (no Apple access or upload):
 

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import {
   createServer,
   type IncomingMessage,
-  type RequestListener,
   type Server,
   type ServerResponse,
 } from "node:http";
@@ -17,9 +16,6 @@ import {
   parseProtocolHeader,
 } from "@mains/contracts/ws-protocol";
 import { registerEventSink } from "./event-bus";
-import { isConnectLoopback, isSecureConnectEndpoint } from "@mains/contracts/connect-endpoint";
-import { createLanListeners, listenLan, type readLanTls } from "./lan-listeners";
-import { ownerHello, verifyOwnerSocket } from "./owner-handshake";
 import { tokensMatch } from "./ws-auth";
 import {
   createWebSessionManager,
@@ -52,8 +48,6 @@ export interface WsHost {
   readonly port: number;
   /** Whether this host found a built renderer it can serve to browsers. */
   readonly webUiAvailable: boolean;
-  /** Actual network interfaces with an active TLS listener. */
-  readonly lanAddresses: readonly string[];
   /** Mint an origin-bound, five-minute, single-use browser login link. */
   createWebLogin(baseUrl: string): WebLoginLink;
   /**
@@ -70,8 +64,6 @@ export interface WsHost {
 export interface WsHostOptions {
   port: number;
   host?: string;
-  tls?: ReturnType<typeof readLanTls>;
-  getBackendId?: () => Promise<string>;
   /**
    * Owner token clients must present (via WS subprotocol); the handshake is
    * rejected (401) unless it matches. Required on every bind, loopback included:
@@ -243,7 +235,6 @@ function parsePairingEndpoints(body: unknown): string[] {
     if (url.username || url.password || url.search || url.hash) {
       throw new Error(`Pairing endpoint must be a base URL: ${value}`);
     }
-    if (!isSecureConnectEndpoint(value)) throw new Error("Remote pairing requires HTTPS");
     const normalized = url.toString().replace(/\/$/, "");
     if (!endpoints.includes(normalized)) endpoints.push(normalized);
   }
@@ -572,10 +563,9 @@ function createStaticHandler(webRoot: string) {
  * library; all logic lives in the transport-agnostic {@link serveConnection}.
  * See docs/design/remote-backend.md.
  */
-export async function startWsHost(options: WsHostOptions): Promise<WsHost> {
+export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   const deviceAuth = createAuthFence();
   const token = options.token;
-  let ready = false;
   let closing = false, closePromise: Promise<void> | undefined;
   const pending = new Set<Promise<void>>();
   const track = (work: Promise<void>) => {
@@ -604,8 +594,8 @@ export async function startWsHost(options: WsHostOptions): Promise<WsHost> {
     return webSessions.createLogin(baseUrl);
   };
 
-  const handler: RequestListener = (req, res) => {
-    if (!ready || closing) { res.writeHead(503); res.end("Backend is closing"); return; }
+  const httpServer: Server = createServer((req, res) => {
+    if (closing) { res.writeHead(503); res.end("Backend is closing"); return; }
     const url = req.url ?? "";
     const pathname = url.split("?")[0];
     if (
@@ -692,11 +682,8 @@ export async function startWsHost(options: WsHostOptions): Promise<WsHost> {
       res.writeHead(426);
       res.end("Upgrade Required");
     }
-  };
+  });
 
-  const host = options.host ?? "127.0.0.1";
-  const lan = createLanListeners(host, handler, options.tls);
-  const httpServer: Server = createServer(handler);
   const sink = new WebSocketSink();
   const unregisterSink = registerEventSink(sink);
 
@@ -705,17 +692,10 @@ export async function startWsHost(options: WsHostOptions): Promise<WsHost> {
   const authenticatedDevices = new WeakMap<IncomingMessage, VerifiedDevice>();
   const authenticatedRequests = new WeakMap<IncomingMessage, () => boolean>();
   const authenticatedWebSessions = new WeakMap<IncomingMessage, WebSessionLease>();
-  const pendingOwners = new WeakMap<IncomingMessage, { nonce: string; backendId: string }>();
   const authorize = async (req: IncomingMessage): Promise<boolean> => {
     const raw = req.headers["sec-websocket-protocol"];
     const header = Array.isArray(raw) ? raw.join(",") : raw;
-    const protocols = parseProtocolHeader(header);
-    const nonce = ownerHello(protocols, token);
-    if (nonce && protocols.includes(WS_SUBPROTOCOL) && options.getBackendId) {
-      pendingOwners.set(req, { nonce, backendId: await options.getBackendId() });
-      return true;
-    }
-    const presented = extractToken(protocols);
+    const presented = extractToken(parseProtocolHeader(header));
     if (tokensMatch(token, presented)) return true;
     if (presented && options.verifyDeviceToken) {
       const current = deviceAuth.observe();
@@ -754,7 +734,7 @@ export async function startWsHost(options: WsHostOptions): Promise<WsHost> {
     verifyClient: (info, cb) => {
       // Fail closed: a throw while authenticating must reject this handshake,
       // never surface as an unhandled rejection that takes the process down.
-      if (!ready || closing) { cb(false, 503, "Backend is closing"); return; }
+      if (closing) { cb(false, 503, "Backend is closing"); return; }
       track(authorize(info.req)
         .catch(() => false)
         .then((allowed) => {
@@ -767,7 +747,6 @@ export async function startWsHost(options: WsHostOptions): Promise<WsHost> {
   // Which paired device each open socket belongs to, for disconnectDevice.
   const socketDevices = new WeakMap<WebSocket, string>();
   wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
-    socket.on("error", () => socket.terminate());
     if (closing || authenticatedRequests.get(req)?.() === false) { socket.terminate(); return; }
     const device = authenticatedDevices.get(req);
     if (device) {
@@ -792,88 +771,86 @@ export async function startWsHost(options: WsHostOptions): Promise<WsHost> {
       socket.once("close", () => { clearTimeout(expiryTimer); webSession.signal.removeEventListener("abort", revoke); });
     }
     const authorized = () => !closing && (authenticatedRequests.get(req)?.() ?? true);
-    const admit = () => {
-      if (!authorized()) { socket.terminate(); return; }
-      serveConnection(adaptSocket(socket, device, authorized), sink, {
-        commandReceipts: options.commandReceipts, accepting: authorized, track,
-      });
-    };
-    const owner = pendingOwners.get(req);
-    if (owner) verifyOwnerSocket(socket, token, owner.nonce, owner.backendId, admit);
-    else admit();
+    serveConnection(adaptSocket(socket, device, authorized), sink, {
+      commandReceipts: options.commandReceipts,
+      accepting: () => !closing && (authenticatedRequests.get(req)?.() ?? true),
+      track,
+    });
   });
 
-  async function closeListeners() {
-    unregisterSink();
-    for (const client of wss.clients) client.terminate();
-    await new Promise<void>(resolve => wss.close(() => resolve()));
-    await Promise.all([httpServer, ...lan.map(listener => listener.server)].map(server =>
-      new Promise<void>(resolve => {
-        server.close(() => resolve());
-        server.closeAllConnections();
-      })));
-  }
-
-  wss.on("error", error => console.error("Backend WebSocket server failed", error));
-  try {
-    await new Promise<void>((resolve, reject) => {
-      httpServer.once("error", reject);
-      httpServer.listen(options.port, isConnectLoopback(host) ? host.replace(/^\[|\]$/g, "") : "127.0.0.1", () => {
-        httpServer.off("error", reject);
-        resolve();
-      });
-    });
-    const address = httpServer.address();
-    if (!address || typeof address === "string") throw new Error("No listening port");
-    const port = address.port;
-    for (const listener of lan) await listenLan(listener.server, listener.address, port, wss);
-    ready = true;
-    return {
-      sink,
-      port,
-      lanAddresses: lan.map(listener => listener.address),
-      webUiAvailable: webRoot !== null,
-      createWebLogin,
-      disconnectDevice: (deviceId) => {
-        deviceAuth.retire(deviceId);
-        let dropped = 0;
-        for (const client of wss.clients) {
-          if (socketDevices.get(client) !== deviceId) continue;
-          // terminate, not close: a close handshake leaves the socket readable
-          // until the peer answers, and a revoked device need not answer.
-          client.terminate();
-          dropped++;
-        }
-        return dropped;
-      },
-      connectedDeviceIds: () => {
-        const ids = new Set<string>();
-        for (const client of wss.clients) {
-          const deviceId = socketDevices.get(client);
-          if (deviceId && client.readyState === client.OPEN) ids.add(deviceId);
-        }
-        return ids;
-      },
-      close: () => {
-        if (closePromise) return closePromise;
-        closing = true;
-        deviceAuth.clear();
-        options.retirePairingCodes?.();
-        webSessions.clear();
-        closePromise = Promise.resolve().then(async () => {
-          await closeListeners();
-          await Promise.allSettled([...pending]);
-        });
-        return closePromise;
-      },
+  return new Promise<WsHost>((resolve, reject) => {
+    let listening = false, failed = false;
+    const failStart = (error: Error) => {
+      if (listening || failed) return;
+      failed = true; closing = true;
+      options.retirePairingCodes?.();
+      unregisterSink(); webSessions.clear();
+      for (const client of wss.clients) client.terminate();
+      wss.close(() => {}); httpServer.close(() => {});
+      reject(error);
     };
-  } catch (error) {
-    closing = true;
-    options.retirePairingCodes?.();
-    webSessions.clear();
-    await closeListeners();
-    throw error;
-  }
+    // ws forwards HTTP listen errors through its own EventEmitter too.
+    wss.on("error", (error) => {
+      if (!listening) failStart(error);
+      else console.error("Backend WebSocket server failed", error);
+    });
+    httpServer.once("error", failStart);
+    try { httpServer.listen(options.port, options.host, () => {
+      listening = true;
+      const address = httpServer.address();
+      const port =
+        typeof address === "object" && address ? address.port : options.port;
+      resolve({
+        sink,
+        port,
+        webUiAvailable: webRoot !== null,
+        createWebLogin,
+        disconnectDevice: (deviceId) => {
+          deviceAuth.retire(deviceId);
+          let dropped = 0;
+          for (const client of wss.clients) {
+            if (socketDevices.get(client) !== deviceId) continue;
+            // terminate, not close: a close handshake leaves the socket readable
+            // until the peer answers, and a revoked device need not answer.
+            client.terminate();
+            dropped++;
+          }
+          return dropped;
+        },
+        connectedDeviceIds: () => {
+          const ids = new Set<string>();
+          for (const client of wss.clients) {
+            const deviceId = socketDevices.get(client);
+            if (deviceId && client.readyState === client.OPEN) ids.add(deviceId);
+          }
+          return ids;
+        },
+        close: () => {
+          if (closePromise) return closePromise;
+          closing = true;
+          deviceAuth.clear();
+          options.retirePairingCodes?.();
+          webSessions.clear();
+          closePromise = Promise.resolve().then(async () => {
+            unregisterSink();
+            // Force live connections closed first. httpServer.close() waits for
+            // active sockets to drain, and wss.close() does NOT terminate its
+            // clients — so a single connected WS client (the normal case for an
+            // exposed backend) would otherwise hang every rebind/teardown/shutdown.
+            for (const client of wss.clients) client.terminate();
+            await new Promise<void>((res) => {
+              wss.close(() => {
+                httpServer.close(() => res());
+                httpServer.closeAllConnections?.();
+              });
+            });
+            await Promise.allSettled([...pending]);
+          });
+          return closePromise;
+        },
+      });
+    }); } catch (error) { failStart(error as Error); }
+  });
 }
 
 function adaptSocket(socket: WebSocket, device?: VerifiedDevice, authorized: () => boolean = () => true): WsConnection {

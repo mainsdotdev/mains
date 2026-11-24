@@ -43,7 +43,7 @@ Reports against a supported version of the following are in scope:
 - Vulnerabilities that only affect a third-party dependency or an upstream agent (Claude Code, Codex, Copilot, Cursor, and their CLIs). Report those upstream. A bypass of a check Mains itself enforces is still in scope.
 - Issues that require physical access to an unlocked machine, or an owner session that is already compromised.
 - Social engineering.
-- Publishing a server on the open internet without TLS. Missing authentication on a supported bind — loopback, `--lan`, Tailscale, or SSH — is in scope.
+- Publishing a server on the open internet without the documented TLS proxy. Missing authentication on a supported bind — loopback, `--lan`, Tailscale, or SSH — is in scope.
 - Development-only Bridge configuration that a production or release build refuses.
 - Denial of service against your own desktop or server process. Cross-account availability issues on the Bridge hub are in scope.
 

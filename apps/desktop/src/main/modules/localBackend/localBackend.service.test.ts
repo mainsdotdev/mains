@@ -246,12 +246,12 @@ it("retains a failed native sleep release for the next power event", async () =>
   expect(native.blockers.has(id)).toBe(false);
 });
 
-it("restores the loopback host and its awake lease after LAN acquisition fails", async () => {
+it("releases awake ownership when a LAN rebind loses its native host", async () => {
   await service.setRemoteAccess(true); await service.setKeepAwakeForRemoteAccess(true);
   native.startHost.mockRejectedValueOnce(new Error("Rebind failed"));
   await expect(service.setLanAccess(true)).rejects.toThrow("Rebind failed");
-  expect(service.getStatus()).toMatchObject({ bindHost: "127.0.0.1", lanAccess: false });
-  expect(native.blockers.size).toBe(1);
+  expect(service.getStatus()).toMatchObject({ bindHost: null, token: null, addresses: [] });
+  expect(native.blockers.size).toBe(0);
 });
 
 it("retains truthful host ownership if only acquiring the awake lease fails", async () => {

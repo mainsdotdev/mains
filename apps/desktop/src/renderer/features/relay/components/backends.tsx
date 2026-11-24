@@ -1,4 +1,3 @@
-import { isSecureConnectEndpoint } from "@mains/contracts/connect-endpoint";
 import { useEffect, useState } from "react";
 import {
   Body,
@@ -30,7 +29,7 @@ import type {
 } from "@/lib/redux/slices/backendsSlice";
 import type { TransportStatus } from "@/lib/transport";
 
-
+const WS_URL_RE = /^wss?:\/\/.+/i;
 const DEFAULT_REMOTE_PORT = 8787;
 const ADD_BACKEND_MODE_OPTIONS = [
   { value: "direct", label: "Direct URL" },
@@ -99,8 +98,8 @@ function AddBackendForm({
     let input: AddInput;
     if (mode === "direct") {
       const url = wsUrl.trim();
-      if (!isSecureConnectEndpoint(url, true)) {
-        toast.error("Use wss:// for remote access, or ws:// for a loopback SSH tunnel.");
+      if (!WS_URL_RE.test(url)) {
+        toast.error("Enter a valid WebSocket URL (ws:// or wss://).");
         return;
       }
       input = { label: trimmedLabel, wsUrl: url, token: tokenValue };

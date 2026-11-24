@@ -210,11 +210,11 @@ export function LocalBackendShare() {
         {remoteOn && status && (
           <div className="space-y-2 pb-2">
             {status.addresses.map((a) => (
-              <div key={a.url} className="flex items-center gap-2">
+              <div key={a.label} className="flex items-center gap-2">
                 <Caption className="w-28 shrink-0">{a.label}</Caption>
                 <ValueField value={a.url} />
                 <BrowserLoginCopyButton baseUrl={a.url} />
-                {/* <CopyButton value={a.wsUrl} tooltip="Copy WebSocket URL" /> */}
+                {/* <CopyButton value={a.wsUrl} tooltip="Copy ws:// URL" /> */}
               </div>
             ))}
             {status.token && (
@@ -266,7 +266,7 @@ export function LocalBackendShare() {
               <div className="flex-1 pr-8">
                 <Body className="mb-1">Network access (LAN)</Body>
                 <Caption>
-                  Serve HTTPS on private network interfaces. Set MAINS_TLS_CERT and MAINS_TLS_KEY to your certificate and key files.
+                  Also bind your LAN / Tailscale IPs for direct access. 
                 </Caption>
               </div>
               <Toggle
@@ -309,7 +309,7 @@ export function LocalBackendShare() {
             <ValueField value={status.tailscaleHttpsUrl} />
             <BrowserLoginCopyButton baseUrl={status.tailscaleHttpsUrl} />
             {/* {status.tailscaleWsUrl && (
-              <CopyButton value={status.tailscaleWsUrl} tooltip="Copy WebSocket URL" />
+              <CopyButton value={status.tailscaleWsUrl} tooltip="Copy ws:// URL" />
             )} */}
           </div>
         )}

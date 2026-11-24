@@ -30,7 +30,7 @@ Common options:
 
 ```bash
 mains --help
-mains serve --lan --tls-cert <chain.pem> --tls-key <key.pem>
+mains serve --lan --port 8787
 mains web
 mains pair
 mains auth list
@@ -40,10 +40,11 @@ mains serve --tailscale-serve
 ```
 
 By default the server listens only on `127.0.0.1`. For another machine, prefer
-an SSH tunnel or Tailscale Serve. Direct LAN mode (`--lan`) serves HTTPS/WSS on
-private IPv4 interfaces and requires a trusted certificate covering the advertised
-address. Supply `--tls-cert` and `--tls-key` or set `MAINS_TLS_CERT` and
-`MAINS_TLS_KEY`. The terminal QR contains HTTPS endpoints. `mains pair` creates a fresh link
+an SSH tunnel or Tailscale Serve. Binding to `0.0.0.0` exposes an unencrypted
+WebSocket and should only be used on a trusted network or behind a TLS proxy.
+
+`--lan` is the convenient `0.0.0.0` form. It prints a terminal QR code using
+the detected private LAN addresses. `mains pair` creates a fresh link
 without restarting the server. `mains web` creates a fresh browser login without
 changing phone pairing; use `mains web --url https://mains.example` for an
 explicit reverse-proxy or Tailscale origin.

@@ -31,8 +31,6 @@ describe("background service definitions", () => {
     const args = serviceServerArgs(
       options({
         host: "0.0.0.0",
-        tlsCert: "/srv/cert.pem",
-        tlsKey: "/srv/key.pem",
         tailscaleServe: true,
         tailscaleServePort: 8443,
         publicUrls: ["https://mains.example.com"],
@@ -47,10 +45,6 @@ describe("background service definitions", () => {
       "--data-dir",
       "/Users/test/Library/Application Support/Mains Server",
       "--no-pairing",
-      "--tls-cert",
-      "/srv/cert.pem",
-      "--tls-key",
-      "/srv/key.pem",
       "--public-url",
       "https://mains.example.com",
       "--tailscale-serve",

@@ -1,12 +1,5 @@
 import Foundation
 
-final class ConnectRedirectPolicy: NSObject, URLSessionTaskDelegate {
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
-        completionHandler(nil)
-    }
-}
-
 public struct PairingClient: Sendable {
     public init() {}
 
@@ -28,7 +21,7 @@ public struct PairingClient: Sendable {
                     "code": .string(link.code), "deviceName": .string(deviceName),
                     "platform": .string("ios"), "appVersion": .string("0.1.0"),
                 ]))
-                let (data, response) = try await session.data(for: request, delegate: ConnectRedirectPolicy())
+                let (data, response) = try await session.data(for: request)
                 try Task.checkCancellation()
                 guard let response = response as? HTTPURLResponse else { throw MainsError.invalidReply }
                 guard (200..<300).contains(response.statusCode) else {

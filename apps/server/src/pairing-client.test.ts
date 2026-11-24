@@ -23,7 +23,7 @@ describe("requestPairingCode", () => {
       requestPairingCode({
         controlUrl: "http://127.0.0.1:8787",
         token: "root-token",
-        endpoints: ["https://192.168.1.5:8787"],
+        endpoints: ["http://192.168.1.5:8787"],
         fetchImpl,
       }),
     ).resolves.toMatchObject({ code: "one-time" });
@@ -34,7 +34,7 @@ describe("requestPairingCode", () => {
     );
     expect(init).toMatchObject({
       method: "POST",
-      body: JSON.stringify({ endpoints: ["https://192.168.1.5:8787"] }),
+      body: JSON.stringify({ endpoints: ["http://192.168.1.5:8787"] }),
     });
     expect(new Headers(init?.headers).get("Authorization")).toBe(
       "Bearer root-token",
@@ -50,7 +50,7 @@ describe("requestPairingCode", () => {
       requestPairingCode({
         controlUrl: "http://127.0.0.1:8787",
         token: "wrong",
-        endpoints: ["https://192.168.1.5:8787"],
+        endpoints: ["http://192.168.1.5:8787"],
         fetchImpl,
       }),
     ).rejects.toThrow("pass --token");

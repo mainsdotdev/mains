@@ -1,5 +1,3 @@
-import { isSecureConnectEndpoint } from "@mains/contracts/connect-endpoint";
-import { ownerSocketFactory } from "./owner-socket";
 import type { BackendDescriptor } from "@mains/contracts/backend";
 import { CHANNELS } from "@mains/contracts/channels";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
@@ -88,19 +86,13 @@ export interface RemoteBackendConnection {
 export async function connectRemoteBackend(
   url: string,
   options?: WsTransportOptions,
-  activation?: { expectedBackendId?: string; attempt: BackendSwitchAttempt; onActivated(connection: RemoteBackendConnection): void },
+  activation?: { attempt: BackendSwitchAttempt; onActivated(connection: RemoteBackendConnection): void },
 ): Promise<RemoteBackendConnection> {
-  if (!isSecureConnectEndpoint(url, true)) throw new Error("Remote connections require WSS. Use TLS or a loopback SSH tunnel.");
   const attempt = activation?.attempt ?? beginRemoteBackendSwitch();
   attempt.assertCurrent();
   const reconnect = options?.reconnect ?? true;
   const transport = new WsTransport(url, {
     ...options,
-    ...(options?.token ? {
-      token: null,
-      factory: ownerSocketFactory(options.token, activation?.expectedBackendId, options.factory),
-      isFatalClose: info => info.code === 4401 || !!options.isFatalClose?.(info),
-    } : {}),
     reconnect: false,
   });
   attempt.retain(() => transport.dispose());
@@ -120,7 +112,6 @@ export async function connectRemoteBackend(
 
     const descriptor = parseBackendDescriptor(response.data);
     assertCompatible(descriptor);
-    if (activation?.expectedBackendId && descriptor.backendId !== activation.expectedBackendId) throw new Error("The saved backend identity changed. Pair this computer again.");
     attempt.assertCurrent();
     if (transport.status() !== "connected") throw new Error("The verified backend disconnected before activation.");
     if (reconnect) transport.enableReconnect();
@@ -140,9 +131,7 @@ export async function connectRemoteBackend(
     return connection;
   } catch (error) {
     attempt.cancel();
-    const reason = transport.lastClose?.code === 4401
-      ? "Server identity verification failed. Check the saved computer and its owner token."
-      : error instanceof Error ? error.message : String(error);
+    const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`Could not verify this Mains server. ${reason}`);
   }
 }

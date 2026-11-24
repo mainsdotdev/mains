@@ -108,7 +108,7 @@ transcript. `offline` stops A; B retains downloaded history and shows its last
 seen time. `online` restarts A. `quit` closes the processes and removes their
 temporary profiles. No agent/provider request is executed by the demo.
 
-For an iPad or another computer on the LAN, set `MAINS_TLS_CERT` and `MAINS_TLS_KEY` to a trusted certificate chain covering the LAN IP and its private key, then start with
+For an iPad or another computer on the same trusted Wi-Fi/LAN, start with
 `npm run dev:demo -- --lan`. Only B listens on the LAN; A and the hub stay on
 loopback. Open the printed **A** link on this Mac and the **B** LAN link on the
 iPad. Browser links are single-use and expire after five minutes; type `links`

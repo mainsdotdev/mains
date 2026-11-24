@@ -1,3 +1,4 @@
+import { networkInterfaces } from "node:os";
 import { powerMonitor, powerSaveBlocker } from "electron";
 import { emit } from "@mains/backend/ipc-kit";
 import {
@@ -35,7 +36,8 @@ const accessCommands = createRemoteAccessCommands();
  *
  * Two independent access paths over one in-process WS host (fixed port, so SSH
  * tunnels have a stable target):
- *  - **Network access** — serve HTTPS/WSS on the private IPv4 interfaces alongside the loopback SSH target.
+ *  - **Network access** — bind 0.0.0.0 so loopback (SSH target), the LAN IP, and
+ *    the Tailscale IP all reach it (token-gated).
  *  - **Tailscale HTTPS** — `tailscale serve` proxies a MagicDNS HTTPS URL to the
  *    loopback port.
  *
@@ -48,20 +50,20 @@ const DEFAULT_HTTPS_PORT = 443;
 
 export interface BackendAddress {
   label: string;
-  /** Browser origin. */
+  /** http://<host>:<port> */
   url: string;
-  /** Direct WebSocket endpoint. */
+  /** ws://<host>:<port> — paste into another mains' Direct URL field. */
   wsUrl: string;
 }
 
 export interface LocalBackendStatus {
   /** Loopback exposure — SSH tunnels can attach to the running app. */
   remoteAccess: boolean;
-  /** Enable TLS listeners on private IPv4 interfaces. */
+  /** ALSO bind 0.0.0.0 so LAN / Tailscale IPs reach it directly (less private). */
   lanAccess: boolean;
   port: number;
   token: string | null;
-  /** Binding mode: 0.0.0.0 selects private TLS interfaces, 127.0.0.1 is local only. */
+  /** 0.0.0.0 (LAN) or 127.0.0.1 (loopback only) or null (host down). */
   bindHost: string | null;
   /** This machine / Local network / Tailscale IP — when the host is up. */
   addresses: BackendAddress[];
@@ -141,14 +143,32 @@ function webRoot(): string | null {
   return webRootCached;
 }
 
-function buildAddresses(): BackendAddress[] {
-  if (!isHostReady()) return [];
-  const list = [{ label: "This machine", url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}` }];
-  if (bindHost === "0.0.0.0") {
-    for (const address of wsHost?.lanAddresses ?? []) {
-      list.push({ label: "Local network", url: `https://${address}:${port}`, wsUrl: `wss://${address}:${port}` });
+/** LAN + Tailscale IPv4 addresses of this machine. */
+function localIps(): { lan: string | null; tailscale: string | null } {
+  let lan: string | null = null;
+  let ts: string | null = null;
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family !== "IPv4" || a.internal) continue;
+      const [o1, o2] = a.address.split(".").map(Number);
+      if (o1 === 100 && o2 >= 64 && o2 <= 127) ts = ts ?? a.address; // CGNAT (Tailscale)
+      else lan = lan ?? a.address;
     }
   }
+  return { lan, tailscale: ts };
+}
+
+function buildAddresses(): BackendAddress[] {
+  if (!isHostReady()) return [];
+  const mk = (label: string, host: string): BackendAddress => ({
+    label,
+    url: `http://${host}:${port}`,
+    wsUrl: `ws://${host}:${port}`,
+  });
+  const list = [mk("This machine", "127.0.0.1")];
+  const { lan, tailscale: tsIp } = localIps();
+  if (bindHost === "0.0.0.0" && lan) list.push(mk("Local network", lan));
+  if (bindHost === "0.0.0.0" && tsIp) list.push(mk("Tailscale IP", tsIp));
   return list;
 }
 
@@ -236,7 +256,8 @@ async function reconcileHost(current: () => boolean = () => true): Promise<void>
   if (!current()) { await closeHost(); assertCurrent(current); }
   if (hostCleanup.owns(wsHost)) await closeHost();
   const wantHost = remoteAccess || tailscale !== null;
-  // The wildcard selects private TLS interfaces in addition to the loopback SSH target.
+  // LAN access binds all interfaces; otherwise loopback only (SSH still works —
+  // the tunnel forwards to 127.0.0.1 — but nothing is exposed on the network).
   const desiredBind = remoteAccess && lanAccess ? "0.0.0.0" : "127.0.0.1";
 
   if (!wantHost) {
@@ -264,7 +285,6 @@ async function reconcileHost(current: () => boolean = () => true): Promise<void>
       // session token, and new ones pair through `POST /pair`. The last-seen
       // stamp verifying records reaches the list with the connection change
       // below, once the socket is open and counts as connected.
-      getBackendId: () => backendService.getBackendId(),
       verifyDeviceToken: (token) => backendService.verifyDeviceToken(token),
       retirePairingCodes: clearPairingCodes,
       pairDevice: async (body) => {
@@ -295,7 +315,9 @@ function pairingEndpoints(): string[] {
     );
   }
   if (bindHost === "0.0.0.0") {
-    for (const address of wsHost?.lanAddresses ?? []) out.push(`https://${address}:${port}`);
+    const { lan, tailscale: tsIp } = localIps();
+    if (lan) out.push(`http://${lan}:${port}`);
+    if (tsIp) out.push(`http://${tsIp}:${port}`);
   }
   return out;
 }
@@ -333,17 +355,11 @@ export const localBackendService = {
     });
   },
 
-  /** Toggle direct LAN access over TLS. */
+  /** Toggle LAN access (binds 0.0.0.0 so LAN + Tailscale IPs reach it directly). */
   async setLanAccess(enabled: boolean): Promise<LocalBackendStatus> {
     return runAccessCommand(async (current) => {
-      const previous = lanAccess;
       lanAccess = enabled && remoteAccess;
-      try { await reconcileHost(current); }
-      catch (error) {
-        lanAccess = previous;
-        if (enabled && !previous && current() && !wsHost) await reconcileHost(current);
-        throw error;
-      }
+      await reconcileHost(current);
       assertCurrent(current);
       await persist();
       return buildStatus();
@@ -493,15 +509,7 @@ export const localBackendService = {
         lanAccess = !!row.backendLanAccess && remoteAccess;
         keepAwakeForRemoteAccess = !!row.keepAwakeForRemoteAccess;
         installPowerSourceListeners();
-        if (remoteAccess) {
-          try { await reconcileHost(current); }
-          catch (error) {
-            if (!lanAccess || !current()) throw error;
-            lanAccess = false;
-            console.error("LAN TLS listener could not be restored", error);
-            await reconcileHost(current);
-          }
-        }
+        if (remoteAccess) await reconcileHost(current);
         assertCurrent(current);
         reconcileRemoteSleepBlocker();
       });

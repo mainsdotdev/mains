@@ -50,8 +50,6 @@ export function serviceServerArgs(options: CliOptions): string[] {
     path.resolve(options.dataDir),
     "--no-pairing",
   ];
-  if (options.tlsCert) args.push("--tls-cert", path.resolve(options.tlsCert));
-  if (options.tlsKey) args.push("--tls-key", path.resolve(options.tlsKey));
   if (options.webRoot) args.push("--web-root", path.resolve(options.webRoot));
   for (const url of options.publicUrls) args.push("--public-url", url);
   if (options.tailscaleServe) args.push("--tailscale-serve");

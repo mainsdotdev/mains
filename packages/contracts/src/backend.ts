@@ -1,4 +1,3 @@
-import { isSecureConnectEndpoint } from "./connect-endpoint";
 /**
  * Backend identity and pairing contract — mirrors `packages/backend/src/modules/
  * backend/backend.dto.ts`. React Native
@@ -67,6 +66,7 @@ export interface PairingLink {
 // Every app variant's scheme is accepted by the in-app scanner, so a QR from
 // a desktop always pairs regardless of which build scanned it.
 const PAIRING_LINK = /^(?:mains|mains-dev|mains-preview):\/\/pair(?:[/?][^#]*)?#(.+)$/;
+const HTTP_URL = /^https?:\/\/[^/\s]+/i;
 
 function decodeComponent(value: string): string {
   try {
@@ -93,7 +93,7 @@ export function parsePairingLink(value: string): PairingLink | null {
     const raw = separator === -1 ? "" : decodeComponent(pair.slice(separator + 1));
     if (key === "code") code = raw;
     else if (key === "name") name = raw;
-    else if (key === "endpoint" && isSecureConnectEndpoint(raw)) endpoints.push(raw);
+    else if (key === "endpoint" && HTTP_URL.test(raw)) endpoints.push(raw);
   }
 
   if (!code || endpoints.length === 0) return null;

@@ -1588,8 +1588,6 @@ public final class BackendSession {
     }
 
     private func connect(_ pairing: PairedBackend, generation current: Int) async {
-        let endpoints = pairing.endpoints.filter { $0 == DemoBackend.endpoint || Wire.isSecureConnectEndpoint($0) }
-        guard !endpoints.isEmpty else { blocked = .unauthorized; connection = .unauthorized; return }
         var recoveryEnd = ContinuousClock.now + .seconds(30)
         var quiet = false
         while !Task.isCancelled && generation == current && shouldMaintainConnection && (online || isDemo) {
@@ -1615,7 +1613,7 @@ public final class BackendSession {
                 }
             }
             do {
-                let endpoint = endpoints[endpointIndex % endpoints.count]
+                let endpoint = pairing.endpoints[endpointIndex % pairing.endpoints.count]
                 activeEndpoint = endpoint
                 try candidate.open(endpoint: endpoint, token: pairing.deviceToken)
                 let descriptor = try await candidate.invoke("backend:describe").decode(BackendDescriptor.self)
