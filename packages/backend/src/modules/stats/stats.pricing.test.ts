@@ -1,4 +1,7 @@
 import fs from "node:fs/promises";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,6 +57,75 @@ describe("API-equivalent estimates", () => {
     vi.setSystemTime(start + 120_000); fail(new Error("Slow failure")); await reading;
     await loader.read(); expect(fetcher).toHaveBeenCalledOnce();
     vi.setSystemTime(start + 180_000); await loader.read(); expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("backs off during a sustained outage and resets the delay after a successful refresh", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    const minute = 60_000;
+    const attempts: number[] = [];
+    let online = false;
+    const cacheFile = path.join(root, "prices.json");
+    await fs.writeFile(cacheFile, JSON.stringify({ fetchedAt: start - 2 * 86_400_000, document }));
+    const loader = createPricingLoader(cacheFile, async () => {
+      attempts.push((Date.now() - start) / minute);
+      if (!online) throw new Error("Offline");
+      return new Response(JSON.stringify(document));
+    });
+
+    for (let elapsed = 0; elapsed < 183; elapsed++) {
+      vi.setSystemTime(start + elapsed * minute);
+      expect((await loader.read()).pricing.status).toBe("cached");
+    }
+    expect(attempts).toEqual([0, 1, 3, 7, 15, 31, 63, 123]);
+    online = true;
+    vi.setSystemTime(start + 183 * minute);
+    expect((await loader.read()).pricing.status).toBe("fresh");
+    expect(attempts.at(-1)).toBe(183);
+
+    online = false;
+    const expires = 183 + 24 * 60;
+    vi.setSystemTime(start + expires * minute);
+    expect((await loader.read()).pricing.status).toBe("cached");
+    vi.setSystemTime(start + (expires + 1) * minute);
+    await loader.read();
+    expect(attempts.slice(-2)).toEqual([expires, expires + 1]);
+    loader.dispose();
+  });
+
+  it("opens one tunnel when a proxy silently disconnects and respects NO_PROXY", async () => {
+    let tunnels = 0;
+    let directReads = 0;
+    const server = createServer((_request, response) => {
+      directReads++;
+      response.end(JSON.stringify(document));
+    });
+    server.on("connect", (_request, socket) => {
+      // Bound the test even if the transport starts retrying again.
+      if (++tunnels === 1) socket.end();
+      else socket.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    vi.stubEnv("NODE_USE_ENV_PROXY", "1");
+    vi.stubEnv("https_proxy", origin);
+    vi.stubEnv("http_proxy", origin);
+    vi.stubEnv("no_proxy", "127.0.0.1");
+    const proxied = createPricingLoader(path.join(root, "proxied.json"), (_url, init) => fetch("https://prices.invalid/list", init));
+    const direct = createPricingLoader(path.join(root, "direct.json"), (_url, init) => fetch(origin, init));
+    try {
+      expect((await proxied.read()).pricing.status).toBe("unavailable");
+      expect((await proxied.read()).pricing.status).toBe("unavailable");
+      expect((await direct.read()).pricing.status).toBe("fresh");
+      expect(tunnels).toBe(1);
+      expect(directReads).toBe(1);
+    } finally {
+      proxied.dispose();
+      direct.dispose();
+      vi.unstubAllEnvs();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("prices every input category once and computes cache read savings", () => {

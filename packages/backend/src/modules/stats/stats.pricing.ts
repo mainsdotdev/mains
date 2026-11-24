@@ -5,6 +5,7 @@ import { createAsyncResourceLifecycle } from "../../runtime/async-resource-lifec
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import type { UsagePricingStatus } from "./stats.dto";
 import { measured, object, type ConsumptionRecord } from "./stats.transcripts";
+import { createPriceProxy } from "./stats.price-proxy";
 
 export const MODEL_PRICES_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -89,7 +90,7 @@ export function estimateRecord(record: ConsumptionRecord, prices: ModelPrices): 
 /** One loader per host, with a disk snapshot so offline dashboards still work. */
 export function createPricingLoader(cacheFile: string, fetchPrices: typeof fetch = fetch) {
   const cache = createAsyncResourceLifecycle<{ prices: ModelPrices; document: unknown }>({
-    ttlMs: DAY_MS, retryMs: 60_000,
+    ttlMs: DAY_MS, retryMs: 60_000, maxRetryMs: 60 * 60_000,
     async prepare() {
       try {
         const saved = object(JSON.parse(await fs.readFile(cacheFile, "utf8")));
@@ -100,14 +101,26 @@ export function createPricingLoader(cacheFile: string, fetchPrices: typeof fetch
       return undefined;
     },
     async load(_key, context) {
-      const response = await fetchPrices(MODEL_PRICES_URL, { signal: AbortSignal.any([context.signal, AbortSignal.timeout(5_000)]) });
-      context.assertCurrent();
-      if (!response.ok) throw new Error(`Price refresh failed (${response.status}).`);
-      const document: unknown = await response.json();
-      context.assertCurrent();
-      const prices = parseModelPrices(document);
-      if (!prices.size) throw new Error("Price refresh returned no valid model rates.");
-      return { prices, document };
+      const proxy = createPriceProxy();
+      try {
+        const options = {
+          signal: AbortSignal.any([context.signal, AbortSignal.timeout(5_000)]),
+          ...(proxy && { dispatcher: proxy }),
+        };
+        const response = await fetchPrices(MODEL_PRICES_URL, options);
+        context.assertCurrent();
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error(`Price refresh failed (${response.status}).`);
+        }
+        const document: unknown = await response.json();
+        context.assertCurrent();
+        const prices = parseModelPrices(document);
+        if (!prices.size) throw new Error("Price refresh returned no valid model rates.");
+        return { prices, document };
+      } finally {
+        await proxy?.destroy();
+      }
     },
     async publish(_key, snapshot, context) {
       const temporary = `${cacheFile}.${randomUUID()}.tmp`;

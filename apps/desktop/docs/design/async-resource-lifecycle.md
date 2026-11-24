@@ -36,7 +36,7 @@ claiming that an uncancellable RPC was stopped.
 
 | Resource | Scope and freshness | Native/fallback policy |
 | --- | --- | --- |
-| Usage model prices | Backend runtime and user-data file; 24 hours; 60-second failure cooldown | Five-second fetch deadline, validated disk seed, last good offline table or unavailable. |
+| Usage model prices | Backend runtime and user-data file with a 24-hour TTL. After a failure, the next read can retry after one minute. Consecutive failures double that delay up to one hour. | Five-second fetch deadline. A dropped proxy tunnel ends the refresh. A successful refresh resets the delay. Offline reads use the last valid table when available. |
 | Claude models | Driver; five minutes | One control query; SDK failure/empty response uses existing default models without caching that fallback. |
 | Claude commands | Workspace; ten minutes | One control query, filtered against disk skills; an absent native command list remains retryable. |
 | Claude disk skills | Workspace; five minutes | Existing configured user/project sources; failure returns an empty list. |
