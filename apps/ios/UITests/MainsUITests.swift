@@ -775,6 +775,10 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         let welcome = app.staticTexts["homeWelcomeTitle"]
         XCTAssertEqual(welcome.label, "What’s on your mind?")
+        let greeting = app.staticTexts["homeGreeting"]
+        XCTAssertTrue(greeting.exists)
+        XCTAssertTrue(["Morning", "Afternoon", "Evening"].contains(greeting.label))
+        XCTAssertLessThan(greeting.frame.maxY, welcome.frame.minY)
         attachScreenshot(app, name: "Expanded Chat welcome title")
         let inputPosition = app.coordinate(withNormalizedOffset: .zero).withOffset(
             CGVector(dx: input.frame.maxX - app.frame.minX - 8, dy: input.frame.midY - app.frame.minY))
@@ -787,6 +791,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
         let keyboardTop = keyboard.frame.minY
         XCTAssertFalse(welcome.exists)
+        XCTAssertFalse(greeting.exists)
         openSidebar(app)
         let settings = app.buttons["openSettings"]
         let search = app.buttons["sidebarSearch"]

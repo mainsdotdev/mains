@@ -79,17 +79,39 @@ struct HomeView: View {
                            description: Text("Open the sidebar to choose where to start."))
         } else if let space, session.isConnected, !session.homeDraft(for: space.id).hasContent {
             ViewThatFits(in: .vertical) {
-                Text(welcomeTitle(for: space.mode))
-                    .font(.title.weight(.medium).width(.expanded))
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 420)
-                    .padding(.horizontal, 24)
-                    .accessibilityAddTraits(.isHeader)
-                    .accessibilityIdentifier("homeWelcomeTitle")
+                VStack(spacing: 8) {
+                    TimelineView(.everyMinute) { clock in
+                        Text(welcomeGreeting(at: clock.date))
+                            .font(.title3.weight(.medium).width(.expanded))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .accessibilityIdentifier("homeGreeting")
+                    }
+                    welcomeHeading(for: space.mode)
+                }
+                welcomeHeading(for: space.mode)
                 Color.clear.frame(height: 0).accessibilityHidden(true)
             }
+            .padding(.horizontal, 24)
         }
         Spacer(minLength: 20)
+    }
+
+    private func welcomeHeading(for mode: String) -> some View {
+        Text(welcomeTitle(for: mode))
+            .font(.title.weight(.medium).width(.expanded))
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 420)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("homeWelcomeTitle")
+    }
+
+    private func welcomeGreeting(at date: Date) -> LocalizedStringKey {
+        switch Calendar.autoupdatingCurrent.component(.hour, from: date) {
+        case 0..<12: "Morning"
+        case 12..<18: "Afternoon"
+        default: "Evening"
+        }
     }
 
     private func welcomeTitle(for mode: String) -> LocalizedStringKey {
