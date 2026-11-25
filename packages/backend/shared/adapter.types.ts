@@ -162,6 +162,8 @@ export interface WorkRunArtifactEvent {
   metadata?: Record<string, unknown>;
   /** When true, pushed to renderer but NOT persisted to DB */
   ephemeral?: boolean;
+  /** A live preview whose content cannot be recovered as a final artifact. */
+  requiresCompletedItem?: boolean;
   /** Identifies the streaming source — renderer uses this to accumulate deltas */
   streamId?: string;
   ts?: number;
@@ -738,7 +740,7 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
    */
   generateText?(
     prompt: string,
-    opts?: { system?: string; model?: string },
+    opts?: { system?: string; model?: string; effort?: string; signal?: AbortSignal; isolated?: boolean },
   ): Promise<string>;
 
   /**
@@ -765,11 +767,11 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
 
   // ── Thread goal controls (Codex `thread/goal/*`) ──
   /** Set/update the goal for a run's thread. Partial — omitted fields unchanged. */
-  setGoal?(runId: string, params: GoalSetParams): Promise<GoalInfo | null>;
+  setGoal?(runId: string, params: GoalSetParams, guard?: GoalWriteGuard): Promise<GoalInfo | null>;
   /** Read the current goal for a run's thread (null if none). */
   getGoal?(runId: string): Promise<GoalInfo | null>;
   /** Clear the goal on a run's thread. Returns true if cleared. */
-  clearGoal?(runId: string, origin?: GoalMutationOrigin): Promise<boolean>;
+  clearGoal?(runId: string, origin?: GoalMutationOrigin, guard?: GoalWriteGuard): Promise<boolean>;
 
   /**
    * Read account info from the provider.
@@ -898,6 +900,7 @@ export type WorkRunRealtimeRequest = Omit<WorkRunContinueRequest,
 > & Pick<import("@mains/contracts/realtime").RunRealtimeStartPayload, "connectionId" | "sdp"> & {
   voiceTools?: import("./voice-task-tools").VoiceTaskTools;
   voiceInstructions?: string;
+  voiceInitialInstructions?: string;
 };
 
 export interface RealtimeAdapterControls {
@@ -985,7 +988,7 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   generateTitle?(goal: string, context?: WorkRunContextItem[]): Promise<string>;
   generateText?(
     prompt: string,
-    opts?: { system?: string; model?: string },
+    opts?: { system?: string; model?: string; effort?: string; signal?: AbortSignal; isolated?: boolean },
   ): Promise<string>;
   getRateLimits?(): Promise<RateLimitInfo | null>;
   listRealtimeVoices?(): Promise<RealtimeVoiceCatalog>;
@@ -1025,11 +1028,11 @@ export interface ProviderDriver extends RealtimeAdapterControls {
 
   // ── Thread goal controls (Codex `thread/goal/*`) ──
   /** Set/update the goal for a run's thread. Partial — omitted fields unchanged. */
-  setGoal?(runId: string, params: GoalSetParams): Promise<GoalInfo | null>;
+  setGoal?(runId: string, params: GoalSetParams, guard?: GoalWriteGuard): Promise<GoalInfo | null>;
   /** Read the current goal for a run's thread (null if none). */
   getGoal?(runId: string): Promise<GoalInfo | null>;
   /** Clear the goal on a run's thread. Returns true if cleared. */
-  clearGoal?(runId: string, origin?: GoalMutationOrigin): Promise<boolean>;
+  clearGoal?(runId: string, origin?: GoalMutationOrigin, guard?: GoalWriteGuard): Promise<boolean>;
 }
 
 /**
@@ -1046,6 +1049,11 @@ export interface GoalInfo {
   timeUsedSeconds?: number;
   createdAt?: number;
   updatedAt?: number;
+}
+
+export interface GoalWriteGuard {
+  ownsRun(): Promise<boolean>;
+  matches(goal: GoalInfo): boolean;
 }
 
 /**

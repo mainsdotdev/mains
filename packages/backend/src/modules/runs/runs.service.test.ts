@@ -180,6 +180,51 @@ describe("runsService", () => {
       return { run, payload, startRealtime, stopRealtime, voice, work: () => work };
     }
 
+    it("closes a disconnected phone's call and keeps signaling scoped to that socket", async () => {
+      const h = voiceFixture();
+      const lifetime = new AbortController();
+      const events: Array<{ channel: string; scope: unknown }> = [];
+      const off = registerEventSink({ kind: "voice-device-test", send(channel, _payload, scope) { events.push({ channel, scope }); } });
+      try {
+        await runsService.startRealtime(h.payload, { deviceId: "phone", clientId: "socket", signal: lifetime.signal });
+        h.voice({ type: "sdp", sdp: "v=0\r\n" });
+        expect(events.find(event => event.channel === CHANNELS.runs.realtimeEvent)?.scope).toEqual({ clientId: "socket" });
+        await expect(runsService.stopRealtime(h.payload, "another-phone")).rejects.toThrow("another device");
+        expect(h.stopRealtime).not.toHaveBeenCalled();
+        lifetime.abort();
+        await flushBackground();
+        expect(h.stopRealtime).toHaveBeenCalledOnce();
+        await runsService.archiveRun(h.run.id);
+      } finally { off(); await runsService.stopRealtime(h.payload); }
+    });
+
+    it("persists recovered voice with its original timestamp and no inferred turn", async () => {
+      const h = voiceFixture();
+      try {
+        await runsService.startRealtime(h.payload);
+        await h.work().onTurnStarted("active-turn", "Current work", "resolved-model");
+        h.voice({ type: "transcript", itemId: "recovered", role: "user", text: "Earlier speech",
+          final: true, recovered: true, observedAtMs: 1_760_000_000_000 });
+        await vi.waitFor(async () => {
+          const [artifact] = await runsRepo.findArtifactsByRun(h.run.id);
+          expect(artifact).toMatchObject({ kind: "user-prompt", content: "Earlier speech",
+            metadata: { voiceRecovered: true, voiceStartedAt: 1_760_000_000_000 } });
+          expect(artifact.metadata).not.toHaveProperty("providerTurnId");
+          expect(artifact.metadata).not.toHaveProperty("delivery");
+        });
+      } finally {
+        await runSessionRegistry.get(h.run.id)?.finalize({ status: "canceled" });
+        await runsService.stopRealtime(h.payload);
+      }
+    });
+
+    it("never starts voice from a socket already closed during command admission", async () => {
+      const h = voiceFixture();
+      const lifetime = new AbortController(); lifetime.abort();
+      await expect(runsService.startRealtime(h.payload, { deviceId: "phone", signal: lifetime.signal })).rejects.toThrow("closed");
+      expect(h.startRealtime).not.toHaveBeenCalled();
+    });
+
     it("requires confirmed voice closure before archiving or deleting the conversation", async () => {
       const h = voiceFixture();
       await runsService.startRealtime(h.payload);
@@ -1155,6 +1200,33 @@ describe("runsService", () => {
         goal: "Edit a page", mode: mode as "work" })).rejects.toThrow(error);
       expect(startRun).not.toHaveBeenCalled();
       expect(await runsService.getRunsByAccount("default")).toEqual([]);
+    });
+
+    it("starts and resumes a Cursor Atlas image run from a Developer Space", async () => {
+      createProvider(db, { id: "cursor" });
+      const space = createSpace(db, { providerId: "cursor", mode: "developer" });
+      const collection = createCollection(db);
+      const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRun, continueRun } as never);
+      const payload = { accountId: "default", spaceId: space.id, providerId: "cursor", mode: "work" as const,
+        collectionId: collection.id, goal: "Generate an image of a mountain" };
+
+      await expect(runsService.executeRun(payload)).rejects.toThrow("does not support work mode");
+      const { runId } = await runsService.executeRun({ ...payload, atlasImage: true });
+      await flushBackground();
+      expect(await runsService.getRunById(runId)).toMatchObject({
+        providerId: "cursor", mode: "work", spaceId: space.id, workspaceId: null,
+        collectionId: collection.id, configSnapshot: { atlasImage: true },
+      });
+      expect(startRun).toHaveBeenCalledOnce();
+      expect(startRun.mock.calls[0][0]).toMatchObject({ goal: payload.goal, mode: "work",
+        execution: { workspaceId: null }, configSnapshot: { atlasImage: true } });
+      await runsService.continueRun({ runId, accountId: "default", message: "Make it snowy" });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0]).toMatchObject({ message: "Make it snowy", mode: "work",
+        execution: startRun.mock.calls[0][0].execution, configSnapshot: { atlasImage: true } });
+      expect((await spaceService.getById(space.id))?.mode).toBe("developer");
     });
 
     it("snapshots work mode from the space and passes the delta to the adapter", async () => {
@@ -2562,6 +2634,20 @@ describe("runsService", () => {
   // Run Artifact Operations
   // ─────────────────────────────────────────────────────────────
   describe("getArtifactsByRun", () => {
+    it("serves native conversation previews above the legacy mobile byte limit", async () => {
+      const runId = "native-history-budget";
+      createRun(db, { id: runId });
+      for (let index = 0; index < 180; index++) {
+        createRunArtifact(db, { runId, kind: "report", content: "x".repeat(7900) });
+      }
+
+      const native = await runsService.getHistoryPage({ runId, profile: "mobile", conversationWindow: true });
+      const legacy = await runsService.getHistoryPage({ runId, profile: "mobile" });
+      expect(native.artifacts).toHaveLength(180);
+      expect(Buffer.byteLength(JSON.stringify(native))).toBeGreaterThan(1024 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(legacy))).toBeLessThanOrEqual(1024 * 1024);
+    });
+
     it("keeps a large deliverable available for saving while rejecting its inline preview", async () => {
       const runId = "large-registered-document";
       createRun(db, { id: runId, mode: "work", status: "running" });
@@ -3709,6 +3795,25 @@ describe("runsService", () => {
     function createContinuableRun(overrides: Parameters<typeof createRun>[1]) {
       return createRun(db, { status: "succeeded", ...overrides });
     }
+
+    it("applies a Codex plan as an execution turn while preserving its sandbox settings", async () => {
+      createProvider(db, { id: "codex" });
+      const workspace = createWorkspace(db);
+      const run = createContinuableRun({ providerId: "codex", accountId: "default", mode: "developer", workspaceId: workspace.id,
+        configSnapshot: JSON.stringify({ conversationSettings: { model: "gpt-5", config: { planMode: true, sandboxMode: "workspace-write" } } }) });
+      const plan = createToolCall(db, { runId: run.id, toolName: "Plan", input: JSON.stringify({ plan: "Review code" }), status: "done" });
+      const continueRun = vi.fn(async ({ onInputAccepted }: { onInputAccepted: () => Promise<void> }) => {
+        await onInputAccepted();
+        return { status: "succeeded" };
+      });
+      setupContinueAdapter({ continueRun });
+      await expect(runsService.decidePlan({ runId: run.id, accountId: "default", toolCallId: plan.id, decision: "apply" })).resolves.toEqual({ status: "applied" });
+      expect(continueRun).toHaveBeenCalledWith(expect.objectContaining({
+        clientUserMessageId: `plan-decision-${plan.id}`, configSnapshot: expect.objectContaining({ planMode: false, sandboxMode: "workspace-write" }),
+      }), expect.any(Function));
+      expect((await runsService.getRunById(run.id))?.configSnapshot?.conversationSettings).toMatchObject({ config: { planMode: false, sandboxMode: "workspace-write" } });
+      await flushBackground();
+    });
 
     it.each(["question", "plan"] as const)("does not deliver a %s stopped during continuation preparation", async (kind) => {
       createProvider(db, { id: "codex" });

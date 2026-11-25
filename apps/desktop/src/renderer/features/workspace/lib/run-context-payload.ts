@@ -284,6 +284,7 @@ export function buildRunContextPayload(
   uploads?: Attachments,
 ): RunContextPayload {
   const {
+    assistants,
     files,
     issues,
     signals,
@@ -301,6 +302,7 @@ export function buildRunContextPayload(
   const documents = documentAnnotationsToPayload(documentAnnotations);
   const apps = mcpAppContextPayload(mcpApps);
   const initialContext = [
+    ...assistants.map(item => ({ kind: "note" as const, ref: item.name, metadata: { source: "assistant_mention", assistantId: item.assistantId, name: item.name, token: item.token, requestId: item.id } })),
     ...capturedWindows.initialContext,
     ...browser.initialContext,
     ...documents.initialContext,

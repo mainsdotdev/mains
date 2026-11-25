@@ -2,8 +2,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
+import { asyncQuestionMessageId } from "@mains/contracts/async-questions";
 import { groupEvents, type EventGroup } from "../../lib/group-events";
 import { mapArtifactToEvent } from "../../lib/run-event-mappers";
+import { assistantTranscriptGroups } from "../../lib/assistant-transcript-view";
 import { appApi } from "@/lib/transport";
 
 const documentViewer = vi.hoisted(() => ({ open: vi.fn() }));
@@ -20,9 +22,11 @@ vi.mock("../prompt-markdown", () => ({
   PromptMarkdown: ({ children }: { children: string }) => <div>{children}</div>,
   promptMessageMentionsFile: () => false,
 }));
-vi.mock("@/hooks/use-local-image-url", () => ({
-  useLocalImageUrl: (src: string | undefined) => src?.startsWith("/") ? `mains-localimg://signed?path=${encodeURIComponent(src)}` : src,
+vi.mock("@/lib/local-image-url", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/local-image-url")>(),
+  getCachedSignedUrl: (path: string) => path.startsWith("/") ? `mains-localimg://signed?path=${encodeURIComponent(path)}` : undefined,
 }));
+vi.mock("@/features/atlas/hooks/use-save-to-atlas", () => ({ useSaveToAtlas: () => ({ saving: false, save: vi.fn() }) }));
 vi.mock("../../lib/attachment-image", () => ({
   useAttachmentImage: (_runId?: string, attachmentId?: string, maxSide = 256) => ({
     observe: () => {}, src: attachmentId ? `blob:${attachmentId}:${maxSide}` : undefined,
@@ -32,8 +36,9 @@ vi.mock("../image-preview-modal", () => ({
   ImagePreviewModal: ({ name, src }: { name: string; src: string }) => <div role="dialog" aria-label={name}>{src}</div>,
 }));
 vi.mock("@/hooks/use-document-viewer", () => ({ useDocumentViewer: () => documentViewer }));
-vi.mock("@/lib/redux/api", () => ({ useLazyGetAppsForFileQuery: () => [vi.fn(), {}] }));
+vi.mock("@/lib/redux/api", () => ({ useLazyGetAppsForFileQuery: () => [vi.fn(), {}], useGetAccountQuery: () => ({ data: undefined }) }));
 vi.mock("@/hooks/use-suppress-browser-view", () => ({ useSuppressBrowserView: vi.fn() }));
+vi.mock("@/features/assistants/components/assistant-task-card", () => ({ AssistantTaskCard: ({ assignmentId }: { assignmentId: string }) => <article aria-label="Assistant task">Task {assignmentId}</article> }));
 import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import { InfoGroup } from "./info-group";
 
@@ -53,7 +58,69 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
     ], ...metadata },
   }] };
 }
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+
+describe("generated image previews", () => {
+  function image(id: number, fileName: string, contentHash?: string) {
+    return mapArtifactToEvent({ id, runId: "run", kind: "image", contentHash,
+      metadata: { path: `/output/${fileName}`, fileName, outputSelected: true } });
+  }
+
+  it("refreshes the image and expanded preview when a saved path is overwritten", () => {
+    const original = groupEvents([image(1, "icon.png", "sha256:first")])[0];
+    const view = render(<InfoGroup group={original} />);
+    const previous = screen.getByRole("img", { name: "icon.png" });
+    expect(new URL((previous as HTMLImageElement).src).searchParams.get("v")).toBe("sha256:first");
+    fireEvent.error(previous);
+
+    const replacement = groupEvents([image(1, "icon.png", "sha256:second")])[0];
+    view.rerender(<InfoGroup group={replacement} />);
+    const current = screen.getByRole<HTMLImageElement>("img", { name: "icon.png" }).src;
+    expect(new URL(current).searchParams.get("v")).toBe("sha256:second");
+    fireEvent.click(screen.getByRole("button", { name: "Preview icon.png in Mains" }));
+    expect(screen.getByRole("dialog", { name: "icon.png" }).textContent).toBe(current);
+  });
+
+  it("refreshes the gallery stage and thumbnail on a new output without a content hash", () => {
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      disconnect() {}
+    });
+    const other = image(2, "light.png");
+    const view = render(<InfoGroup group={groupEvents([image(1, "icon.png"), other])[0]} />);
+    const thumbnail = () => screen.getByRole("button", { name: /Select image 1 of 2/ }).querySelector("img");
+    expect(thumbnail()?.src).toContain("&v=artifact-1");
+    fireEvent.error(thumbnail()!);
+
+    view.rerender(<InfoGroup group={groupEvents([image(3, "icon.png"), other])[0]} />);
+    const current = screen.getByRole<HTMLImageElement>("img", { name: "icon.png" }).src;
+    expect(current).toContain("&v=artifact-3");
+    expect(thumbnail()?.src).toBe(current);
+  });
+});
+
+describe("application-owned assistant task inputs", () => {
+  it("renders the worker's initial task as a card without exposing its routing prompt", () => {
+    const group = prompt({ assistantTaskInput: { assignmentId: "task-1", messageId: "request-task-1", kind: "request" } });
+    group.events[0].content = "Your assignment ID is task-1. Use ReportAssistantTask";
+    render(<InfoGroup group={group} runId="worker" />);
+    expect(screen.getByRole("article", { name: "Assistant task" }).textContent).toBe("Task task-1");
+    expect(screen.queryByText(/Use ReportAssistantTask/)).toBeNull();
+  });
+  it.each(["followup", "status", "result"])("leaves %s activity inside the canonical task card", kind => {
+    const group = prompt({ assistantTaskInput: { assignmentId: "task-1", messageId: "delivery-1", kind } });
+    group.events[0].content = "Teammate assignment status (reference data): internal payload";
+    const { container } = render(<InfoGroup group={group} runId="source" />);
+    expect(container.textContent).toBe("");
+    expect(screen.queryByText(/internal payload/)).toBeNull();
+  });
+  it("keeps ordinary user text visible even if it resembles an internal message", () => {
+    const group = prompt({ browserAnnotations: [], attachments: [] });
+    group.events[0].content = "Teammate assignment status is confusing";
+    render(<InfoGroup group={group} runId="source" />);
+    expect(screen.getByText("Teammate assignment status is confusing")).toBeTruthy();
+  });
+});
 
 describe("prompt context files", () => {
   it("opens a file shown below a sent prompt in the editor", () => {
@@ -76,6 +143,14 @@ describe("prompt context files", () => {
     expect(screen.queryByRole("button", { name: "workspace/components" })).toBeNull();
     expect(openFile).not.toHaveBeenCalled();
   });
+});
+
+it("uses the Mate tint for the user's bubble in the Mate transcript", () => {
+  const group = prompt({ browserAnnotations: [], attachments: [] });
+  const view = render(<InfoGroup group={group} bubble />);
+  expect(screen.getByText(group.events[0].content).closest(".bg-mate-user-bubble")).toBeTruthy();
+  view.rerender(<InfoGroup group={group} />);
+  expect(screen.getByText(group.events[0].content).closest(".bg-mate-user-bubble")).toBeNull();
 });
 
 describe("prompt document attachments", () => {
@@ -149,6 +224,60 @@ describe("Codex async questions", () => {
     render(<InfoGroup group={group} />);
     expect(screen.getByText("Review finished.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Question/ })).toBeNull();
+  });
+});
+
+describe("Mate question bubbles", () => {
+  const question = {
+    id: 12, runId: "run", kind: "report" as const, content: "Which city?",
+    metadata: { source: "codex_async_questions", questions: [{ title: "Which city?", options: ["Kyoto", "Tokyo"] }] },
+  };
+  const answered = (answer: string) => groupEvents([mapArtifactToEvent({
+    ...question, metadata: { ...question.metadata,
+      asyncQuestionAnswer: { artifactId: 12, answers: [answer], clientUserMessageId: asyncQuestionMessageId(12) },
+    },
+  })])[0];
+
+  it("shows all choices before answering, then only the selected choice", () => {
+    const pending = groupEvents([mapArtifactToEvent(question)])[0];
+    const view = render(<InfoGroup runId="run" group={pending} bubble />);
+    expect(screen.getByRole("list", { name: "Options" }).textContent).toBe("AKyotoBTokyo");
+
+    view.rerender(<InfoGroup runId="run" group={answered("Tokyo")} bubble />);
+    expect(screen.getByRole("list", { name: "Selected options" }).textContent).toBe("BTokyo");
+    expect(screen.queryByText("Kyoto")).toBeNull();
+  });
+
+  it("keeps a custom reply in its own user bubble", () => {
+    const answer = "Tokyo, if possible\nOsaka also works.";
+    const { container } = render(<InfoGroup runId="run" group={answered(answer)} bubble />);
+    expect(screen.getByRole("region", { name: "Mate question" }).textContent).toBe("Which city?");
+    expect(container.querySelector(".ms-auto")?.textContent).toBe(answer);
+    expect(screen.queryByRole("list")).toBeNull();
+  });
+
+  it("renders only the confirmed answer when older history has the question", () => {
+    const group = prompt({ asyncQuestionReply: { artifactId: 12, answers: ["Tokyo"] },
+      clientUserMessageId: asyncQuestionMessageId(12) });
+    group.events[0].content = "Which city?\n\nTokyo";
+    render(<InfoGroup group={group} bubble />);
+    expect(screen.getByText("Tokyo")).toBeTruthy();
+    expect(screen.queryByText(/Which city/)).toBeNull();
+  });
+
+  it.each([
+    ["AskUserQuestion", { answers: { "Which city?": "Kyoto" } }],
+    ["UserInput", { status: "answered", answer: "Kyoto" }],
+    ["mcp__mains__AskAssistantQuestion", { content: [{ type: "text", text: '{"status":"answered","answer":"Kyoto"}' }] }],
+  ])("renders the result of %s as conversation content", (toolName, output) => {
+    const groups = assistantTranscriptGroups(groupEvents([{
+      type: "tool_call", id: "tool-1", content: toolName, timestamp: new Date(),
+      metadata: { toolName, status: "done", input: { question: "Which city?", options: [{ label: "Kyoto" }, { label: "Tokyo" }] }, output },
+    }]));
+    render(<InfoGroup group={groups[0]} bubble />);
+    expect(screen.getByText("Which city?")).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Selected options" }).textContent).toBe("AKyoto");
+    expect(screen.queryByText("Tokyo")).toBeNull();
   });
 });
 
@@ -295,3 +424,5 @@ describe("prompt browser annotations", () => {
     expect(screen.getByText("deneme")).toBeTruthy();
   });
 });
+
+vi.mock("@/lib/redux/api/assistantsApi", () => ({ useAssistantOverviewQuery: () => ({ currentData: undefined }) }));

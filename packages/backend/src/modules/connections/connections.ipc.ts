@@ -79,11 +79,6 @@ export function registerConnectionsHandlers(): void {
   );
 
   ipcMain.handle(
-    CHANNELS.connections.getSocketDevOrganizations,
-    handle((connectionId: string) => connectionsService.getSocketDevOrganizations(connectionId)),
-  );
-
-  ipcMain.handle(
     CHANNELS.connections.saveResources,
     handle((payload: SaveResourcesPayload) => connectionsService.saveResources(payload)),
   );
@@ -132,7 +127,6 @@ export function unregisterConnectionsHandlers(): void {
     CHANNELS.connections.getGitlabProjects,
     CHANNELS.connections.getTrelloBoards,
     CHANNELS.connections.getSentryProjects,
-    CHANNELS.connections.getSocketDevOrganizations,
     CHANNELS.connections.saveResources,
     CHANNELS.connections.removeResource,
     CHANNELS.connections.getByProvider,

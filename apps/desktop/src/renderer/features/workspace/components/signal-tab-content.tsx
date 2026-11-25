@@ -5,34 +5,32 @@ import rehypeSanitize from "rehype-sanitize";
 import { markdownComponents } from "@/components/markdown-components";
 import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
 import type { SignalWithEntity } from "@/lib/redux/api";
-import { Heading2, Button, Body, Text } from "@/components/ui";
+import { Heading2, Button, Body, StatusBadge, Text, type StatusTone } from "@/components/ui";
+import { Check, CircleDot, Minus, Refresh } from "@/components/ui/icons";
 
 interface SignalTabContentProps {
   signal: SignalWithEntity;
 }
 
-// Tinted from the status tokens (and the accent for info) rather than a
-// palette pastel, so the chips sit on whatever surface the app theme paints.
-const levelColors: Record<string, string> = {
-  fatal: "bg-danger/12 text-danger",
-  critical: "bg-danger/12 text-danger",
-  error: "bg-warning/15 text-warning",
-  warning: "bg-warning/12 text-warning",
-  info: "bg-accent/12 text-accent",
-};
+const severityTone = {
+  fatal: "danger",
+  critical: "danger",
+  error: "danger",
+  warning: "warning",
+  info: "info",
+} satisfies Record<SignalWithEntity["signal"]["level"], StatusTone>;
 
-const stateColors: Record<string, string> = {
-  open: "bg-success/12 text-success",
-  resolved:
-    "bg-primary-100 dark:bg-primary-800 text-primary-600 dark:text-primary-400",
-  ignored:
-    "bg-primary-100 dark:bg-primary-800 text-primary-600 dark:text-primary-400",
-  regressed: "bg-danger/12 text-danger",
-};
+const stateStyle = {
+  open: { tone: "info", icon: CircleDot },
+  resolved: { tone: "success", icon: Check },
+  ignored: { tone: "neutral", icon: Minus },
+  regressed: { tone: "danger", icon: Refresh },
+} satisfies Record<SignalWithEntity["signal"]["state"], { tone: StatusTone; icon: typeof Check }>;
 
 export function SignalTabContent({ signal }: SignalTabContentProps) {
   const { signal: sig, entity } = signal;
   const title = entity.title || "Untitled signal";
+  const state = stateStyle[sig.state];
 
   return (
     <div className="h-full overflow-y-auto noscrollbar">
@@ -43,32 +41,15 @@ export function SignalTabContent({ signal }: SignalTabContentProps) {
 
           {/* Badges */}
           <div className="flex items-center gap-2 flex-wrap">
-            <span
-              className={`inline-flex capitalize items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-                levelColors[sig.level] ?? levelColors.error
-              }`}
-            >
+            <StatusBadge tone={severityTone[sig.level] ?? "neutral"} className="capitalize">
               {sig.level}
-            </span>
-            <span
-              className={`inline-flex capitalize items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-                stateColors[sig.state] ?? stateColors.open
-              }`}
-            >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  sig.state === "open"
-                    ? "bg-green-500"
-                    : sig.state === "regressed"
-                      ? "bg-red-500"
-                      : "bg-primary-400"
-                }`}
-              />
+            </StatusBadge>
+            <StatusBadge tone={state?.tone ?? "neutral"} icon={state?.icon} className="capitalize">
               {sig.state}
-            </span>
-            <Text as="span" size="xs" tone="subtle" weight="medium" className="inline-flex items-center px-2.5 py-1 rounded-full bg-primary-100 dark:bg-primary-800 capitalize">
+            </StatusBadge>
+            <StatusBadge tone="neutral" className="capitalize">
               {sig.category}
-            </Text>
+            </StatusBadge>
           </div>
         </div>
 
@@ -150,7 +131,7 @@ export function SignalTabContent({ signal }: SignalTabContentProps) {
           <div>
             <Text className="mt-0.5">
               <Button
-                variant="primary"
+                variant="secondary"
                 className="px-3 py-2.5 dark:text-primary-200 font-medium rounded-xl"
                 onClick={() => window.api.shell.openExternal(entity.url!)}
               >

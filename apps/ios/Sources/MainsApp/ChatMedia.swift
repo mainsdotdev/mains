@@ -3,7 +3,7 @@ import ImageIO
 
 /// Compute the preview's final size in the layout pass, before any image bytes
 /// arrive. No measured-width state or decoded aspect ratio can move later rows.
-private struct ChatImageFrame: Layout {
+struct ChatImageFrame: Layout {
     let widthLimit: CGFloat
     let heightLimit: CGFloat
     let fixedHeight: Bool
@@ -17,6 +17,9 @@ private struct ChatImageFrame: Layout {
 }
 
 struct PendingPromptAttachments: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let attachments: [PromptAttachment]
     private var images: [PromptAttachment] { attachments.filter { $0.type == "image" } }
     var body: some View {
@@ -39,6 +42,9 @@ struct PendingPromptAttachments: View {
 }
 
 private struct PendingImageTile: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let file: PromptAttachment
     let width: CGFloat
     let height: CGFloat
@@ -61,27 +67,31 @@ private struct PendingImageTile: View {
 }
 
 struct ChatMediaGallery: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let media: [TranscriptMedia]
     var prompt = false
     @State private var selection: TranscriptMedia?
+    @Environment(\.openConversationOutput) private var openCompanion
     private var images: [TranscriptMedia] { media.filter(\.image) }
     var body: some View {
         VStack(alignment: prompt ? .trailing : .leading, spacing: 10) {
             if images.count == 1, let image = images.first {
-                ChatImageTile(session: session, media: image, maxWidth: prompt ? 296 : .infinity, maxHeight: 320, fixedHeight: false) { selection = image }
+                ChatImageTile(session: session, media: image, maxWidth: prompt ? 296 : .infinity, maxHeight: 320, fixedHeight: false) { open(image) }
                     .frame(maxWidth: .infinity, alignment: prompt ? .trailing : .leading)
             } else if !images.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 10) {
                         ForEach(images) { image in
-                            ChatImageTile(session: session, media: image, maxWidth: 260, maxHeight: 170, fixedHeight: true) { selection = image }
+                            ChatImageTile(session: session, media: image, maxWidth: 260, maxHeight: 170, fixedHeight: true) { open(image) }
                         }
                     }
                 }.scrollIndicators(.hidden)
             }
             ForEach(media.filter { !$0.image }) { file in
-                Button { selection = file } label: {
+                Button { open(file) } label: {
                     HStack(spacing: 12) {
                         Image(systemName: file.name.lowercased().hasSuffix(".pdf") ? "doc.richtext" : "doc.text")
                             .font(.title3).foregroundStyle(.secondary).frame(width: 28)
@@ -99,12 +109,18 @@ struct ChatMediaGallery: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: prompt ? .trailing : .leading)
-        .sheet(item: $selection) { OutputPreviewView(session: session, media: $0) }
+        .fullScreenCover(item: $selection) { OutputPreviewView(session: session, media: $0) }
         .onChange(of: session.ownership) { _, _ in selection = nil }
+    }
+    private func open(_ media: TranscriptMedia) {
+        if !openCompanion(media.runID, .media(media)) { selection = media }
     }
 }
 
 private struct ChatImageTile: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let media: TranscriptMedia
     let maxWidth: CGFloat
@@ -115,6 +131,7 @@ private struct ChatImageTile: View {
     @State private var visible = false
     @State private var error: String?
     @State private var retry = 0
+    @Environment(\.conversationPaneVisible) private var paneVisible
     var body: some View {
         Button {
             if image != nil { open() } else { retry += 1 }
@@ -129,7 +146,9 @@ private struct ChatImageTile: View {
                         Text(media.name).lineLimit(1)
                         Text(media.available ? "Tap to retry" : "Preview unavailable").font(.caption2)
                     }.font(.caption).foregroundStyle(.secondary).padding(12)
-                } else { ProgressView() }
+                } else {
+                    Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary).accessibilityHidden(true)
+                }
               }
             }
             .clipShape(.rect(cornerRadius: 18))
@@ -137,8 +156,8 @@ private struct ChatImageTile: View {
         .buttonStyle(ChatPressStyle()).disabled(!media.available || !session.isConnected)
         .accessibilityLabel(media.name).accessibilityIdentifier("transcriptImage-" + media.id)
         .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
-        .task(id: "\(session.ownership):\(session.isConnected):\(media.runID):\(media.id):\(retry):\(visible)") {
-            if visible { await load() } else { image = nil; error = nil }
+        .task(id: "\(session.ownership):\(session.isConnected):\(media.runID):\(media.id):\(retry):\(visible):\(paneVisible)") {
+            if visible && paneVisible { await load() } else { image = nil; error = nil }
         }
         .onDisappear { image = nil }
     }
@@ -158,5 +177,87 @@ private struct ChatImageTile: View {
                   ] as CFDictionary) else { throw MainsError.invalidReply }
             image = UIImage(cgImage: thumbnail)
         } catch { if !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription } }
+    }
+}
+
+struct FullScreenFileImage: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let url: URL
+    @State private var image: UIImage?
+    @State private var unsupported = false
+    var body: some View {
+        Group {
+            if let image { ZoomableFileImage(image: image) }
+            else if unsupported { OutputQuickLook(url: url) }
+            else { MediaSkeleton().environment(\.colorScheme, .dark) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).ignoresSafeArea(.container)
+        .accessibilityLabel(url.lastPathComponent)
+        .task(id: url) {
+            image = nil; unsupported = false
+            let thumbnail = await Task.detached(priority: .userInitiated) {
+                guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil as CGImage? }
+                return CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 4096, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary)
+            }.value
+            guard !Task.isCancelled else { return }
+            image = thumbnail.map { UIImage(cgImage: $0) }; unsupported = thumbnail == nil
+        }
+        .onDisappear { image = nil }
+    }
+}
+
+private struct ZoomableFileImage: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let image: UIImage
+    func makeUIView(context: Context) -> FileImageScrollView { FileImageScrollView() }
+    func updateUIView(_ view: FileImageScrollView, context: Context) {
+        guard view.imageView.image !== image else { return }
+        view.imageView.image = image; view.viewport = .zero; view.setNeedsLayout()
+    }
+}
+
+private final class FileImageScrollView: UIScrollView, UIScrollViewDelegate {
+    let imageView = UIImageView()
+    var viewport = CGSize.zero
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black; delegate = self
+        minimumZoomScale = 1; maximumZoomScale = 6; bouncesZoom = true
+        showsHorizontalScrollIndicator = false; showsVerticalScrollIndicator = false
+        contentInsetAdjustmentBehavior = .never
+        imageView.contentMode = .scaleAspectFit; addSubview(imageView)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(doubleTap(_:))); tap.numberOfTapsRequired = 2
+        addGestureRecognizer(tap)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0, bounds.height > 0, let image = imageView.image else { return }
+        if viewport != bounds.size {
+            viewport = bounds.size; setZoomScale(1, animated: false)
+            let scale = min(bounds.width / max(1, image.size.width), bounds.height / max(1, image.size.height))
+            let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            imageView.frame = CGRect(origin: .zero, size: size); contentSize = size
+        }
+        centerImage()
+    }
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+    func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImage() }
+    private func centerImage() {
+        let horizontal = max(0, (bounds.width - contentSize.width) / 2), vertical = max(0, (bounds.height - contentSize.height) / 2)
+        contentInset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
+    }
+    @objc private func doubleTap(_ gesture: UITapGestureRecognizer) {
+        if zoomScale > 1.01 { setZoomScale(1, animated: !UIAccessibility.isReduceMotionEnabled) }
+        else {
+            let point = gesture.location(in: imageView), scale: CGFloat = 2.5
+            zoom(to: CGRect(x: point.x - bounds.width / scale / 2, y: point.y - bounds.height / scale / 2,
+                            width: bounds.width / scale, height: bounds.height / scale), animated: !UIAccessibility.isReduceMotionEnabled)
+        }
     }
 }

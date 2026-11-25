@@ -1,7 +1,7 @@
 // Operator-only overlay that deletes account hubs no account owns any longer. The normal Worker entry never
 // imports this file; scripts/purge-orphan-hubs.ts deploys it for one run and puts src/index.ts back.
 import worker, { AccountHub as CoreAccountHub } from "./index";
-export { BridgeOperations } from "./index";
+export { BridgeOperations, BridgeQuotaAdmin } from "./index";
 
 type PurgeEnv = Omit<Parameters<typeof worker.fetch>[1], "ACCOUNT_HUB"> & {
   ACCOUNT_HUB: DurableObjectNamespace<AccountHub>;

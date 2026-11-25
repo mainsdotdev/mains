@@ -30,15 +30,15 @@ export function useWorkspaceData(providerId?: string, mode?: ModeId) {
     [allProviders],
   );
 
-  // Resolve effective workspace ID: URL param > saved per-provider > first workspace
+  // Replicas require an explicit workspace URL. The home route restores an owned workspace.
   const effectiveWorkspaceId = useMemo(() => {
     if (mode && mode !== "developer") return undefined;
     if (workspaceId) return workspaceId;
     if (providerId) {
       const saved = savedWorkspaceIdByProvider[providerId];
-      if (saved && workspaces.some((w) => w.id === saved)) return saved;
+      if (saved && workspaces.some((w) => w.id === saved && !w.isReplica)) return saved;
     }
-    return workspaces.length > 0 ? workspaces[0].id : undefined;
+    return workspaces.find((workspace) => !workspace.isReplica)?.id;
   }, [mode, workspaceId, providerId, savedWorkspaceIdByProvider, workspaces]);
 
   const { currentData: fetchedWorkspace, isLoading: loadingWorkspace, isFetching: fetchingWorkspace } = useGetWorkspaceQuery(effectiveWorkspaceId!, {

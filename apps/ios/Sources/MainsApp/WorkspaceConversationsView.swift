@@ -1,93 +1,148 @@
 import SwiftUI
 
-struct WorkspaceConversationsView: View {
+struct TargetConversationsView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
-    let workspaceID: String
+    enum Target {
+        case workspace(String)
+        case project(String)
+    }
+    let target: Target
     let openConversation: (String) -> Void
     let startConversation: () -> Void
     @State private var query = ""
     @FocusState private var searching: Bool
-    @Environment(\.colorScheme) private var scheme
-    private var workspace: Workspace? { session.workspaces.first { $0.id == workspaceID } }
-    private var branch: String? { session.gitStates.first { $0.workspaceId == workspaceID }?.branch }
-    private var accent: Color {
-        scheme == .dark ? Color(red: 59 / 255, green: 130 / 255, blue: 246 / 255) : Color(red: 37 / 255, green: 99 / 255, blue: 235 / 255)
+    private var workspace: Workspace? {
+        guard case .workspace(let id) = target else { return nil }
+        return session.workspaces.first { $0.id == id }
+    }
+    private var project: ProjectCollection? {
+        guard case .project(let id) = target else { return nil }
+        return session.collections.first { $0.id == id }
+    }
+    private var gitState: WorkspaceGitState? {
+        guard let workspace else { return nil }
+        return session.gitStates.first { $0.workspaceId == workspace.id }
+    }
+    private var isWorkspace: Bool {
+        if case .workspace = target { return true }
+        return false
+    }
+    private var title: LocalizedStringKey {
+        if let name = workspace?.name ?? project?.name { return "\(name)" }
+        return isWorkspace ? "Workspace" : "Project"
     }
     private var runs: [Conversation] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return session.conversations.filter {
-            $0.workspaceId == workspaceID && $0.providerId == session.selectedSpace?.providerId && $0.mode == session.selectedSpace?.mode &&
-            (needle.isEmpty || $0.displayTitle.localizedCaseInsensitiveContains(needle))
+            $0.assistantId == nil && belongsToTarget($0) && $0.providerId == session.selectedSpace?.providerId &&
+            $0.mode == session.selectedSpace?.mode && (needle.isEmpty || $0.displayTitle.localizedCaseInsensitiveContains(needle))
+        }
+    }
+    private func belongsToTarget(_ run: Conversation) -> Bool {
+        switch target {
+        case .workspace(let id): run.workspaceId == id
+        case .project(let id): run.collectionId == id
         }
     }
     private var canStart: Bool {
-        workspace != nil && workspace?.isReplica != true && session.selectedSpace?.mode == "developer" &&
-        session.gitStates.first(where: { $0.workspaceId == workspaceID })?.pathExists != false
+        guard let mode = session.selectedSpace?.mode else { return false }
+        switch target {
+        case .workspace: return workspace != nil && workspace?.isReplica != true && mode == "developer" && gitState?.pathExists != false
+        case .project: return project != nil && (mode == "work" || mode == "chat")
+        }
+    }
+    private var emptyMessage: LocalizedStringKey {
+        if isWorkspace { return query.isEmpty ? "No runs in this workspace yet." : "No runs match." }
+        return query.isEmpty ? "No chats in this project yet." : "No chats match."
     }
     var body: some View {
+        let runs = self.runs
+        Group {
+            if runs.isEmpty {
+                EmptyStateLayout {
+                    targetHeader.padding(.horizontal, 16).padding(.top, 8)
+                } content: {
+                    EmptyStateView(artwork: query.isEmpty ? (isWorkspace ? .spaces : .chats) : .search,
+                                   description: Text(emptyMessage))
+                }
+            } else {
+                conversationList(runs)
+            }
+        }
+        .accessibilityIdentifier("targetConversationList")
+        .background(Color(.systemBackground))
+        .navigationHeaderFade()
+        .scrollDismissesKeyboard(.interactively)
+        .scrollingNavigationTitle(title)
+        .toolbar(.visible, for: .navigationBar)
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
+        .pullToRefresh { await session.refresh() }
+    }
+
+    private var targetHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                PageTitle(title).fixedSize(horizontal: false, vertical: true)
+                if let branch = gitState?.branch {
+                    Text(branch).font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.bottom, 16)
+            if workspace?.isReplica == true {
+                BridgeReadOnlyNotice(text: "Read-only · this workspace runs on another computer")
+                    .padding(.bottom, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func conversationList(_ runs: [Conversation]) -> some View {
         ScrollView {
             TimelineView(.periodic(from: .now, by: 60)) { clock in
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if workspace?.isReplica == true {
-                        BridgeReadOnlyNotice(text: "Read-only · this workspace runs on another computer")
-                            .padding(.bottom, 12)
-                    }
-                    if runs.isEmpty {
-                        Text(query.isEmpty ? "No runs in this workspace yet." : "No runs match.")
-                            .font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 4).padding(.vertical, 16)
-                    }
+                    targetHeader
                     ForEach(runs) { run in
+                        let active = run.isActive && run.isReplica != true
                         Button {
                             searching = false; openConversation(run.id)
                         } label: {
-                            HStack(alignment: .firstTextBaseline, spacing: 16) {
-                                Text(run.displayTitle).font(.body.weight(.medium)).foregroundStyle(.primary)
-                                    .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                                Text(run.isActive && run.isReplica != true ? (run.status == "queued" ? "Queued" : "Running") : conversationAge(run.updatedAt, now: clock.date))
-                                    .font(.caption).monospacedDigit().foregroundStyle(run.isActive && run.isReplica != true ? accent : Color(.tertiaryLabel))
-                                    .fixedSize(horizontal: true, vertical: false)
-                            }.padding(.horizontal, 4).padding(.vertical, 16).contentShape(.rect)
+                            ConversationListRow(title: run.displayTitle,
+                                                detail: active ? (run.status == "queued" ? "Queued" : "Running") : compactRelativeAge(run.updatedAt, now: clock.date),
+                                                detailColor: active ? AppBrand.accent : Color(.tertiaryLabel))
                         }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("conversation-\(run.id)")
                     }
                 }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 24)
             }
         }
-        .background(Color(.systemBackground))
-        .scrollDismissesKeyboard(.interactively)
-        .navigationTitle(workspace?.name ?? "Workspace").navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text(workspace?.name ?? "Workspace").font(.headline).lineLimit(1)
-                    if let branch { Text(branch).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
-                }.accessibilityElement(children: .combine).accessibilityIdentifier("workspaceTitle")
-            }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
-        .refreshable { await session.refresh() }
     }
     private var bottomBar: some View {
         HStack(spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").font(.system(size: 18)).foregroundStyle(.secondary)
-                TextField("Search runs", text: $query)
+                TextField(isWorkspace ? "Search runs" : "Search chats", text: $query)
                     .font(.body).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .submitLabel(.search).focused($searching).accessibilityIdentifier("workspaceSearch")
+                    .submitLabel(.search).focused($searching).accessibilityIdentifier(isWorkspace ? "workspaceSearch" : "projectSearch")
             }.padding(.horizontal, 16).frame(height: 52).modifier(GlassSurface(radius: 26))
             if searching || !query.isEmpty {
                 RoundControl(symbol: "xmark", label: "Close search", size: 52) { query = ""; searching = false }
-                    .accessibilityIdentifier("closeWorkspaceSearch")
+                    .accessibilityIdentifier(isWorkspace ? "closeWorkspaceSearch" : "closeProjectSearch")
             } else if workspace?.isReplica != true {
                 Button {
                     guard canStart, let space = session.selectedSpace else { return }
                     searching = false
                     var target = session.homeTargets[space.id] ?? HomeTarget()
-                    target.workspaceID = workspaceID; session.selectTarget(target, spaceID: space.id)
+                    switch self.target {
+                    case .workspace(let id): target.workspaceID = id
+                    case .project(let id): target.collectionID = id
+                    }
+                    session.selectTarget(target, spaceID: space.id)
                     startConversation()
                 } label: {
                     Image(systemName: "square.and.pencil").font(.system(size: 22))
-                        .foregroundStyle(.white).frame(width: 52, height: 52).background(accent, in: .circle)
+                        .foregroundStyle(.white).frame(width: 52, height: 52).background(AppBrand.accent, in: .circle)
                 }.buttonStyle(ChatPressStyle()).disabled(!canStart)
                     .accessibilityLabel("New conversation").accessibilityIdentifier("newConversation")
             }
@@ -95,15 +150,42 @@ struct WorkspaceConversationsView: View {
     }
 }
 
+struct ConversationListRow: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let title: String
+    let detail: String
+    var detailColor = Color(.tertiaryLabel)
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            Text(title).font(.body.weight(.medium)).foregroundStyle(.primary)
+                .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            Text(detail).font(.caption).monospacedDigit().foregroundStyle(detailColor)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.horizontal, 4).padding(.vertical, 16).contentShape(.rect)
+    }
+}
+
 struct SearchView: View {
-    nonisolated private static let layoutSpace = "globalSearchPage"
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
-    let focusRequested: Bool
-    let layoutChanged: (CGFloat) -> Void
-    let open: (AppRoute) -> Void
-    let close: () -> Void
+    let isPresented: Bool
+    let finish: (AppRoute?, Animation) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var query = ""
     @FocusState private var searching: Bool
+    @State private var keyboardInset: CGFloat = 0
+    @State private var keyboardAnimation: Animation?
+    @State private var dismissal: Dismissal?
+    @State private var followsKeyboardOnClose = false
+
+    private struct Dismissal { let route: AppRoute? }
+    private var addsSlide: Bool { !isPresented && !reduceMotion && !followsKeyboardOnClose }
     private var needle: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var conversations: [Conversation] {
         guard !needle.isEmpty else { return [] }
@@ -117,60 +199,206 @@ struct SearchView: View {
             workspace.name.localizedCaseInsensitiveContains(needle) || session.gitStates.first { $0.workspaceId == workspace.id }?.branch?.localizedCaseInsensitiveContains(needle) == true
         }
     }
+    @State private var hits: [ConversationSearchHit] = []
+    @State private var nextCursor: ConversationSearchCursor?
+    @State private var loading = false
+    @State private var searchError: String?
+    @State private var resultQuery = ""
+    @State private var requestID = UUID()
+    private struct SearchIdentity: Hashable { let query: String; let owner: Int; let connected: Bool; let active: Bool }
+    private var searchIdentity: SearchIdentity { SearchIdentity(query: needle, owner: session.ownership, connected: session.isConnected, active: isPresented) }
+    private var visibleHits: [ConversationSearchHit] { resultQuery == needle ? hits : [] }
+    private var visibleError: String? { resultQuery == needle ? searchError : nil }
+    private var savedOnly: Bool { !session.isConnected || visibleError != nil }
+    private var hasNoResults: Bool {
+        !loading && resultQuery == needle && visibleHits.isEmpty && workspaces.isEmpty &&
+            (!savedOnly || conversations.isEmpty) && visibleError == nil
+    }
+
     var body: some View {
-        Group {
-            if needle.isEmpty || conversations.isEmpty && workspaces.isEmpty {
-                VStack(spacing: 20) {
-                    Image(systemName: "magnifyingglass").font(.system(size: 36, weight: .regular)).accessibilityHidden(true)
-                    Text(needle.isEmpty ? "Search chats and workspaces" : "No results found")
-                        .font(.subheadline).foregroundStyle(Color(.secondaryLabel))
-                }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { viewport in
+            searchSurface
+                .padding(.bottom, keyboardInset)
+                .animation(keyboardAnimation, value: keyboardInset)
+                .background {
+                    Color(.systemBackground).ignoresSafeArea().opacity(isPresented ? 1 : 0)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+                    guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+                    moveKeyboard(to: overlap(with: frame, in: viewport.frame(in: .global)), notification: notification)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
+                    moveKeyboard(to: 0, notification: notification)
+                }
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .toolbar(.hidden, for: .navigationBar)
+        .task(id: isPresented) { searching = isPresented }
+        .task(id: dismissal != nil) {
+            guard dismissal != nil else { return }
+            // Focus can be interrupted without a keyboard hide notification.
+            do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+            finishDismissal()
+        }
+        .task(id: searchIdentity) { await search(debounce: true) }
+        .onDisappear { requestID = UUID() }
+        .accessibilityAction(.escape) { dismiss() }
+    }
+
+    private var searchSurface: some View {
+        ZStack {
+            if needle.isEmpty {
+                VStack(spacing: 16) {
+                    EmptyStateIllustration(artwork: .search)
+                    Text("Search chats, messages and workspaces").font(.subheadline).foregroundStyle(Color(.secondaryLabel))
+                }
+                .multilineTextAlignment(.center)
+                .offset(y: addsSlide ? 28 : 0)
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if hasNoResults {
+                EmptyStateLayout {
+                    if savedOnly {
+                        Text("Reconnect to search all conversations and messages. Showing saved chats.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16).padding(.top, 28)
+                    }
+                } content: {
+                    EmptyStateView(artwork: .search, title: "No results found")
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .pullToRefresh { await session.refresh(); await search() }
             } else {
                 ScrollView {
                     TimelineView(.periodic(from: .now, by: 60)) { clock in
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            if !conversations.isEmpty {
-                                sectionTitle("Chats")
+                            if savedOnly {
+                                Text(visibleError ?? "Reconnect to search all conversations and messages. Showing saved chats.")
+                                    .font(.footnote).foregroundStyle(.secondary).padding(.vertical, 12)
+                                if visibleError != nil { Button("Try again") { Task { await search() } }.disabled(!session.isConnected || loading) }
+                                if !conversations.isEmpty { sectionTitle("Saved chats") }
                                 ForEach(conversations) { run in
-                                    Button { openResult(.conversation(run.id)) } label: {
-                                        HStack(spacing: 16) {
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text(run.displayTitle).font(.body).foregroundStyle(.primary).lineLimit(1)
-                                                Text(place(of: run)).font(.footnote).foregroundStyle(Color(.secondaryLabel)).lineLimit(1)
-                                            }.frame(maxWidth: .infinity, alignment: .leading)
-                                            Text(run.isActive && run.isReplica != true ? (run.status == "queued" ? "Queued" : "Running") : conversationAge(run.updatedAt, now: clock.date))
-                                                .font(.caption).monospacedDigit().foregroundStyle(Color(.secondaryLabel))
-                                                .fixedSize(horizontal: true, vertical: false)
-                                        }.padding(.vertical, 10).contentShape(.rect)
+                                    Button { dismiss(to: .conversation(run.id)) } label: {
+                                        resultRow(title: run.displayTitle, context: place(of: run), snippet: nil, date: run.updatedAt, now: clock.date)
                                     }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-run-\(run.id)")
+                                }
+                            } else {
+                                if loading && visibleHits.isEmpty || resultQuery != needle {
+                                    ContentSkeleton(label: "Searching conversations and messages…")
+                                }
+                                if !visibleHits.isEmpty { sectionTitle("Chats and messages") }
+                                ForEach(visibleHits) { hit in
+                                    Button {
+                                        if let cursor = hit.messageCursor { dismiss(to: .searchMessage(hit.runId, cursor)) }
+                                        else { dismiss(to: .conversation(hit.runId)) }
+                                    } label: {
+                                        resultRow(title: hit.title, context: [hit.context, Experience.label(hit.mode)].compactMap { $0 }.joined(separator: " · "),
+                                                  snippet: hit.snippet, date: Date(timeIntervalSince1970: hit.updatedAt / 1000), now: clock.date)
+                                    }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-run-\(hit.runId)")
+                                }
+                                if nextCursor != nil && resultQuery == needle {
+                                    Button("More results") { Task { await loadMore() } }
+                                        .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44).disabled(loading)
+                                        .accessibilityIdentifier("loadMoreSearchResults")
                                 }
                             }
                             if !workspaces.isEmpty {
-                                sectionTitle("Workspaces").padding(.top, conversations.isEmpty ? 0 : 16)
+                                sectionTitle("Workspaces").padding(.top, 16)
                                 ForEach(workspaces) { workspace in
-                                    Button { openResult(.workspace(workspace.id)) } label: {
-                                        WorkspaceLabel(session: session, workspace: workspace).padding(.vertical, 10)
-                                    }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-workspace-\(workspace.id)")
+                                    Button { dismiss(to: .workspace(workspace.id)) } label: { WorkspaceLabel(session: session, workspace: workspace).padding(.vertical, 10) }
+                                        .buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-workspace-\(workspace.id)")
                                 }
                             }
                         }.padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 24)
                     }
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .refreshable { await session.refresh() }
+                .pullToRefresh { await session.refresh(); await search() }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
-        .toolbar(.hidden, for: .navigationBar)
+        .opacity(isPresented ? 1 : 0)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            searchBar.onGeometryChange(for: CGFloat.self) { geometry in
-                geometry.frame(in: .named(Self.layoutSpace)).maxY
-            } action: { layoutChanged($0) }
+            searchBar
+                .offset(y: addsSlide ? 68 : 0)
+                .opacity(isPresented ? 1 : 0)
         }
-        .coordinateSpace(name: Self.layoutSpace)
-        .task(id: focusRequested) { searching = focusRequested }
-        .accessibilityAction(.escape, close)
+    }
+
+    private func dismiss(to route: AppRoute? = nil) {
+        guard isPresented, dismissal == nil else { return }
+        dismissal = Dismissal(route: route)
+        searching = false
+        if keyboardInset == 0 { finishDismissal() }
+    }
+
+    private func finishDismissal(keyboardDuration: TimeInterval? = nil) {
+        guard let dismissal else { return }
+        self.dismissal = nil
+        followsKeyboardOnClose = keyboardDuration != nil
+        let duration = reduceMotion ? 0.18 : keyboardDuration ?? 0.32
+        finish(dismissal.route, .easeInOut(duration: duration > 0 ? duration : 0.32))
+    }
+
+    private func overlap(with screenFrame: CGRect, in viewport: CGRect) -> CGFloat {
+        let window = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive && $0.keyWindow != nil }?.keyWindow
+        let frame = window.map { $0.convert(screenFrame, from: $0.screen.coordinateSpace) } ?? screenFrame
+        // A floating keyboard doesn't reserve the bottom of the search surface.
+        guard frame.maxY >= viewport.maxY, frame.width >= viewport.width * 0.9 else { return 0 }
+        return max(0, viewport.maxY - frame.minY)
+    }
+
+    private func moveKeyboard(to inset: CGFloat, notification: Notification) {
+        guard isPresented, searching || inset == 0 || keyboardInset > 0 else { return }
+        let transition = KeyboardTransition(notification)
+        // Use one animated inset so the field and the centered illustration move through the same layout.
+        keyboardAnimation = transition.animation(duration: transition.duration)
+        keyboardInset = inset
+        if inset == 0, dismissal != nil { finishDismissal(keyboardDuration: transition.duration) }
+    }
+    private func resultRow(title: String, context: String, snippet: String?, date: Date, now: Date) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.body).foregroundStyle(.primary).lineLimit(1)
+                Text(context).font(.footnote).foregroundStyle(Color(.secondaryLabel)).lineLimit(1)
+                if let snippet, !snippet.isEmpty { Text(snippet).font(.footnote).foregroundStyle(.secondary).lineLimit(2) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Text(compactRelativeAge(date, now: now)).font(.caption).monospacedDigit().foregroundStyle(Color(.secondaryLabel)).fixedSize(horizontal: true, vertical: false)
+        }.padding(.vertical, 10).contentShape(.rect)
+    }
+    private func search(debounce: Bool = false) async {
+        guard isPresented else { return }
+        let ticket = UUID(), query = needle, owner = session.ownership
+        requestID = ticket; resultQuery = query; hits = []; nextCursor = nil; searchError = nil; loading = false
+        guard !query.isEmpty, session.isConnected else { return }
+        loading = true
+        defer { if requestID == ticket { loading = false } }
+        do {
+            if debounce { try await Task.sleep(for: .milliseconds(300)) }
+            let page = try await session.searchConversations(query)
+            try Task.checkCancellation()
+            guard requestID == ticket, needle == query, owner == session.ownership else { return }
+            hits = page.items; nextCursor = page.nextCursor
+        } catch {
+            if !Task.isCancelled, requestID == ticket, owner == session.ownership {
+                searchError = "Couldn’t search the computer. Reconnect or update Mains on your computer, then try again."
+            }
+        }
+    }
+    private func loadMore() async {
+        guard !loading, resultQuery == needle, let cursor = nextCursor else { return }
+        let ticket = requestID, query = needle, owner = session.ownership
+        loading = true
+        defer { if requestID == ticket { loading = false } }
+        do {
+            let page = try await session.searchConversations(query, cursor: cursor)
+            try Task.checkCancellation()
+            guard requestID == ticket, needle == query, owner == session.ownership else { return }
+            let existing = Set(hits.map(\.runId))
+            hits.append(contentsOf: page.items.filter { !existing.contains($0.runId) }); nextCursor = page.nextCursor
+        } catch { if !Task.isCancelled, requestID == ticket, owner == session.ownership { searchError = "More results couldn’t load. Try the search again." } }
     }
     private var searchBar: some View {
         HStack(spacing: 12) {
@@ -189,28 +417,16 @@ struct SearchView: View {
                 }
             }.padding(.leading, 16).padding(.trailing, query.isEmpty ? 16 : 8)
                 .frame(height: 52).modifier(GlassSurface(radius: 26))
-            RoundControl(symbol: "xmark", label: "Close search", size: 52, action: close)
+            RoundControl(symbol: "xmark", label: "Close search", size: 52) { dismiss() }
                 .accessibilityIdentifier("closeGlobalSearch")
         }.padding(.horizontal, 16).padding(.vertical, 8)
     }
     private func sectionTitle(_ title: String) -> some View {
-        Text(title).font(.subheadline.weight(.semibold)).padding(.top, 20).padding(.bottom, 8)
+        Text(title).font(.subheadline.weight(.semibold).width(.expanded)).padding(.top, 20).padding(.bottom, 8)
     }
     private func place(of run: Conversation) -> String {
         let workspace = session.workspaces.first { $0.id == run.workspaceId }?.name
         let collection = session.collections.first { $0.id == run.collectionId }?.name
         return [workspace ?? collection, Experience.label(run.mode)].compactMap { $0 }.joined(separator: " · ")
     }
-    private func openResult(_ route: AppRoute) {
-        searching = false; open(route)
-    }
-}
-
-private func conversationAge(_ date: Date, now: Date) -> String {
-    let seconds = now.timeIntervalSince(date)
-    if seconds < 45 { return "just now" }
-    if seconds < 3600 { return "\(max(1, Int((seconds / 60).rounded())))m ago" }
-    if seconds < 86400 { return "\(Int((seconds / 3600).rounded()))h ago" }
-    if seconds < 7 * 86400 { return "\(Int((seconds / 86400).rounded()))d ago" }
-    return date.formatted(date: .numeric, time: .omitted)
 }

@@ -46,6 +46,9 @@ beforeEach(() => {
   hoveredLine = 1;
   invoke.mockImplementation(async (channel) => {
     if (channel === CHANNELS.pullRequests.getDetail) return { success: true, data: { ...prFixture, reviewThreads: [thread] } };
+    if (channel === CHANNELS.pullRequests.getActivity || channel === CHANNELS.pullRequests.getCommits) return {
+      success: true, data: { items: [], startCursor: null, hasPreviousPage: false, totalCount: 0 },
+    };
     if (channel === CHANNELS.pullRequests.getDiff) return { success: true, data: { diffText: patch, truncated: false } };
     return { success: true, data: undefined };
   });

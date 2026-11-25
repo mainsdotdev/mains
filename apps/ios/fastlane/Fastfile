@@ -1,0 +1,110 @@
+require 'fileutils'
+require 'open3'
+require 'shellwords'
+require_relative 'release_config'
+
+default_platform(:ios)
+
+platform :ios do
+  desc 'Validate local beta prerequisites without contacting Apple or uploading'
+  lane :doctor do
+    config = MainsRelease::Config.new
+    config.validate_credentials!
+
+    output, status = Open3.capture2e('xcodebuild', '-version')
+    unless status.success? && output[/Xcode (\d+)/, 1].to_i >= 26
+      UI.user_error!('Select Xcode 26+ with xcode-select (or DEVELOPER_DIR).')
+    end
+
+    identities, status = Open3.capture2e('security', 'find-identity', '-v', '-p', 'codesigning')
+    unless status.success? && identities.match?(/"(?:Apple|iPhone) Distribution:/)
+      UI.user_error!('Install an Apple Distribution certificate with its private key in your login Keychain. See README.md → TestFlight.')
+    end
+    UI.success("Local prerequisites ready: #{MainsRelease::BUNDLE_ID} #{config.version}. Apple access and provisioning are checked during beta.")
+    config
+  rescue ArgumentError => error
+    UI.user_error!(error.message)
+  end
+
+  desc 'Test, archive Release and upload to internal TestFlight'
+  lane :beta do
+    config = doctor
+    output = File.join(MainsRelease::ROOT, 'build', 'beta')
+    FileUtils.mkdir_p(output)
+
+    # Serialize attempts in this checkout, including Apple's processing window.
+    File.open(File.join(output, '.lock'), 'w') do |lock|
+      UI.user_error!('Another beta release is already running in this checkout.') unless lock.flock(File::LOCK_EX | File::LOCK_NB)
+
+      Dir.chdir(MainsRelease::ROOT) { sh('swift', 'test') }
+
+      api_key = app_store_connect_api_key(
+        key_id: config.key_id,
+        issuer_id: config.issuer_id,
+        key_filepath: config.key_path,
+        in_house: false
+      )
+      latest = latest_testflight_build_number(
+        api_key: api_key,
+        app_identifier: MainsRelease::BUNDLE_ID,
+        version: config.version,
+        initial_build_number: 0
+      )
+      build = config.next_build(latest)
+      UI.message("Building #{config.version} (#{build}) for internal TestFlight")
+
+      # Use a profile backed by an installed private key instead of Xcode's
+      # cloud-managed signing service. Keep our profile separate from Expo's.
+      profile_uuid = get_provisioning_profile(
+        api_key: api_key,
+        app_identifier: MainsRelease::BUNDLE_ID,
+        team_id: MainsRelease::TEAM_ID,
+        provisioning_name: 'Mains Native App Store',
+        ignore_profiles_with_different_name: true,
+        output_path: File.join(output, 'signing'),
+        filename: 'Mains_AppStore.mobileprovision'
+      )
+
+      # The API key lets Xcode update automatic provisioning; a local signing
+      # certificate/private key is still required. Shellwords protects key paths.
+      signing_args = Shellwords.join([
+        '-allowProvisioningUpdates',
+        '-authenticationKeyPath', config.key_path,
+        '-authenticationKeyID', config.key_id,
+        '-authenticationKeyIssuerID', config.issuer_id
+      ])
+      ipa = build_app(
+        project: File.join(MainsRelease::ROOT, 'Mains.xcodeproj'),
+        scheme: 'Mains',
+        configuration: 'Release',
+        destination: 'generic/platform=iOS',
+        clean: true,
+        output_directory: output,
+        output_name: "Mains-#{config.version}-#{build}.ipa",
+        archive_path: File.join(output, "Mains-#{config.version}-#{build}.xcarchive"),
+        buildlog_path: File.join(output, 'logs'),
+        export_method: 'app-store',
+        export_team_id: MainsRelease::TEAM_ID,
+        export_options: {
+          signingStyle: 'manual',
+          signingCertificate: 'Apple Distribution',
+          provisioningProfiles: { MainsRelease::BUNDLE_ID => profile_uuid },
+          manageAppVersionAndBuildNumber: false
+        },
+        # gym also forwards xcargs to exportArchive. Repeating the authentication
+        # flags in export_xcargs makes Xcode reject the export as duplicate input.
+        xcargs: "#{signing_args} MARKETING_VERSION=#{config.version} CURRENT_PROJECT_VERSION=#{build}"
+      )
+      upload_to_testflight(
+        api_key: api_key,
+        app_identifier: MainsRelease::BUNDLE_ID,
+        ipa: ipa,
+        changelog: config.changelog(build),
+        skip_waiting_for_build_processing: false,
+        distribute_external: false,
+        notify_external_testers: false,
+        submit_beta_review: false
+      )
+    end
+  end
+end

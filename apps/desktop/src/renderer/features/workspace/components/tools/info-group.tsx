@@ -6,6 +6,11 @@ import {
   useCallback,
   type MouseEvent,
 } from "react";
+import { useGetAccountQuery } from "@/lib/redux/api";
+import { useAssistantOverviewQuery } from "@/lib/redux/api/assistantsApi";
+import { AssistantProfileSetupHistory } from "@/features/assistants/components/assistant-profile-setup";
+import { AssistantTaskCard } from "@/features/assistants/components/assistant-task-card";
+import { readAssistantTaskInput, type AssistantWelcomeQuestion } from "@mains/contracts/assistants";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import type { EventGroup } from "../../lib/group-events";
 import { Code, Globe } from "@/components/ui/icons/space";
@@ -57,6 +62,8 @@ import { VoiceTaskCard } from "../voice-task-card";
 import type { VoiceTaskLink } from "@mains/contracts/realtime";
 import { AskUserQuestionDisplay } from "./ask-user-question-display";
 import { CodexAsyncQuestionCard } from "./codex-async-question-card";
+import { MateQuestionAnswer, MateQuestionBubble } from "./mate-question-bubble";
+import { isUserQuestionTool, readQuestionReplyEvent, readQuestionToolEntries } from "../../lib/user-question-content";
 import {
   readAsyncQuestionAnswer,
   readAsyncQuestionReply,
@@ -182,7 +189,10 @@ interface InfoGroupProps {
   runId?: string;
   providerId?: string;
   floatingChat?: boolean;
+  bubble?: boolean;
 }
+
+const MESSAGE_BUBBLE = "w-fit min-w-0 max-w-transcript-bubble rounded-transcript-bubble bg-primary-100/80 px-4 py-3 dark:bg-primary/8";
 
 function PromptFileAttachment({ file }: { file: PromptMarkdownFile & { displayName: string } }) {
   const openFile = useOpenFileInEditor();
@@ -205,11 +215,18 @@ function InfoGroupImpl({
   runId,
   providerId,
   floatingChat = false,
+  bubble = false,
 }: InfoGroupProps) {
   const replica = useReplicaView();
+  const { data: account } = useGetAccountQuery();
+  const { currentData: assistantOverview } = useAssistantOverviewQuery(account?.id ?? "", { skip: !account || !group.events.some(event => Array.isArray(event.metadata?.assistantMentions) && event.metadata.assistantMentions.length > 0) });
   const event = group.events[0];
   const [previewAtt, setPreviewAtt] = useState<PromptPreview | null>(null);
   if (!event) return null;
+  if (bubble && isUserQuestionTool(event)) {
+    const entries = readQuestionToolEntries(event);
+    return entries.length ? <MateQuestionBubble entries={entries} /> : null;
+  }
   if (replica && runId && event.type === "artifact" && event.metadata?.kind === "image") {
     return <>{group.events.map((row) => {
       const id = /^artifact-(-?\d+)$/.exec(row.id)?.[1];
@@ -223,6 +240,15 @@ function InfoGroupImpl({
   if (replica && event.type === "artifact" && ["image", "document", "file", "visualization", "image_generation"].includes(String(event.metadata?.kind))) {
     return <Text as="div" size="xs" tone="muted" className="my-3">File available on {replica.label}</Text>;
   }
+  if (event.type === "artifact" && event.metadata?.source === "assistant_assignment" && typeof event.metadata.assignmentId === "string") {
+    return replica ? <Text size="xs" tone="subtle">Mate task available on {replica.label}</Text> : <AssistantTaskCard assignmentId={event.metadata.assignmentId} runId={runId} />;
+  }
+  const taskInput = event.type === "artifact" ? readAssistantTaskInput(event.metadata?.assistantTaskInput) : null;
+  if (taskInput) {
+    // The canonical task card owns delivery/status activity; keep these native prompt boundaries out of user bubbles.
+    if (taskInput.kind !== "request") return null;
+    return replica ? <Text size="xs" tone="subtle">Mate task available on {replica.label}</Text> : <AssistantTaskCard assignmentId={taskInput.assignmentId} runId={runId} />;
+  }
   if (event.type === "artifact" && event.metadata?.kind === "voice-task") {
     const task = event.metadata.voiceTask as VoiceTaskLink | undefined;
     return task && typeof task.id === "string" ? (
@@ -231,9 +257,14 @@ function InfoGroupImpl({
   }
 
   if (event.type === "artifact" && event.metadata?.kind === "user-prompt") {
+    const questionReply = bubble ? readQuestionReplyEvent(event) : null;
+    if (questionReply) return group.representedByQuestion ? null : <div className="flex min-w-0 flex-col gap-2">
+      {questionReply.answers.map((answer, index) => <MateQuestionAnswer key={index}>{answer}</MateQuestionAnswer>)}
+    </div>;
     const message = (event.content ?? "").trim();
     const isAsyncQuestionReply =
       readAsyncQuestionReply(event.metadata.asyncQuestionReply) !== null;
+    const promptBubbleBackground = bubble ? "bg-mate-user-bubble" : `${floatingChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`;
     const isReview = event.metadata?.isReview === true;
     const issues = (event.metadata?.issues ?? []) as Array<{
       provider: string;
@@ -273,7 +304,8 @@ function InfoGroupImpl({
     );
     const reviewComments = readReviewComments(event.metadata?.reviewComments);
     const documentAnnotations = [...readDocumentAnnotations(event.metadata?.documentAnnotations), ...readDocumentAnnotations(event.metadata?.presentationAnnotations)];
-    const skills = (event.metadata?.skills ?? []) as PromptMarkdownSkill[];
+    const mentions = (event.metadata?.assistantMentions ?? []) as Array<{ id: string; name: string; token: string }>;
+    const skills = [...((event.metadata?.skills ?? []) as PromptMarkdownSkill[]), ...mentions.map(m => ({ name: m.id, displayName: m.name, token: m.token, scope: "assistant", assistantId: m.id, assistantAvatar: assistantOverview?.assistants.find(a => a.id === m.id)?.avatar }))];
 
     if (isReview) {
       const reviewTarget = event.metadata?.reviewTarget as string | undefined;
@@ -323,7 +355,7 @@ function InfoGroupImpl({
     return (
       <div className="w-full overflow-hidden">
         <div className="w-full py-2 flex justify-end">
-          <div className="flex min-w-0 max-w-[80%] flex-col items-end gap-2">
+          <div className={`flex min-w-0 flex-col items-end gap-2 ${bubble ? "w-fit max-w-transcript-bubble" : "max-w-[80%]"}`}>
             {!!event.metadata?.voiceDelegation && (
               <Text
                 as="span"
@@ -366,7 +398,7 @@ function InfoGroupImpl({
             )}
             {message && (
               <div
-                className={`min-w-0 max-w-full ${isAsyncQuestionReply ? "px-3 py-1.5" : "px-3.5 py-2"} rounded-2xl ${floatingChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`}
+                className={`min-w-0 max-w-full ${isAsyncQuestionReply ? "px-3 py-1.5" : "px-3.5 py-2"} rounded-2xl ${promptBubbleBackground}`}
               >
                 <div
                   className={`prose prose-sm dark:prose-invert max-w-none text-left ${
@@ -452,8 +484,11 @@ function InfoGroupImpl({
       .filter((e) => e.type === "artifact" && e.metadata?.kind === "image")
       .map((e) => {
         const absPath = (e.metadata?.path as string | undefined) ?? "";
+        const hash = e.metadata?.imageContentHash;
         return {
           absPath,
+          // A later turn can deliver new bytes at the same path.
+          version: typeof hash === "string" ? hash : e.id,
           fileName:
             (e.metadata?.fileName as string | undefined) ??
             absPath.split("/").pop() ??
@@ -468,8 +503,7 @@ function InfoGroupImpl({
           <ImageArtifact
             key={images[0].absPath}
             runId={runId}
-            absPath={images[0].absPath}
-            fileName={images[0].fileName}
+            image={images[0]}
             onPreview={setPreviewAtt}
           />
         ) : (
@@ -534,6 +568,15 @@ function InfoGroupImpl({
     );
   }
 
+  if (event.type === "artifact" && event.metadata?.source === "assistant_welcome") {
+    const setup = (event.metadata.question as AssistantWelcomeQuestion | undefined)?.profileSetup;
+    if (setup?.saved) return <div className="space-y-3 text-sm text-primary-900 dark:text-primary-100">
+      <AssistantProfileSetupHistory setup={setup} />
+      <div className={bubble ? MESSAGE_BUBBLE : "py-3"}><AgentMarkdown>{event.content}</AgentMarkdown></div>
+    </div>;
+    return <div className={`${bubble ? MESSAGE_BUBBLE : "py-3"} text-primary-900 dark:text-primary-100`}><AgentMarkdown>{event.content}</AgentMarkdown></div>;
+  }
+
   // Codex delivers async questions on agentMessage items. Their report
   // artifacts retain the structured fields, including in saved conversations.
   if (
@@ -543,16 +586,22 @@ function InfoGroupImpl({
     const questions = readAsyncQuestions(event.metadata.questions);
     const artifactId = /^artifact-(\d+)$/.exec(event.id)?.[1];
     if (questions.length > 0) {
-      if (!replica && runId && artifactId)
+      const answer = readAsyncQuestionAnswer(event.metadata.asyncQuestionAnswer);
+      if ((!replica || bubble) && runId && artifactId)
         return (
           <CodexAsyncQuestionCard
             runId={runId}
             artifactId={Number(artifactId)}
             questions={questions}
-            answer={readAsyncQuestionAnswer(event.metadata.asyncQuestionAnswer)}
+            answer={answer?.artifactId === Number(artifactId) ? answer : null}
             state={readAsyncQuestionState(event.metadata.asyncQuestionState)}
+            bubble={bubble}
           />
         );
+      if (bubble) return <MateQuestionBubble entries={questions.map(({ title, options }, index) => ({
+        question: { question: title, options: options?.map(label => ({ label })) },
+        answer: answer?.answers[index],
+      }))} />;
       return (
         <AskUserQuestionDisplay
           params={{
@@ -573,6 +622,7 @@ function InfoGroupImpl({
     return (
       <ArtifactBody
         content={content}
+        bubble={bubble}
         isStreaming={isStreaming}
         interrupted={event.metadata?.interrupted === true}
         previewAtt={previewAtt}
@@ -682,13 +732,19 @@ function AttachmentDocumentCard({
   );
 }
 
+interface GeneratedImage {
+  absPath: string;
+  fileName: string;
+  version: string;
+}
+
 function ImageArtifactGallery({
   runId,
   images,
   onPreview,
 }: {
   runId?: string;
-  images: Array<{ absPath: string; fileName: string }>;
+  images: GeneratedImage[];
   onPreview: (att: { name: string; dataUrl: string }) => void;
 }) {
   const [selectedPath, setSelectedPath] = useState(images[0].absPath);
@@ -728,8 +784,7 @@ function ImageArtifactGallery({
         <ImageArtifact
           key={selected.absPath}
           runId={runId}
-          absPath={selected.absPath}
-          fileName={selected.fileName}
+          image={selected}
           onPreview={onPreview}
           variant="gallery"
         />
@@ -766,14 +821,14 @@ function ImageGalleryThumbnail({
   selected,
   onSelect,
 }: {
-  image: { absPath: string; fileName: string };
+  image: GeneratedImage;
   index: number;
   total: number;
   selected: boolean;
   onSelect: () => void;
 }) {
-  const url = useLocalImageUrl(image.absPath);
-  const [thumbFailed, setThumbFailed] = useState(false);
+  const url = useLocalImageUrl(image.absPath, undefined, image.version);
+  const [failedUrl, setFailedUrl] = useState<string>();
 
   return (
     <Button
@@ -786,14 +841,15 @@ function ImageGalleryThumbnail({
         selected ? "border border-accent/40 outline-none" : "glass-outline"
       }  `}
     >
-      {url && !thumbFailed ? (
+      {url && url !== failedUrl ? (
         <img
+          key={url}
           src={url}
           alt=""
           className="size-full object-contain"
           loading="lazy"
           draggable={false}
-          onError={() => setThumbFailed(true)}
+          onError={() => setFailedUrl(url)}
         />
       ) : (
         <Picture className="size-5 text-primary-500" aria-hidden />
@@ -804,22 +860,20 @@ function ImageGalleryThumbnail({
 
 function ImageArtifact({
   runId,
-  absPath,
-  fileName,
+  image: { absPath, fileName, version },
   onPreview,
   variant = "preview",
 }: {
-  absPath: string;
-  fileName: string;
+  image: GeneratedImage;
   onPreview: (att: { name: string; dataUrl: string }) => void;
   runId?: string;
   /** `gallery` fills the selected-image stage; `preview` keeps the single-image size. */
   variant?: "preview" | "gallery";
 }) {
   const atlas = useSaveToAtlas();
-  const url = useLocalImageUrl(absPath);
+  const url = useLocalImageUrl(absPath, undefined, version);
   const { revealInFolder } = useCapabilities();
-  const [thumbFailed, setThumbFailed] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string>();
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{
     x: number;
@@ -945,8 +999,9 @@ function ImageArtifact({
         <div
           className={`flex items-center justify-center overflow-hidden ${variant === "gallery" ? "aspect-square w-full max-h-144" : "max-h-144 max-w-[24rem]"}`}
         >
-          {url && !thumbFailed ? (
+          {url && url !== failedUrl ? (
             <img
+              key={url}
               src={url}
               alt={fileName}
               className={
@@ -956,7 +1011,7 @@ function ImageArtifact({
               }
               loading="lazy"
               draggable={false}
-              onError={() => setThumbFailed(true)}
+              onError={() => setFailedUrl(url)}
             />
           ) : (
             <div
@@ -974,7 +1029,7 @@ function ImageArtifact({
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         aria-label={`Open actions for ${fileName}`}
-        className="absolute right-2 top-2 flex items-center gap-1 rounded-lg glass-outline bg-primary-950/20 px-2.5 py-1.5 text-xs font-medium text-white opacity-0 backdrop-blur-sm transition-opacity hover:bg-primary-950/50 group-hover/image-preview:opacity-100 group-focus-within/image-preview:opacity-100 focus-visible:opacity-100"
+        className="absolute right-2 top-2 flex items-center gap-1 rounded-lg bg-primary-950 px-2.5 py-1.5 text-xs font-medium text-action-foreground opacity-0 hover:bg-primary-800 group-hover/image-preview:opacity-100 group-focus-within/image-preview:opacity-100 focus-visible:opacity-100"
       >
         Open
         <ArrowUp className="size-3.5  rotate-180" />
@@ -986,12 +1041,14 @@ function ImageArtifact({
 
 function ArtifactBody({
   content,
+  bubble,
   isStreaming,
   interrupted,
   previewAtt,
   onPreview,
 }: {
   content: string;
+  bubble: boolean;
   isStreaming: boolean;
   interrupted: boolean;
   previewAtt: { name: string; dataUrl: string } | null;
@@ -1003,7 +1060,7 @@ function ArtifactBody({
   const isRevealing = isStreaming || displayContent !== content;
 
   return (
-    <div className="overflow-hidden">
+    <div className={`overflow-hidden ${bubble ? MESSAGE_BUBBLE : ""}`}>
       <div className="prose prose-sm dark:prose-invert max-w-none relative">
         <AgentMarkdown
           className={isRevealing ? "streaming-text" : undefined}

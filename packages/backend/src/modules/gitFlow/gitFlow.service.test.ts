@@ -140,6 +140,38 @@ describe("gitFlowService — live branch invariants", () => {
     );
   });
 
+  it("uses the GitHub CLI account as the publish wizard’s default owner", async () => {
+    execFileMock.mockImplementationOnce((_command, _args, _options, callback) =>
+      callback(null, { stdout: "octocat\n", stderr: "" }),
+    );
+
+    await expect(gitFlowService.getPublishPreflight("ws-1")).resolves.toMatchObject({
+      ghReady: true,
+      login: "octocat",
+      suggestedName: "repo",
+    });
+    expect(execFileMock).toHaveBeenCalledWith(
+      "gh",
+      ["api", "user", "--jq", ".login"],
+      expect.objectContaining({ timeout: 15_000, env: expect.objectContaining({ GH_PROMPT_DISABLED: "1" }) }),
+      expect.any(Function),
+    );
+  });
+
+  it.each([
+    { code: "ENOENT", stderr: "", status: "missing" },
+    { code: 4, stderr: "", status: "signed-out" },
+    { code: 1, stderr: "gh: Bad credentials (HTTP 401)", status: "signed-out" },
+    { code: 1, stderr: "error connecting to api.github.com", status: "unavailable" },
+  ])("reports GitHub CLI status $status for exit code $code", async ({ code, stderr, status }) => {
+    execFileMock.mockImplementationOnce((_command, _args, _options, callback) =>
+      callback(Object.assign(new Error("gh failed"), { code, stderr })),
+    );
+
+    await expect(gitFlowService.getGitHubCliStatus()).resolves.toEqual({ status });
+    expect(workspaceMock.get).not.toHaveBeenCalled();
+  });
+
   it("commits and pushes the branch captured at action start", async () => {
     gitMock.getStagedDiff.mockResolvedValue("diff");
     gitMock.commit.mockResolvedValue({

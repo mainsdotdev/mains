@@ -18,7 +18,6 @@ export type {
   GitlabProject,
   TrelloBoard,
   SentryProject,
-  SocketDevOrganization,
   ConnectionResource,
   ConnectionStateRecord,
   ConnectionStateResponse,

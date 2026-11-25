@@ -116,7 +116,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
   const { workspaceId, selectedWorkspace, currentWorkspace, workspaces } =
     useWorkspaceData(providerId, mode);
   const switchableWorkspaceIds = useMemo(
-    () => (mode === "developer" ? workspaces.map((w) => w.id) : []),
+    () => (mode === "developer" ? workspaces.filter((w) => !w.isReplica).map((w) => w.id) : []),
     [mode, workspaces],
   );
 
@@ -192,7 +192,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     mode,
     visibleRunId,
     switchableWorkspaceIds,
-    { retainedRunIds: [...(singleChatTab && chatTabRunId ? [chatTabRunId] : []), ...(pendingRunId ? [pendingRunId] : [])] },
+    { retainedRunIds: [...openRunIds, ...(singleChatTab && chatTabRunId ? [chatTabRunId] : []), ...(pendingRunId ? [pendingRunId] : [])] },
   );
 
   const tabRuns = useMemo(() => {

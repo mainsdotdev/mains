@@ -1,3 +1,4 @@
+import type { PrActivityInput, PrPageInput } from "@mains/contracts/pull-requests";
 // ─────────────────────────────────────────────────────────────
 // Pull Requests IPC Handlers
 // ─────────────────────────────────────────────────────────────
@@ -26,6 +27,16 @@ export function registerPullRequestsIpc(): void {
   ipcMain.handle(
     CHANNELS.pullRequests.getDetail,
     handle((input: PrRefInput) => pullRequestsService.getDetail(input)),
+  );
+
+  ipcMain.handle(
+    CHANNELS.pullRequests.getCommits,
+    handle((input: PrPageInput) => pullRequestsService.getCommits(input)),
+  );
+
+  ipcMain.handle(
+    CHANNELS.pullRequests.getActivity,
+    handle((input: PrActivityInput) => pullRequestsService.getActivity(input)),
   );
 
   ipcMain.handle(
@@ -88,6 +99,8 @@ export function unregisterPullRequestsIpc(): void {
     CHANNELS.pullRequests.getAvailability,
     CHANNELS.pullRequests.search,
     CHANNELS.pullRequests.getDetail,
+    CHANNELS.pullRequests.getCommits,
+    CHANNELS.pullRequests.getActivity,
     CHANNELS.pullRequests.getDiff,
     CHANNELS.pullRequests.merge,
     CHANNELS.pullRequests.markReady,

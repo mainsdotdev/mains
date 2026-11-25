@@ -374,8 +374,8 @@ export function DocumentRenderHost({
           </div>
         )}
       </div>
-      {status === "ready" && annotating && annotationSurface && onExitAnnotation && (
-        <DocumentAnnotations surface={annotationSurface} doc={doc} onExit={onExitAnnotation} />
+      {status === "ready" && annotationSurface && (
+        <DocumentAnnotations surface={annotationSurface} doc={doc} active={annotating} onExit={onExitAnnotation} />
       )}
       {status === "ready" && doc.docType === "xlsx" && (
         <SheetTabs

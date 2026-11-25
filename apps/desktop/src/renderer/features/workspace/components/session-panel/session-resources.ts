@@ -180,6 +180,7 @@ function contextResources(context: readonly SessionSourceContextRow[]): SessionR
     const metadata = record(item.metadata) ?? {};
     const ref = item.ref ?? "";
     const source = text(metadata.source);
+    if (source === "assistant_mention") continue;
     const origin = text(metadata.origin);
     const createdAt = timestamp(item.createdAt);
 

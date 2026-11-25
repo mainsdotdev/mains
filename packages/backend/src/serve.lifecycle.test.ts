@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import DatabaseClient from "./db/client";
 import { databaseOwnershipPath } from "./db/database-ownership";
 import { configureIpcMainAdapter } from "./ipc-kit/ipc-main";
-import { registeredChannels } from "./ipc-kit/handler-registry";
+import { invokeHandler, registeredChannels } from "./ipc-kit/handler-registry";
 import { installTestBackendRuntime } from "../test/backend-runtime";
 import { startBackendServer, type BackendServer, type ServeOptions } from "./serve";
 import { withWorkspaceIntake } from "./modules/workspace/workspace-intake-lifecycle";
@@ -15,6 +15,35 @@ import { atlasBookmarks } from "./modules/atlas/atlas.bookmarks";
 import { terminalService } from "./modules/terminal";
 import * as providers from "./modules/providers";
 import { readUsagePrices } from "./modules/stats/stats.pricing";
+import { once } from "node:events";
+import { execFileSync } from "node:child_process";
+import WebSocket from "ws";
+import { buildSubprotocols } from "@mains/contracts/ws-protocol";
+import { CHANNELS } from "@mains/contracts/channels";
+import type { PendingApproval } from "@mains/contracts/runs";
+import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_PINNING_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY, type MobileMateChange, type MobileMateDirectory, type MobileMateRoutines } from "@mains/contracts/assistants";
+import { getDb } from "./db/client";
+import { providers as providerTable } from "./db/schema";
+import { eq } from "drizzle-orm";
+import { createSpace, createWorkspace } from "../test/factories";
+import * as providerAdapters from "./modules/providers/adapters";
+import { createFakeDriver } from "./modules/providers/adapters/fake.driver";
+import { createWorkRunAdapter } from "./modules/providers/adapters/work-run-core";
+import { insertRunInputArtifact } from "./modules/runs/run-input-artifact";
+
+async function socketInvoke(socket: WebSocket, id: number, channel: string, args: unknown[], commandId?: string) {
+  const response = new Promise<unknown>((resolve, reject) => {
+    const onMessage = (data: WebSocket.RawData) => {
+      const reply = JSON.parse(data.toString());
+      if (reply.kind !== "response" || reply.id !== id) return;
+      socket.off("message", onMessage);
+      resolve(reply.result);
+    };
+    socket.on("message", onMessage);
+    socket.send(JSON.stringify({ kind: "invoke", id, channel, args, commandId }), error => { if (error) reject(error); });
+  });
+  return response;
+}
 
 let directory: string, restoreRuntime: () => void, restoreIpc: () => void;
 let server: BackendServer | undefined, retry: (() => Promise<void>) | undefined;
@@ -36,6 +65,238 @@ afterEach(async () => {
 });
 
 describe("backend host acquisition and shutdown", () => {
+  it("serves the first Mate flows to an actual paired device with command receipts", async () => {
+    server = await start();
+    const endpoint = `http://127.0.0.1:${server.port}`;
+    const { code } = await server.createPairingCode([endpoint]);
+    const pairing = await fetch(`${endpoint}/pair`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code, deviceName: "QA iPhone", platform: "ios" }),
+    });
+    expect(pairing.status).toBe(200);
+    const { deviceToken } = await pairing.json() as { deviceToken: string };
+    const openDevice = () => new WebSocket(`ws://127.0.0.1:${server!.port}`, buildSubprotocols(deviceToken));
+    let socket = openDevice();
+    let id = 0;
+    const invoke = (channel: string, args: unknown[], commandId?: string) => socketInvoke(socket, ++id, channel, args, commandId);
+    const models = vi.spyOn(providers.providersService, "getModels").mockResolvedValue([{ id: "test-model", displayName: "Test model", supportedEffortLevels: ["high"] }]);
+    const driver = createFakeDriver();
+    const workerReleased = deferred();
+    const createSession = driver.driver.createSession;
+    const executePrompt = driver.driver.executePrompt;
+    const workerSessions = new Set<unknown>();
+    driver.driver.createSession = async request => {
+      const session = await createSession(request);
+      if (request.configSnapshot?.assistantId && request.mode === "developer") workerSessions.add(session.session);
+      return session;
+    };
+    driver.driver.executePrompt = async (session, prompt, event, signal) => {
+      if (workerSessions.has(session)) await workerReleased.promise;
+      return executePrompt(session, prompt, event, signal);
+    };
+    driver.enable("resumeSession");
+    const resume = driver.driver.resumeSession!;
+    driver.driver.resumeSession = async request => {
+      const session = await resume(request);
+      if (request.clientUserMessageId) {
+        await insertRunInputArtifact(request.runId, {
+          type: "artifact", kind: "user-prompt", content: request.message, metadata: { clientUserMessageId: request.clientUserMessageId },
+        });
+        await request.onInputAccepted?.(request.clientUserMessageId);
+      }
+      return session;
+    };
+    driver.driver.generateText = async () => JSON.stringify({ description: "Build checks", instructions: "Summarize the sample." });
+    const adapter = vi.spyOn(providerAdapters, "createWorkAdapter").mockReturnValue(createWorkRunAdapter(driver.driver));
+    try {
+      await once(socket, "open");
+      const db = getDb();
+      const accountId = "default";
+      db.update(providerTable).set({ isEnabled: true }).where(eq(providerTable.id, "codex")).run();
+      const space = createSpace(db, { id: "mate-test-code", accountId, providerId: "codex", mode: "developer" });
+      const repo = path.join(directory, "mate-code");
+      execFileSync("git", ["init", "--quiet", repo]);
+      const workspace = createWorkspace(db, { id: "mate-test-repo", accountId, rootPath: repo });
+      expect(await invoke(CHANNELS.backend.describe, [])).toMatchObject({
+        success: true, data: { capabilities: expect.arrayContaining(["assistants", MOBILE_MATE_TEAM_CREATION_CAPABILITY, MOBILE_MATE_PINNING_CAPABILITY]) },
+      });
+      expect(await invoke(CHANNELS.assistants.overview, [accountId])).toMatchObject({ success: false });
+      expect(await invoke(CHANNELS.assistants.mobileDirectory, ["foreign"])).toMatchObject({ success: false });
+
+      const teamInput = { accountId, name: "Mobile team" };
+      expect(await invoke(CHANNELS.assistants.createTeam, [teamInput])).toMatchObject({ success: false, error: expect.stringContaining("commandId") });
+      expect(await invoke(CHANNELS.assistants.createTeam, [{ ...teamInput, accountId: "foreign" }], "foreign-team"))
+        .toMatchObject({ success: false, error: expect.stringContaining("Account is unavailable") });
+      const createdTeam = await invoke(CHANNELS.assistants.createTeam, [teamInput], "create-team") as { data: { id: string; name: string } };
+      expect(createdTeam).toEqual({ success: true, data: { id: expect.any(String), name: teamInput.name } });
+
+      const input = { accountId, name: "Release", teamId: createdTeam.data.id, spaceId: space.id, model: "test-model", effort: "high", profileSetup: true };
+      expect(await invoke(CHANNELS.assistants.create, [input])).toMatchObject({ success: false, error: expect.stringContaining("commandId") });
+      const created = await invoke(CHANNELS.assistants.create, [input], "create-mate") as { success: boolean; data: { id: string } };
+      expect(created).toMatchObject({ success: true, data: { id: expect.any(String) } });
+      const disconnected = once(socket, "close");
+      socket.close();
+      await disconnected;
+      socket = openDevice();
+      await once(socket, "open");
+      expect(await invoke(CHANNELS.assistants.createTeam, [teamInput], "create-team")).toEqual(createdTeam);
+      expect(await invoke(CHANNELS.assistants.create, [input], "create-mate")).toEqual(created);
+      const mateId = created.data.id;
+      const mateDirectory = await invoke(CHANNELS.assistants.mobileDirectory, [accountId]) as { data: MobileMateDirectory };
+      expect(mateDirectory).toMatchObject({
+        success: true, data: { teams: [createdTeam.data], mates: [{ id: mateId, teamId: createdTeam.data.id, needsSetup: true, welcome: null }] },
+      });
+      expect(mateDirectory.data.mates[0]).not.toHaveProperty("details");
+      expect(await invoke(CHANNELS.assistants.setupProfile, [accountId, mateId, { action: "answer", step: 0, answer: "Release help" }], "answer-setup"))
+        .toMatchObject({ success: true });
+      const profile = { description: "Build checks", instructions: "Summarize the sample." };
+      await vi.waitFor(async () => expect(await invoke(CHANNELS.assistants.mobileDirectory, [accountId, mateId])).toMatchObject({
+        success: true, data: { mates: [{
+          details: { spaceName: space.name, effort: "high", instructions: "" },
+          welcome: { question: { profileSetup: { draft: profile } } },
+        }] },
+      }));
+      expect(await invoke(CHANNELS.assistants.setupProfile, [accountId, mateId, { action: "save", profile }], "save-setup")).toMatchObject({ success: true });
+
+      const saved = await invoke(CHANNELS.assistants.mobileDirectory, [accountId, mateId]) as { data: MobileMateDirectory };
+      expect(saved).toMatchObject({ success: true, data: { mates: [{
+        id: mateId, description: profile.description, needsSetup: false,
+        details: { spaceName: space.name, effort: "high", instructions: profile.instructions },
+      }] } });
+      const welcomeRunId = saved.data.mates[0].welcome!.runId;
+      const sent = await invoke(CHANNELS.assistants.send, [{
+        accountId, assistantId: mateId, message: "Say hello", requestId: `welcome-${mateId}`, runId: welcomeRunId,
+      }], "new-mate-chat") as { data: { runId: string } };
+      expect(sent).toMatchObject({ success: true, data: { runId: expect.any(String) } });
+      expect(await invoke(CHANNELS.assistants.conversations, [accountId, mateId])).toMatchObject({
+        success: true, data: expect.arrayContaining([expect.objectContaining({ id: welcomeRunId, title: "Say hello" })]),
+      });
+
+      const token = `@assistant-${mateId}`;
+      const codeRun = await invoke(CHANNELS.runs.execute, [{ accountId, providerId: "codex", mode: "developer", spaceId: space.id,
+        workspaceId: workspace.id, goal: `${token} Check the sample`, clientPromptId: "mate-call",
+        initialContext: [{ kind: "note", metadata: { source: "assistant_mention", token, assistantId: mateId, requestId: "selection" } }],
+      }], "start-code") as { data: { runId: string } };
+      const runId = codeRun.data.runId;
+      const { assistantsService, assistantWork } = await import("./modules/assistants");
+      const task = await vi.waitFor(() => {
+        const value = assistantsService.overview(accountId).assignments.find(item => item.fromRunId === runId);
+        expect(value?.status).toBe("running");
+        return value!;
+      });
+      expect(await invoke(CHANNELS.runs.getHistory, [{ runId, direction: "latest", profile: "mobile", conversationWindow: true }])).toMatchObject({
+        success: true, data: { artifacts: expect.arrayContaining([
+          expect.objectContaining({ metadata: expect.objectContaining({ source: "assistant_assignment", assignmentId: task.id }) }),
+        ]) },
+      });
+      expect(await invoke(CHANNELS.assistants.mobileAssignment, [accountId, sent.data.runId, task.id])).toMatchObject({ success: false });
+      const queued = await assistantWork.assign({ accountId, toAssistantId: mateId, taskKey: "queued-work", title: "Next release", prompt: "Review the next release" });
+      const teamWorkArgs = [accountId, createdTeam.data.id];
+      const question = assistantWork.tool(task.workerRunId!, "AskAssistantQuestion", { question: "Which release should I review?" });
+      const request = await vi.waitFor(async () => {
+        const { data } = await invoke(CHANNELS.runs.listPendingApprovals, [task.workerRunId]) as { data: PendingApproval[] };
+        expect(data).toHaveLength(1);
+        return data[0];
+      });
+      const waiting = await invokeHandler(CHANNELS.assistants.teamWork, teamWorkArgs);
+      expect(waiting).toMatchObject({ success: true, data: { items: expect.arrayContaining([
+        expect.objectContaining({ id: task.id, status: "needs_you", pendingKinds: ["ask_user"], runId: task.workerRunId }),
+        expect.objectContaining({ id: queued.id, status: "queued", runId: null }),
+      ]) } });
+      expect(JSON.stringify(waiting)).not.toContain(request.approvalToken);
+      expect(JSON.stringify(waiting)).not.toContain(request.question);
+      expect(JSON.stringify(waiting)).not.toContain(`"id":"${task.workerRunId}"`);
+      expect(await invoke(CHANNELS.assistants.teamWork, teamWorkArgs)).toMatchObject({ success: false });
+      expect(await invoke(CHANNELS.runs.toolApprovalResponse, [{ requestId: request.requestId, approvalToken: request.approvalToken,
+        approved: true, answer: "November release" }], "answer-team-work-question")).toMatchObject({ success: true });
+      await expect(question).resolves.toMatchObject({ status: "answered", answer: "November release" });
+      expect(await invokeHandler(CHANNELS.assistants.teamWork, teamWorkArgs)).toMatchObject({ success: true, data: {
+        items: expect.arrayContaining([expect.objectContaining({ id: task.id, status: "running", pendingKinds: [] })]),
+      } });
+      await assistantWork.cancel(accountId, queued.id);
+      await assistantWork.report(task.workerRunId!, { assignmentId: task.id, status: "completed", result: "Sample checked", evidence: ["Checked the fixture repository"] });
+      expect(await invokeHandler(CHANNELS.assistants.teamWork, teamWorkArgs)).toMatchObject({ success: true, data: {
+        items: expect.arrayContaining([expect.objectContaining({ id: task.id, status: "completed" })]),
+      } });
+      expect(await invoke(CHANNELS.assistants.mobileAssignment, [accountId, runId, task.id])).toMatchObject({
+        success: true, data: { workerRunId: task.workerRunId, result: "Sample checked", status: "completed" },
+      });
+      await vi.waitFor(() => expect(driver.calls.resumeSession.some(request => request.runId === runId && request.message.includes("Sample checked"))).toBe(true));
+
+      expect(await invoke(CHANNELS.backend.describe, [])).toMatchObject({ data: { capabilities: expect.arrayContaining([MOBILE_MATE_INFO_CAPABILITY]) } });
+      expect(await invoke(CHANNELS.pulse.getAll, [])).toMatchObject({ success: false });
+      const team = assistantsService.createTeam({ accountId, name: "Release team" });
+      expect(await invokeHandler(CHANNELS.assistants.teamWork, [accountId, team.id])).toMatchObject({ success: true, data: { items: [] } });
+      const reviewer = await assistantsService.create({ ...input, ...profile, name: "Reviewer", teamId: team.id, profileSetup: false });
+      const teammate = await assistantsService.create({ ...input, ...profile, name: "Teammate", teamId: team.id, profileSetup: false });
+      const manage = (id: string, change: MobileMateChange, key: string) =>
+        invoke(CHANNELS.assistants.mobileManage, [accountId, id, change, key], key);
+      const accepted = { success: true, data: { accepted: true } };
+      const pin = { accountId, id: reviewer.id, pinned: true };
+      expect(await invoke(CHANNELS.assistants.setPinned, [pin], "direct-pin")).toMatchObject({ success: false });
+      expect(await invokeHandler(CHANNELS.assistants.setPinned, [{ ...pin, accountId: "foreign" }])).toMatchObject({ success: false });
+      expect(await invokeHandler(CHANNELS.assistants.setPinned, [pin])).toMatchObject({ success: true });
+      const pinnedOnDesktop = await invoke(CHANNELS.assistants.mobileDirectory, [accountId, reviewer.id]);
+      expect(pinnedOnDesktop).toMatchObject({ success: true, data: { mates: [{ id: reviewer.id, pinnedAt: { $date: expect.any(String) } }] } });
+      expect(await manage(reviewer.id, { action: "setPinned", pinned: false }, "remove-pin")).toEqual(accepted);
+      expect(await invokeHandler(CHANNELS.assistants.overview, [accountId])).toMatchObject({ success: true, data: {
+        assistants: expect.arrayContaining([expect.objectContaining({ id: reviewer.id, pinnedAt: null })]),
+      } });
+      const note = { id: "mobile-note", title: "Release checklist", content: "Note ".repeat(300).trim(), revision: 0, pinned: true, shared: true };
+      const saveNote: MobileMateChange = { action: "saveMemory", note, expectedTeamId: team.id };
+      expect(await invoke(CHANNELS.assistants.mobileManage, [accountId, reviewer.id, saveNote, "note-key"])).toMatchObject({ success: false, error: expect.stringContaining("commandId") });
+      expect(await manage(reviewer.id, saveNote, "note-key")).toEqual(accepted);
+      expect(await manage(reviewer.id, saveNote, "note-key")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileMemory, [accountId, teammate.id])).toMatchObject({
+        success: true, data: [{ id: note.id, content: note.content.slice(0, 400), revision: 1, shared: true }],
+      });
+      expect(await invoke(CHANNELS.assistants.mobileMemory, [accountId, teammate.id, note.id])).toMatchObject({ success: true, data: { content: note.content } });
+      expect(await invoke(CHANNELS.assistants.mobileMemory, [accountId, mateId, note.id])).toMatchObject({ success: false });
+      expect(await manage(mateId, { action: "deleteMemory", id: note.id, revision: 1 }, "delete-foreign")).toMatchObject({ success: false });
+      expect(await manage(reviewer.id, { ...saveNote, note: { ...note, revision: 1, pinned: false } }, "unpin-note")).toEqual(accepted);
+      expect(await manage(reviewer.id, { action: "deleteMemory", id: note.id, revision: 1 }, "delete-stale")).toMatchObject({ success: false });
+
+      expect(await invoke(CHANNELS.assistants.mobileAssignments, [accountId, mateId, task.id])).toMatchObject({ success: true, data: { workerRunId: task.workerRunId, result: "Sample checked" } });
+      expect(await invoke(CHANNELS.assistants.mobileAssignments, [accountId, reviewer.id, task.id])).toMatchObject({ success: false });
+      const assignment = { action: "assign", title: "Check release", prompt: "Review the release summary." } as const;
+      expect(await manage(teammate.id, assignment, "new-assignment")).toEqual(accepted);
+      expect(await manage(teammate.id, assignment, "new-assignment")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileAssignments, [accountId, reviewer.id])).toMatchObject({
+        success: true, data: { activeCount: 0, items: [], hasMore: false },
+      });
+      expect(await invoke(CHANNELS.assistants.mobileAssignments, [accountId, teammate.id])).toMatchObject({
+        success: true, data: { activeCount: 1, items: [{ title: assignment.title, assignee: { id: teammate.id } }] },
+      });
+
+      const schedule = { title: "Morning review", prompt: "Check the release.", frequency: "daily", dayOfWeek: null, hour: 9, minute: 20, timezone: "Europe/Istanbul" } as const;
+      expect(await manage(reviewer.id, { action: "createRoutine", schedule, workspaceId: workspace.id }, "create-routine")).toEqual(accepted);
+      const routines = await invoke(CHANNELS.assistants.mobileRoutines, [accountId, reviewer.id]) as { data: MobileMateRoutines };
+      expect(routines).toMatchObject({ success: true, data: { items: [{ ...schedule, workspaceId: workspace.id, isActive: true }] } });
+      const routine = routines.data.items[0];
+      expect(await manage(teammate.id, { action: "toggleRoutine", id: routine.id, isActive: false }, "pause-foreign")).toMatchObject({ success: false });
+      expect(await manage(reviewer.id, { action: "updateRoutine", id: routine.id, revision: routine.revision, schedule: { ...schedule, hour: 8 } }, "update-routine")).toEqual(accepted);
+      expect(await manage(reviewer.id, { action: "toggleRoutine", id: routine.id, isActive: false }, "pause-routine")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileRoutines, [accountId, reviewer.id, routine.id])).toMatchObject({ success: true, data: { hour: 8, isActive: false } });
+
+      const expectedProfile = { ...profile, name: reviewer.name, avatar: reviewer.avatar };
+      expect(await manage(reviewer.id, { action: "updateProfile", expectedProfile, profile: { ...expectedProfile, name: "Release reviewer" } }, "edit-profile")).toEqual(accepted);
+      expect(await manage(reviewer.id, { action: "archive", archived: true }, "archive-mate")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileDirectory, [accountId, null, true])).toMatchObject({ success: true, data: { mates: [{ id: reviewer.id, name: "Release reviewer", isArchived: true }] } });
+      expect(await manage(reviewer.id, { action: "archive", archived: false }, "restore-mate")).toEqual(accepted);
+      expect(await manage(reviewer.id, { action: "runRoutine", id: routine.id }, "run-routine")).toEqual(accepted);
+      expect(await manage(reviewer.id, { action: "runRoutine", id: routine.id }, "run-routine")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileRoutines, [accountId, reviewer.id, routine.id])).toMatchObject({ success: true, data: { lastAssignmentStatus: expect.any(String) } });
+      expect(await manage(reviewer.id, { action: "deleteRoutine", id: routine.id }, "delete-routine")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileRoutines, [accountId, reviewer.id])).toMatchObject({ success: true, data: { items: [] } });
+    } finally {
+      workerReleased.resolve();
+      socket.close();
+      await server.close();
+      models.mockRestore();
+      adapter.mockRestore();
+    }
+  });
+
   it("retires price refresh before releasing the host and ignores its late network response", async () => {
     const entered = deferred(); let finish!: (response: Response) => void; let signal: AbortSignal | undefined;
     const response = new Promise<Response>((resolve) => { finish = resolve; });

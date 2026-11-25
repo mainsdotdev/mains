@@ -51,8 +51,11 @@ const initialState: RunQueueState = { byOwner: {} };
 /** Shared by the reducer and async consumer, including its final pre-send check. */
 export function canStartRunMessage(queue: ConversationQueue | undefined, id: string, delivery: "queue" | "steer"): boolean {
   if (!queue || queue.messages.some((message) => message.status === "sending")) return false;
-  if (queue.messages.find((message) => message.id === id)?.status !== "queued") return false;
-  return delivery === "steer" || queue.messages[0]?.id === id && (!queue.pauseReason || !!queue.resumeRequested);
+  const message = queue.messages.find((message) => message.id === id);
+  if (message?.status !== "queued") return false;
+  return delivery === "steer"
+    ? !message.contextItems.some(item => item.kind === "assistant")
+    : queue.messages[0]?.id === id && (!queue.pauseReason || !!queue.resumeRequested);
 }
 
 export function canSubmitRunMessage(queue: ConversationQueue | undefined, id: string, preparationRevision: number): boolean {

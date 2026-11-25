@@ -11,6 +11,7 @@ import McpApp from "@/routes/McpApp";
 // Off the boot path (`/` lands on the workspace page, so it stays eager).
 // Loading these lazily keeps their feature graphs out of the startup script
 // eval. Plugins keeps its page shell eager and loads its content inside it.
+const Assistants = lazy(() => import("@/routes/Assistants"));
 const Atlas = lazy(() => import("@/routes/Atlas"));
 const Settings = lazy(() => import("@/routes/Settings"));
 const Pulse = lazy(() => import("@/routes/Pulse"));
@@ -61,6 +62,7 @@ export function MainRoutes() {
         <Route path="/atlas/:itemId" element={<Atlas />} />
         <Route path="/plugins" element={<PluginsPage />} />
         <Route path="/apps/:appId" element={<McpApp />} />
+        <Route path="/assistants" element={<Assistants />} />
         <Route path="/pulse" element={<Pulse />} />
         <Route path="/bridge" element={<Bridge />} />
         <Route path="/relay" element={<Navigate to="/settings?section=backends" replace />} />

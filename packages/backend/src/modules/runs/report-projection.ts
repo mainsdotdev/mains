@@ -6,6 +6,7 @@ interface Report {
   nativeId: string;
   event: WorkRunArtifactEvent;
   persisting: boolean;
+  requiresCompletedItem: boolean;
 }
 const parentReport = (event: WorkRunArtifactEvent) => event.kind === "report" && event.metadata?.isFromSubagent !== true && event.metadata?.voice !== true;
 
@@ -33,6 +34,7 @@ export function createReportProjection() {
     const id = previous && !previous.persisting ? previous.event.streamId! : `${nativeId}-${scope}-${++sequence}`;
     const report: Report = {
       nativeId, persisting: false,
+      requiresCompletedItem: event.requiresCompletedItem === true,
       event: { ...event, streamId: id, metadata: { ...event.metadata, streamId: id,
         ...(previous?.event.metadata?.turnId !== undefined && !previous.persisting
           ? { turnId: previous.event.metadata.turnId } : turnId !== null ? { turnId } : {}) } },
@@ -52,7 +54,8 @@ export function createReportProjection() {
     }
     let report = typeof id === "string" ? pending.get(id) ?? active.get(id) : undefined;
     if (id === undefined && event.content?.trim()) {
-      report = [...pending.values()].find((entry) => entry.event.content?.trim() && event.content!.trim().startsWith(entry.event.content.trim()));
+      report = [...pending.values()].find((entry) => !entry.requiresCompletedItem && entry.event.content?.trim() &&
+        event.content!.trim().startsWith(entry.event.content.trim()));
     }
     if (!report) {
       const final = typeof id === "string" ? lastFinal.get(id) : undefined;
@@ -71,6 +74,15 @@ export function createReportProjection() {
 
   return {
     stream, prepare,
+    completedPreview(event: WorkRunArtifactEvent): WorkRunArtifactEvent | undefined {
+      const id = event.streamId;
+      if (!parentReport(event) || !id || !pending.get(id)?.requiresCompletedItem) return undefined;
+      // Replace the draft as soon as the completed item is available, even
+      // while persistence is pending or the reader's history window is frozen.
+      return { ...event, ephemeral: true, metadata: {
+        ...event.metadata, source: "agent_message_streaming", streaming: false,
+      } };
+    },
     completed(event: WorkRunArtifactEvent): boolean {
       if (!parentReport(event)) return false;
       const id = event.metadata?.streamId ?? event.streamId;
@@ -87,6 +99,19 @@ export function createReportProjection() {
       if (active.get(report.nativeId) === report) active.delete(report.nativeId);
       lastFinal.set(report.nativeId, { id, content: event.content });
     },
-    pending: () => [...pending.values()].map((report) => report.event),
+    settle() {
+      const recoverable: WorkRunArtifactEvent[] = [];
+      const discarded: WorkRunArtifactEvent[] = [];
+      for (const [id, report] of pending) {
+        if (report.requiresCompletedItem && !report.persisting) {
+          pending.delete(id);
+          if (active.get(report.nativeId) === report) active.delete(report.nativeId);
+          discarded.push({ ...report.event, content: "" });
+        } else {
+          recoverable.push(report.event);
+        }
+      }
+      return { recoverable, discarded };
+    },
   };
 }

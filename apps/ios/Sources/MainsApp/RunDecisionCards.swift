@@ -1,16 +1,22 @@
 import SwiftUI
 
 struct RunDecisionCards: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let runID: String
     let providerID: String
     var body: some View {
-        if session.viewingRunID == runID, let run = session.conversations.first(where: { $0.id == runID }), run.isReplica != true {
+        if session.viewingRunID == runID, let run = session.conversations.first(where: { $0.id == runID }), run.isReplica != true,
+           session.waitingForDecision || session.pendingQuestions != nil {
             TimelineView(.periodic(from: .now, by: 1)) { clock in
                 let approvals = session.pendingApprovals.filter { $0.runId == runID && $0.expiresAt > clock.date }
                 VStack(spacing: 16) {
                     ForEach(approvals) { approval in
-                        PendingApprovalCard(session: session, approval: approval, providerID: providerID, now: clock.date)
+                        if !session.showsPlanApprovalInline(approval) {
+                            PendingApprovalCard(session: session, approval: approval, providerID: providerID, now: clock.date)
+                        }
                     }
                     if approvals.isEmpty, let questions = session.pendingQuestions {
                         AsyncQuestionCard(session: session, pending: questions, providerID: providerID)
@@ -23,6 +29,9 @@ struct RunDecisionCards: View {
 }
 
 private struct PendingApprovalCard: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let approval: PendingApproval
     let providerID: String
@@ -54,7 +63,6 @@ private struct PendingApprovalCard: View {
                     Label(isTool ? display.label : approval.kind == "ask_user" ? "Question" : "Input needed",
                           systemImage: isTool ? display.symbol : "questionmark.bubble")
                         .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, alignment: .leading)
-                    if delivery.phase == .sending { ProgressView().controlSize(.mini) }
                     if let risk = display.risk {
                         Text("\(risk.capitalized) risk").font(.caption2.weight(.medium)).foregroundStyle(risk == "high" ? .red : risk == "medium" ? .orange : .green)
                     }
@@ -67,7 +75,8 @@ private struct PendingApprovalCard: View {
                         Text(remaining).font(.caption.monospacedDigit()).foregroundStyle(.secondary).accessibilityLabel("Time remaining: \(remaining)")
                     }
                 }
-                Text(display.title).font(isTool ? .subheadline.weight(.medium) : .headline).accessibilityIdentifier("approvalTitle")
+                Text(display.title).font(isTool ? .subheadline.weight(.medium) : .headline)
+                    .accessibilityIdentifier("approvalTitle")
                 if isTool {
                     ApprovalPreviewViewport {
                         VStack(alignment: .leading, spacing: 8) {
@@ -252,6 +261,9 @@ private struct PendingApprovalCard: View {
 
 /// Keep the footer reachable without truncating the proposed command or connector parameters.
 private struct ApprovalPreviewViewport<Content: View>: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @ViewBuilder let content: Content
     var body: some View {
         ViewThatFits(in: .vertical) {
@@ -274,6 +286,9 @@ private struct CompactApprovalActionStyle: ButtonStyle {
 }
 
 private struct AsyncQuestionCard: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let pending: PendingAsyncQuestions
     let providerID: String
@@ -298,7 +313,6 @@ private struct AsyncQuestionCard: View {
                 HStack {
                     Label("Question", systemImage: "questionmark.bubble").foregroundStyle(accent)
                     Spacer()
-                    if delivery.phase == .sending { ProgressView().controlSize(.mini) }
                     Text("\(index + 1) of \(pending.questions.count)").foregroundStyle(.secondary)
                 }.font(.subheadline.weight(.semibold))
                 Text(question.title).font(.headline).accessibilityIdentifier("asyncQuestionTitle")
@@ -349,6 +363,9 @@ private struct AsyncQuestionCard: View {
 }
 
 private struct ElicitationFormView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let form: ElicitationForm
     let accent: Color
     let respond: (Bool, String?) -> Void
@@ -417,17 +434,23 @@ private struct ElicitationFormView: View {
 }
 
 private struct DecisionRecovery: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let delivery: DecisionDelivery
     let enabled: Bool
     let check: () -> Void
     var body: some View {
         Button(action: check) {
-            HStack { if delivery.phase == .sending { ProgressView().controlSize(.small) }; Text(delivery.phase == .sending ? "Checking delivery…" : "Check delivery") }
+            Text(delivery.phase == .sending ? "Checking delivery…" : "Check delivery")
         }.buttonStyle(DecisionActionStyle(accent: .blue, prominent: true)).disabled(!enabled || delivery.phase == .sending).accessibilityIdentifier("decisionCheckDelivery")
     }
 }
 
 private struct DecisionOption: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let title: String
     var detail: String? = nil
     let selected: Bool
@@ -449,6 +472,9 @@ private struct DecisionOption: View {
 }
 
 private struct DecisionTextInput: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let label: String
     var secret = false
     @Binding var text: String
@@ -462,7 +488,7 @@ private struct DecisionTextInput: View {
     }
 }
 
-private struct DecisionActionStyle: ButtonStyle {
+struct DecisionActionStyle: ButtonStyle {
     let accent: Color
     var prominent = false
     @Environment(\.isEnabled) private var enabled

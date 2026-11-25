@@ -12,6 +12,8 @@ export interface EventGroup {
   startTime: Date;
   endTime: Date;
   isRunning?: boolean;
+  /** The Mate question already displays this reply. Retain its input boundary for turn matching. */
+  representedByQuestion?: boolean;
 }
 
 /** Tool events rendered as PlanDisplay — same name rules as `groupEvents` standalone plan groups. */
@@ -181,12 +183,6 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
           endTime: event.timestamp,
         });
       } else {
-        // Image inspection is its own activity. Keep adjacent image views
-        // together and separate them from commands that created the files.
-        if (
-          currentToolGroup.length > 0 &&
-          isImageViewToolEvent(currentToolGroup[0]) !== isImageViewToolEvent(event)
-        ) flushToolGroup();
         currentToolGroup.push(event);
       }
     } else if (event.type === "artifact") {

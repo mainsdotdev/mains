@@ -47,6 +47,7 @@ import {
   useUpdateAtlasItemMutation,
   useListAtlasTagsQuery,
   useEnrichAtlasBookmarkMutation,
+  useSetAtlasSourceTrashMutation,
 } from "@/lib/redux/api/atlasApi";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
@@ -76,6 +77,7 @@ import { resolveReplicaFile, useAtlasFilePath } from "../hooks/use-atlas-file-pa
 import { AtlasImagePreview } from "./atlas-image-preview";
 import { useAtlasOwnerKey } from "../hooks/use-atlas-tabs";
 import { AtlasBookmarkEditor } from "./atlas-bookmark-editor";
+import { openAtlasBookmark } from "../lib/bookmark-modal-bridge";
 import { AtlasBookmarkCard } from "./atlas-bookmark-card";
 import { AtlasItemRow } from "./atlas-item-row";
 import { AtlasItemTags } from "./atlas-item-tags";
@@ -142,6 +144,11 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
   const ownerKey = useAtlasOwnerKey(accountId);
+  const currentOwner = useRef<string | null>(ownerKey);
+  useEffect(() => {
+    currentOwner.current = ownerKey;
+    return () => { currentOwner.current = null; };
+  }, [ownerKey]);
   const provider = useSpaceProviderVariant();
   const ProviderIcon = provider.icon;
   const { activeSpace, spaces } = useActiveSpace();
@@ -161,7 +168,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const rawPage = Number(params.get("page") ?? 1);
   const page = Number.isSafeInteger(rawPage) && rawPage > 0 && rawPage <= 100000 ? rawPage : 1;
   const [preview, setPreview] = useState<Entry | null>(null);
-  const [bookmarkEditor, setBookmarkEditor] = useState<AtlasItem | "new" | null>(null);
+  const [bookmarkEditor, setBookmarkEditor] = useState<AtlasItem | null>(null);
   const [tagEditor, setTagEditor] = useState<AtlasItem | null>(null);
   const [managingTags, setManagingTags] = useState(false);
   const { data: tags = [] } = useListAtlasTagsQuery({ accountId });
@@ -193,6 +200,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const { data: collections = [] } = useListCollectionsQuery({ accountId });
   const [createPage, creating] = useCreateAtlasPageMutation();
   const [update, updating] = useUpdateAtlasItemMutation();
+  const [setSourceTrash, changingSourceTrash] = useSetAtlasSourceTrashMutation();
   const { save, saving } = useSaveToAtlas();
   const { open } = useDocumentViewer();
   const { openWithApp } = useCapabilities();
@@ -204,9 +212,9 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
     ? bridgeBackend(bridgeStatus, entry.generated.replica.backendId).label : null;
   const originLabel = (entry: Entry) => {
     if (entry.saved) return "Saved to Atlas";
-    const origin = entry.generated?.origin === "attachment" ? "Uploaded" : "Generated";
+    if (entry.generated?.origin !== "attachment") return "Generated";
     const device = deviceOf(entry);
-    return device ? `${origin} on ${device}` : origin;
+    return device ? `Uploaded on ${device}` : "Uploaded";
   };
   const focusSearch = params.get("focus") === "search";
   useEffect(() => {
@@ -230,6 +238,25 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
       await update({ accountId, id: item.id, ...fields }).unwrap();
     } catch (error) {
       toast.error(atlasError(error));
+    }
+  };
+  const removeFromLibrary = async ({ saved, generated }: Entry) => {
+    const target = saved ? { id: saved.id } : generated ? { id: generated.sourceKey, runId: generated.runId } : null;
+    if (!target) return;
+    const transport = getTransport();
+    const isCurrent = () => getTransport() === transport && currentOwner.current === ownerKey;
+    try {
+      const item = saved
+        ? await update({ accountId, ...target, trashed: true }).unwrap()
+        : await setSourceTrash({ accountId, ...target, trashed: true }).unwrap();
+      if (!isCurrent()) return;
+      toast.success("Removed from Atlas", { action: { label: "Undo", onClick: () => {
+        if (!isCurrent()) return;
+        if (saved) void change(saved, { trashed: false });
+        else void setSourceTrash({ accountId, id: item.id, trashed: false }).unwrap().catch((error) => toast.error(atlasError(error)));
+      } } });
+    } catch (error) {
+      if (isCurrent()) toast.error(atlasError(error));
     }
   };
   const newPage = async (
@@ -429,17 +456,17 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                   ? "Remove from favorites"
                   : "Add to favorites"}
               </DropdownMenuItem>
-              <DropdownMenuItem
-                variant="danger"
-                onClick={() => {
-                  close();
-                  void change(entry.saved!, { trashed: true });
-                }}
-              >
-                <Trash className="size-4" />
-                Move to Trash
-              </DropdownMenuItem>
             </>
+          )}
+          {(entry.saved || entry.generated) && (
+            <DropdownMenuItem
+              variant="danger"
+              disabled={updating.isLoading || changingSourceTrash.isLoading}
+              onClick={() => { close(); void removeFromLibrary(entry); }}
+            >
+              <Trash className="size-4" />
+              Remove from Atlas
+            </DropdownMenuItem>
           )}
         </>
       )}
@@ -482,8 +509,8 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const title = type === "all" && project
     ? project.name
     : ATLAS_TYPES.find((item) => item.value === type)!.label;
-  const loading = library.isFetching && !library.currentData;
-  const error = library.error;
+  const loadFailed = library.isError;
+  const loading = !loadFailed && (!library.currentData || (!library.isSuccess && entries.length === 0));
 
   return (
     <PageShell
@@ -534,11 +561,11 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               />
             </div>
             {type === "bookmark" ? (
-              <Button variant="primary" className="inline-flex gap-2" onClick={() => setBookmarkEditor("new")}>
+              <Button variant="primary" className="inline-flex gap-2" onClick={() => openAtlasBookmark({ accountId, collectionId: collectionId || undefined })}>
                 <Bookmark aria-hidden="true" className="size-4" />
                 Add bookmark
               </Button>
-            ) : type === "image" && provider.supportsAtlas ? (
+            ) : type === "image" ? (
               <Button
                 aria-label="New image"
                 variant="primary"
@@ -552,7 +579,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               <AtlasMenu
                 label="New Atlas item"
                 disabled={creating.isLoading}
-                className="text-primary-700 dark:text-primary-300 glass-primary px-3 py-1.5 text-s rounded-xl gap-1"
+                className="text-primary-700 dark:text-primary-300 button-neutral border-0 px-3 py-1.5 text-s rounded-xl gap-1"
                 trigger={
                   <>
                     New
@@ -562,8 +589,8 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               >
                 {(close) => (
                   <>
-                    <DropdownMenuItem onClick={() => { close(); setBookmarkEditor("new"); }}><Bookmark className="size-4" />New bookmark</DropdownMenuItem>
-                    {type === "all" && provider.supportsAtlas && <DropdownMenuItem
+                    <DropdownMenuItem onClick={() => { close(); openAtlasBookmark({ accountId, collectionId: collectionId || undefined }); }}><Bookmark className="size-4" />New bookmark</DropdownMenuItem>
+                    {type === "all" && <DropdownMenuItem
                       onClick={() => { close(); navigate(atlasImageCreatorHref(collectionId)); }}>
                       <Picture className="size-4" />New image
                     </DropdownMenuItem>}
@@ -612,7 +639,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           <AtlasMenu
             label="Filter Atlas"
             variant="filter"
-            className={(open) => `ml-auto ${open || project || params.get("tag") ? "bg-primary/80 dark:bg-primary/10 glass-outline text-primary-900 dark:text-primary-100" : ""}`}
+            className={(open) => `ml-auto ${open || project || params.get("tag") ? "button-neutral border-0 text-primary-900 dark:text-primary-100" : ""}`}
             trigger={<Layers className="w-3.5 h-3.5" />}
           >
             {(close) => (
@@ -662,7 +689,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
         </div>
       </div>
       {params.get("tag") && <div className="shrink-0 px-6 pt-4 md:px-12 xl:px-16">
-        <Button aria-label="Clear tag filter" className="inline-flex max-w-full items-center gap-2 rounded-full glass-outline px-3 py-1 text-xs text-primary-600 focus-visible:ring-2 focus-visible:ring-accent/40 dark:text-primary-300" onClick={() => setFilter("tag", "")}>
+        <Button aria-label="Clear tag filter" className="inline-flex max-w-full items-center gap-2 rounded-full button-neutral px-3 py-1 text-xs text-primary-600 focus-visible:ring-2 focus-visible:ring-accent/40 dark:text-primary-300" onClick={() => setFilter("tag", "")}>
           <span className="min-w-0 truncate">Tag: {tags.find((tag) => tag.id === params.get("tag"))?.name ?? "Selected"}</span>
           <Close aria-hidden="true" className="size-3 shrink-0" />
         </Button>
@@ -713,15 +740,21 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           </section>
         )}
         <div ref={resultsRef} className="scroll-mt-8" />
-        {!!error && (
-          <Text className="mb-4" role="alert">
-            {atlasError(error)}
-          </Text>
+        {loadFailed && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-3xl glass-surface px-5 py-4">
+            <div role="alert" className="min-w-0">
+              <Text weight="medium">
+                {entries.length > 0 ? "Unable to refresh Atlas items. Showing the last loaded results." : "Unable to load Atlas items."}
+              </Text>
+              {!!library.error && <Muted size="xs" className="mt-1 wrap-break-word">{atlasError(library.error)}</Muted>}
+            </div>
+            <Button variant="secondary" onClick={() => void library.refetch()}>Try again</Button>
+          </div>
         )}
         {loading ? (
-          <Muted className="py-16 text-center">Loading your items…</Muted>
+          <Muted className="py-16 text-center" role="status">Loading your items…</Muted>
         ) : !entries.length ? (
-          <div className="flex flex-col items-center py-24 text-center">
+          !loadFailed && <div className="flex flex-col items-center py-24 text-center">
             {!searchValue && scope === "favorites" ? (
               <Star className="mb-5 size-10 text-primary-400" />
             ) : !searchValue && scope === "generated" ? (
@@ -754,7 +787,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                       ? "Create a page to start collecting your work."
                       : "Files from your conversations will appear here. Save to Atlas to keep a permanent copy."}
             </Muted>
-            {!searchValue && type === "bookmark" && scope === "all" && <Button variant="primary" className="mt-6" onClick={() => setBookmarkEditor("new")}>Save a bookmark</Button>}
+            {!searchValue && type === "bookmark" && scope === "all" && <Button variant="primary" className="mt-6" onClick={() => openAtlasBookmark({ accountId, collectionId: collectionId || undefined })}>Save a bookmark</Button>}
             {provider.supportsAtlas && !searchValue &&
               scope === "all" &&
               (type === "page" || type === "all") && (
@@ -830,11 +863,11 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               {entries.length > 0 && `${(page - 1) * ATLAS_LIBRARY_PAGE_SIZE + 1}–${(page - 1) * ATLAS_LIBRARY_PAGE_SIZE + entries.length} · `}Page {page}
             </Text>
             <div className="flex items-center gap-2">
-              <Button variant="primary" disabled={page === 1 || library.isFetching} onClick={() => setFilter("page", String(page - 1))}>
+              <Button variant="ghost" disabled={page === 1 || library.isFetching} onClick={() => setFilter("page", String(page - 1))}>
                 Previous
               </Button>
               <Button
-                variant="primary"
+                variant="ghost"
                 disabled={!library.currentData.hasNext || library.isFetching}
                 onClick={() => setFilter("page", String(page + 1))}
               >
@@ -848,7 +881,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
         <AtlasImagePreview accountId={preview.saved?.accountId} id={preview.saved?.id} title={preview.title} path={preview.path}
           generated={preview.saved ? undefined : preview.generated} onClose={() => setPreview(null)} />
       )}
-      {bookmarkEditor && <AtlasBookmarkEditor accountId={accountId} item={bookmarkEditor === "new" ? undefined : bookmarkEditor} collectionId={collectionId} onClose={() => setBookmarkEditor(null)} />}
+      {bookmarkEditor && <AtlasBookmarkEditor accountId={accountId} item={bookmarkEditor} collectionId={collectionId} onClose={() => setBookmarkEditor(null)} />}
       {tagEditor?.accountId === accountId && <AtlasTagEditor key={tagEditor.id} item={tagEditor} onClose={() => setTagEditor(null)} />}
       {managingTags && <AtlasOrganization accountId={accountId} onClose={() => setManagingTags(false)} />}
     </PageShell>

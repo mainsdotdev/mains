@@ -13,12 +13,12 @@ const STATE_CLASSES: Record<string, string> = {
 const CI_DOT_CLASSES: Record<string, string> = {
   passing: "bg-success",
   failing: "bg-danger",
-  pending: "bg-warning",
+  pending: "bg-accent",
 };
 
 interface PrListItemProps {
   pr: PullRequestSummary;
-  onClick: () => void;
+  onClick: (opener: HTMLButtonElement) => void;
   isActive?: boolean;
   /** Narrow-column mode (detail pane open): drop stats/time/avatar. */
   compact?: boolean;
@@ -38,7 +38,7 @@ export function PrListItem({
 
   return (
     <Button
-      onClick={onClick}
+      onClick={(event) => onClick(event.currentTarget)}
       className={`w-full text-left px-2 py-1.5 rounded-2xl cursor-pointer transition-all duration-200 ease-out flex items-center gap-2.5 group ${
         isActive
           ? "bg-primary-50 dark:bg-primary/5 glass-outline"

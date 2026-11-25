@@ -36,7 +36,7 @@ claiming that an uncancellable RPC was stopped.
 
 | Resource | Scope and freshness | Native/fallback policy |
 | --- | --- | --- |
-| Usage model prices | Backend runtime and user-data file; 24 hours; 60-second failure cooldown | Five-second fetch deadline, validated disk seed, last good offline table or unavailable. |
+| Usage model prices | Backend runtime and user-data file with a 24-hour TTL. After a failure, the next read can retry after one minute. Consecutive failures double that delay up to one hour. | Five-second fetch deadline. A dropped proxy tunnel ends the refresh. A successful refresh resets the delay. Offline reads use the last valid table when available. |
 | Claude models | Driver; five minutes | One control query; SDK failure/empty response uses existing default models without caching that fallback. |
 | Claude commands | Workspace; ten minutes | One control query, filtered against disk skills; an absent native command list remains retryable. |
 | Claude disk skills | Workspace; five minutes | Existing configured user/project sources; failure returns an empty list. |
@@ -50,6 +50,14 @@ claiming that an uncancellable RPC was stopped.
 | Codex live MCP inventory | Pending read only | Publish only a complete paged inventory; retirement or a repeated cursor stops further paging. |
 
 Plugin mutations retain the existing cross-cache invalidation boundaries.
+Codex public plugin and MCP reads follow account/configuration/plugin
+invalidations by joining the replacement cache entry. Concurrent callers still
+share each workspace's pending request, and composite MCP App discovery restarts
+if its inventory and ownership metadata span different catalog revisions. A
+failure in the replacement revision retains the existing error DTO/throw policy,
+without falling back to data from the invalidated revision. Consumer cancellation,
+server closure and shutdown never trigger this retry; old native replies remain
+fenced by their original cache contexts.
 Codex server closure invalidates discovery while shutdown disposes its owners.
 Claude shutdown retires discovery and its native queries; the existing driver
 can acquire a new generation after successful query cleanup. Copilot shutdown

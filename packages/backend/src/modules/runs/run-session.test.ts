@@ -9,6 +9,7 @@ import {
 } from "../../../test/factories";
 import type { DatabaseInstance } from "../../db/types";
 import type Database from "better-sqlite3";
+import type { RunEphemeralEvent } from "@mains/contracts/runs";
 
 // Initial-turn insertion + sleep-blocker + baseRef capture are fire-and-forget
 // in the session constructor. Tests await this flush before asserting initial
@@ -2176,6 +2177,46 @@ describe("RunSession", () => {
   // finalize
   // ─────────────────────────────────────────────────────────────
   describe("finalize", () => {
+    it.each(["succeeded", "failed", "canceled"] as const)("replaces a live Codex draft and clears incomplete drafts before %s", async (status) => {
+      const session = makeSession();
+      const received: Array<RunEphemeralEvent["event"] | string> = [];
+      const off = registerEventSink({
+        kind: "test",
+        send(channel, payload) {
+          if (channel === "runs:ephemeralEvent") received.push((payload as RunEphemeralEvent).event);
+          if (channel === "runs:statusChanged") received.push((payload as { status: string }).status);
+        },
+      });
+      const preview = { type: "artifact" as const, kind: "report", ephemeral: true, requiresCompletedItem: true,
+        streamId: "codex-message", metadata: { source: "agent_message_streaming" } };
+      try {
+        await session.project({ ...preview, content: "Preview" });
+        await session.project({ ...preview, content: "Preview so far" });
+        await session.project({ ...preview, streamId: "unfinished-message", content: "Incomplete draft" });
+        expect(await runsRepo.findArtifactsByRun("r1")).toEqual([]);
+
+        const { streamId } = received[0] as RunEphemeralEvent["event"];
+        const unfinishedID = (received[2] as RunEphemeralEvent["event"]).streamId;
+        await session.project({ type: "artifact", kind: "report", streamId: preview.streamId,
+          content: "Codex blocked this response.", metadata: { source: "agent_message" } });
+        await session.finalize({ status });
+
+        expect(received).toEqual([
+          expect.objectContaining({ content: "Preview", streamId }),
+          expect.objectContaining({ content: "Preview so far", streamId }),
+          expect.objectContaining({ content: "Incomplete draft", streamId: unfinishedID }),
+          expect.objectContaining({ content: "Codex blocked this response.", streamId,
+            metadata: expect.objectContaining({ source: "agent_message_streaming", streaming: false }) }),
+          expect.objectContaining({ content: "", streamId: unfinishedID }),
+          status,
+        ]);
+        expect(streamId).not.toBe(unfinishedID);
+        expect(await runsRepo.findArtifactsByRun("r1")).toEqual([expect.objectContaining({
+          content: "Codex blocked this response.", metadata: expect.objectContaining({ streamId, source: "agent_message" }),
+        })]);
+      } finally { off(); }
+    });
+
     it("recovers the full final report after its database write fails", async () => {
       const session = makeSession();
       await session.project({ type: "artifact", kind: "report", ephemeral: true, streamId: "failed-report",

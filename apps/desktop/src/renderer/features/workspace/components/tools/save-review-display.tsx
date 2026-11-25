@@ -1,5 +1,5 @@
 import { useToolExpansion } from "../../lib/transcript-view-state";
-import { Mains } from "@/components/ui/icons";
+import { MainsStroke } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader } from "./_shared";
 import { Tiny } from "@/components/ui";
 
@@ -25,7 +25,7 @@ export function SaveReviewDisplay({
   return (
     <div>
       <ToolHeader
-        icon={<Mains className="size-4" />}
+        icon={<MainsStroke className="size-4" />}
         verb="Saved review"
         hasDetails={hasSummary}
         isExpanded={isExpanded}

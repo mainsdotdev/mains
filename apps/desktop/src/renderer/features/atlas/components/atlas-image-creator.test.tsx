@@ -23,25 +23,30 @@ const mocks = vi.hoisted(() => ({
   skills: [] as SkillInfo[],
   skillsLoading: false, skillsFetching: false, skillsError: false, refreshSkills: vi.fn(),
   spacesError: false,
-  settings: { defaultModel: "test-model", config: { modelReasoningEffort: "medium", serviceTier: "" } },
+  settings: { isEnabled: true, defaultModel: "test-model", config: { modelReasoningEffort: "medium", serviceTier: "" } },
   models: [{ id: "test-model", displayName: "Test Model", supportedEffortLevels: ["low", "medium", "high"] }],
-  runMode: "work", runStatus: "succeeded", transport: "backend", error: null as string | null, empty: [],
+  runMode: "work", runProvider: "codex", runStatus: "succeeded", transport: "backend", error: null as string | null, empty: [],
 }));
 vi.mock("@/lib/redux", () => ({ store: { getState: () => mocks.getState() } }));
 vi.mock("@/lib/redux/api", () => ({
+  useGetAccountQuery: () => ({ data: undefined }),
   useGetAppSettingsQuery: () => ({ data: { activeSpaceId: "claude-chat" }, isLoading: false }),
   useGetSpacesQuery: () => ({ data: mocks.spaces, isLoading: false, error: mocks.spacesError, refetch: vi.fn() }),
   useCreateSpaceMutation: () => [mocks.create],
   useGetRunByIdQuery: (id: string) => ({ data: id ? {
-    id, accountId: "account", providerId: "codex", mode: mocks.runMode, spaceId: "codex-chat", collectionId: "project",
+    id, accountId: "account", providerId: mocks.runProvider, mode: mocks.runMode,
+    spaceId: mocks.runProvider === "cursor" ? "cursor-code" : "codex-chat", collectionId: "project",
+    configSnapshot: { atlasImage: true },
   } : undefined }),
   useAbortRunMutation: () => [mocks.abort],
   useGetProviderAccountInfoQuery: () => ({ data: undefined }),
 }));
+vi.mock("@/lib/redux/api/assistantsApi", () => ({ useAssistantOverviewQuery: () => ({ currentData: undefined }) }));
 vi.mock("@/lib/redux/api/providersApi", () => ({
   useGetProviderInstalledPluginsQuery: () => ({ data: mocks.installed, isLoading: false, refetch: vi.fn() }),
   useGetProviderPluginsQuery: () => ({ data: mocks.catalog }),
   useGetProviderByIdQuery: () => ({ data: mocks.settings }),
+  useGetProviderAccountInfoQuery: () => ({ data: { account: { type: "cursor" } } }),
   useGetProviderModelsQuery: () => ({ data: mocks.models }),
   useGetProviderCommandsQuery: () => ({ data: mocks.empty }),
   useGetProviderSkillsQuery: () => ({ data: mocks.skills, isLoading: mocks.skillsLoading, isFetching: mocks.skillsFetching, error: mocks.skillsError, refetch: mocks.refreshSkills }),
@@ -105,7 +110,7 @@ function typePrompt(value: string) {
   input.textContent = value; fireEvent.input(input);
 }
 beforeEach(() => {
-  vi.clearAllMocks(); mocks.transport = "backend"; mocks.runMode = "work"; mocks.error = null;
+  vi.clearAllMocks(); mocks.transport = "backend"; mocks.runMode = "work"; mocks.runProvider = "codex"; mocks.error = null;
   mocks.spacesError = false;
   mocks.spaces = [
     { id: "claude-chat", accountId: "account", name: "Claude", mode: "chat", providerId: "claude_code" },
@@ -363,6 +368,37 @@ describe("Atlas image creator", () => {
     expect(args[6]).toBe("project"); expect(mocks.mode).toHaveBeenLastCalledWith("work");
     expect(screen.getByTestId("url").textContent).toBe("/atlas/images/runs/image-run?project=project");
     expect(store.getState().workspace.draftTextByKey[owner]).toBeUndefined();
+    expect(screen.getByTestId("saved-mode").textContent).toBe("chat");
+  });
+
+  it("keeps the image draft across provider changes and opens a Cursor run for follow-ups", async () => {
+    mocks.spaces.push({ id: "cursor-code", accountId: "account", name: "Cursor", providerId: "cursor", mode: "developer" });
+    mocks.runProvider = "cursor";
+    const { store, owner } = setup();
+    typePrompt("$imagegen A mountain at sunrise");
+    fireEvent.change(screen.getByLabelText("Upload images"), {
+      target: { files: [new File(["pixels"], "photo.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("radio", { name: "Cursor" }));
+    expect(screen.getByRole("radio", { name: "Cursor" }).getAttribute("aria-checked")).toBe("true");
+    expect(store.getState().workspace.composerContextKey).toBe(owner);
+    expect(store.getState().workspace.draftTextByKey[owner]).toBe("A mountain at sunrise");
+    expect(store.getState().workspace.contextItems).toEqual([]);
+    expect(mocks.selection).toMatchObject({ selection: "local", atlasImage: true });
+    expect(screen.getByRole("img", { name: "photo.png" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
+    expect(store.getState().workspace.draftTextByKey[owner]).toBe("$imagegen A mountain at sunrise");
+    fireEvent.click(screen.getByRole("radio", { name: "Cursor" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create image" }));
+    await screen.findByText("Image run conversation");
+    expect(mocks.execute).toHaveBeenCalledWith("A mountain at sunrise", undefined, "cursor", expect.any(String),
+      [{ type: "image", name: "photo.png", content: "base64" }], [], "project", undefined, expect.anything());
+    expect(screen.queryByRole("radiogroup", { name: "Image provider" })).toBeNull();
+    expect(screen.getByText("Cursor")).toBeTruthy();
+    typePrompt("Make the sky warmer");
+    fireEvent.click(screen.getByRole("button", { name: "Create image" }));
+    await waitFor(() => expect(mocks.continue).toHaveBeenCalledWith("image-run", "Make the sky warmer",
+      expect.any(String), undefined, [], undefined, expect.anything()));
     expect(screen.getByTestId("saved-mode").textContent).toBe("chat");
   });
 

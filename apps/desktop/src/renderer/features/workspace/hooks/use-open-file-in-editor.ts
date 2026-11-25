@@ -18,6 +18,7 @@ import type {
   FileNode,
   ServiceResponse,
 } from "@/features/workspace/types/file-explorer";
+import { isOutputMediaType } from "@mains/contracts/output-files";
 
 /**
  * Opens a file the user clicked — a link in agent markdown, a tool card's path,
@@ -78,16 +79,13 @@ export function useOpenFileInEditor() {
         const name = fileBasename(absolutePath);
         const dotIdx = name.lastIndexOf(".");
         const extension = dotIdx > 0 ? name.slice(dotIdx + 1) : undefined;
-        // No tabs, no editor to open into. The viewer panel takes what it can
-        // render — markdown and Office documents — and everything else goes to
-        // the OS rather than into a surface this mode never renders.
+        const docType = classifyDocType(absolutePath, true);
+        if (docType && (!showTabs || isOutputMediaType(docType))) {
+          openDocument({ path: absolutePath, fileName: name, docType });
+          return;
+        }
         if (!showTabs) {
-          const docType = classifyDocType(absolutePath, true);
-          if (docType) {
-            openDocument({ path: absolutePath, fileName: name, docType });
-          } else {
-            void window.api.shell.openPath(absolutePath);
-          }
+          void window.api.shell.openPath(absolutePath);
           return;
         }
         const node: FileNode = {

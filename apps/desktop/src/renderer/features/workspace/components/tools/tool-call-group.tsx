@@ -12,31 +12,18 @@ import {
 import { ToolCallItem } from "./tool-call-item";
 import type { EventGroup } from "../../lib/group-events";
 import { Button } from "@/components/ui";
-import type { ProviderVariant } from "@/lib/provider-variants";
 import { useTranscriptValue } from "../../lib/transcript-view-state";
 import { useVisibleToolCalls } from "../../lib/tool-activity-presence";
 
 const TOOL_GROUP_LABEL_TEXT =
   "text-primary-600 dark:text-primary-600 group-hover:text-primary-600 group-hover:dark:text-primary-200";
 
-interface ToolCallGroupProps {
-  group: EventGroup;
-  defaultExpanded?: boolean;
-  variant?: ProviderVariant;
-}
-
-function ToolCallGroupImpl({
-  group,
-  defaultExpanded = false,
-}: ToolCallGroupProps) {
-  const [expandedOverride, setExpandedOverride] = useTranscriptValue<boolean | null>("group-expanded", null);
+function ToolCallGroupImpl({ group }: { group: EventGroup }) {
+  const [isExpanded, setIsExpanded] = useTranscriptValue("group-expanded", false);
   const [showTopFade, setShowTopFade] = useState(false);
   const [showBottomFade, setShowBottomFade] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
-  const isImageViewGroup = group.events.length > 0 &&
-    group.events.every((event) => event.metadata?.codexItemType === "imageView");
-  const isExpanded = expandedOverride ?? (isImageViewGroup || defaultExpanded);
   const pluginLogos = usePluginLogoMap();
   // Fade the content itself so every host surface shows through unchanged.
   const scrollMask = `linear-gradient(to bottom, ${
@@ -113,7 +100,8 @@ function ToolCallGroupImpl({
   return (
     <div className="mb-2">
       <Button
-        onClick={() => setExpandedOverride(!isExpanded)}
+        aria-expanded={isExpanded}
+        onClick={() => setIsExpanded((expanded) => !expanded)}
         className="group w-full flex items-center gap-0.5 mb-1 text-s font-sans cursor-pointer"
       >
         {/* `min-w-0` so the sentence truncates inside the row instead of

@@ -12,7 +12,6 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/redux/api", () => ({
-  useGetTerminalSessionsQuery: () => ({ currentData: [] }),
   useListWorkspacesQuery: () => ({ data: [{ id: "workspace-1", projectId: "project-1", rootPath: "/repos/mains" }] }),
   useListProjectsQuery: () => ({ data: [{ id: "project-1", name: "mains" }] }),
 }));
@@ -69,7 +68,9 @@ describe("session panel PR editor handoff", () => {
   it("closes the right panel while keeping the editor mounted, then restores it", () => {
     render(
       createElement(SessionPanel, {
+        allowSessionDetails: true,
         runId: null,
+        serverSessions: [],
         laneOffset: "0rem",
         floating: true,
       }),

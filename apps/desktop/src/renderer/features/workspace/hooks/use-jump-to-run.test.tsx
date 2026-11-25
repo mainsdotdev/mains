@@ -21,11 +21,31 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const run: RunJumpTarget = { id: "worktree-chat", spaceId: "space-b", providerId: "codex", mode: "developer",
   workspaceId: "tree", collectionId: null };
 function setup() {
-  return renderHook(() => ({ jump: useJumpToRun(), path: useLocation().pathname }), {
+  return renderHook(() => ({ jump: useJumpToRun(), path: useLocation().pathname, search: useLocation().search }), {
     wrapper: ({ children }: { children: ReactNode }) => <MemoryRouter initialEntries={["/code/local"]}>{children}</MemoryRouter>,
   });
 }
 describe("opening project chats", () => {
+  it("opens an Atlas image conversation without switching the Cursor Space to Work", async () => {
+    const view = setup();
+    await act(async () => { await view.result.current.jump({
+      ...run, id: "image", providerId: "cursor", workspaceId: null, mode: "work",
+      collectionId: "collection", configSnapshot: { atlasImage: true },
+    }); });
+    expect(view.result.current.path + view.result.current.search).toBe("/atlas/images/runs/image?project=collection");
+    expect(mocks.switchSpace).not.toHaveBeenCalled();
+    expect(mocks.updateSpace).not.toHaveBeenCalled();
+  });
+  it("opens an assistant conversation without changing the rail Space or mode", async () => {
+    const view = setup();
+    await act(async () => { await view.result.current.jump({ ...run, assistantId: "release-assistant", mode: "work" }); });
+    expect(view.result.current.path).toBe("/assistants");
+    expect(new URLSearchParams(view.result.current.search).get("assistant")).toBe("release-assistant");
+    expect(new URLSearchParams(view.result.current.search).get("run")).toBe(run.id);
+    expect(mocks.switchSpace).not.toHaveBeenCalled();
+    expect(mocks.updateSpace).not.toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
   it("publishes the selected chat only after its space switch completes", async () => {
     let resolve!: () => void;
     mocks.switchSpace.mockReturnValue({ unwrap: () => new Promise<void>((done) => { resolve = done; }) });

@@ -10,6 +10,7 @@ import type { RunEvent } from "../../types";
 import { parseToolContent, previewParams } from "../../lib/parse-tool-content";
 import { resolveTool } from "../../lib/resolve-tool";
 import { usePluginLogoMap, renderPluginIcon, normalizeSlug } from "../../hooks";
+import { AssistantToolDisplay } from "./assistant-tool-display";
 import { TaskDisplay, type TaskParams } from "./task-display";
 import { PlanDisplay } from "./plan-display";
 import { WriteDisplay, type WriteParams } from "./write-display";
@@ -51,6 +52,7 @@ import {
 interface ToolCallItemProps {
   event: RunEvent;
   isCompact?: boolean;
+  presentation?: "tool" | "card";
 }
 
 interface Ctx {
@@ -66,6 +68,7 @@ interface Ctx {
   summary: string;
   event: RunEvent;
   isCompact: boolean;
+  presentation: "tool" | "card";
 }
 
 type Renderer = (ctx: Ctx) => ReactNode | null;
@@ -134,6 +137,8 @@ const summaryAs = (key: string) => (ctx: Ctx) => ({ [key]: ctx.summary }) as nev
 const ATLAS_DISPLAYS = { atlasreadpage: AtlasReadPageDisplay, atlascreatepage: AtlasCreatePageDisplay, atlasupdatepage: AtlasUpdatePageDisplay };
 
 const DISPATCH: Renderer[] = [
+  (ctx) => ctx.resolved.category === "Assistants" ? <AssistantToolDisplay toolName={ctx.resolved.displayName}
+    params={ctx.metadataInput ?? ctx.params} output={ctx.event.metadata?.output} isCompact={ctx.isCompact} /> : null,
   (ctx) => {
     if (ctx.resolved.category !== "Atlas") return null;
     const Display = ATLAS_DISPLAYS[ctx.resolved.groupKey as keyof typeof ATLAS_DISPLAYS];
@@ -276,6 +281,7 @@ const DISPATCH: Renderer[] = [
         status={eventToolStatus(ctx.event)}
         runId={typeof runId === "string" ? runId : undefined}
         mcpApp={mcpApp}
+        presentation={ctx.presentation}
         backgroundTask={(ctx.event.metadata?.task as TaskMetadata | undefined)?.taskType === "mcp_task"}
       />
     );
@@ -308,7 +314,7 @@ export function ToolCallItem(props: ToolCallItemProps) {
   </TranscriptItemScope>;
 }
 
-function DeferredOutputRow({ event, deferred, isCompact = true }: ToolCallItemProps & { deferred: DeferredToolOutput }) {
+function DeferredOutputRow({ event, deferred, isCompact = true, presentation = "tool" }: ToolCallItemProps & { deferred: DeferredToolOutput }) {
   const [expanded] = useToolExpansion();
   const [loaded, setLoaded] = useState<{ key: string; output: unknown } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -316,7 +322,7 @@ function DeferredOutputRow({ event, deferred, isCompact = true }: ToolCallItemPr
   const key = `${event.id}/${deferred.chars}/${deferred.preview}`;
   const runId = event.metadata?.runId;
   useEffect(() => {
-    if (!expanded) {
+    if (!expanded && presentation !== "card") {
       const timer = setTimeout(() => setLoaded(null), 200);
       return () => clearTimeout(timer);
     }
@@ -333,21 +339,27 @@ function DeferredOutputRow({ event, deferred, isCompact = true }: ToolCallItemPr
       }
     })();
     return () => { canceled = true; };
-  }, [expanded, runId, event.id, key, loaded?.key, attempt]);
+  }, [expanded, runId, event.id, key, loaded?.key, attempt, presentation]);
 
-  if (loaded?.key === key) return <ToolCallBody event={{ ...event, metadata: { ...event.metadata, output: loaded.output } }} isCompact={isCompact} />;
+  if (loaded?.key === key) return <ToolCallBody event={{ ...event, metadata: { ...event.metadata, output: loaded.output } }} isCompact={isCompact} presentation={presentation} />;
+  if (presentation === "card") return <Text as="div" size="xs" tone="subtle">
+    {error ? <button onClick={() => { setError(null); setAttempt(value => value + 1); }}>Retry opening app: {error}</button> : "Loading app…"}
+  </Text>;
   const resolved = resolveTool(event.content);
+  const params = event.metadata?.input as Record<string, unknown> | null;
   return <ToolStatusProvider value={eventToolStatus(event)}>
-    <GenericToolDisplay icon={resolved.icon} displayName={resolved.displayName}
-      params={event.metadata?.input as Record<string, unknown> | null}
-      output={`${deferred.preview}\n… (${deferred.chars.toLocaleString()} characters)`} isCompact={isCompact} />
+    {resolved.category === "Assistants"
+      ? <AssistantToolDisplay toolName={resolved.displayName} params={params ?? parseToolContent(event.content).params}
+        outputDeferred isCompact={isCompact} />
+      : <GenericToolDisplay icon={resolved.icon} displayName={resolved.displayName} params={params}
+        output={`${deferred.preview}\n… (${deferred.chars.toLocaleString()} characters)`} isCompact={isCompact} />}
     {expanded && <Text as="div" size="xs" tone="subtle">
       {error ? <button onClick={() => { setError(null); setAttempt((value) => value + 1); }}>Retry loading output: {error}</button> : "Loading full output…"}
     </Text>}
   </ToolStatusProvider>;
 }
 
-function ToolCallBody({ event, isCompact = true }: ToolCallItemProps) {
+function ToolCallBody({ event, isCompact = true, presentation = "tool" }: ToolCallItemProps) {
   const replica = useReplicaView();
   const input = event.metadata?.input;
   const { toolName, params, summary } = typeof event.metadata?.toolName === "string"
@@ -404,15 +416,16 @@ function ToolCallBody({ event, isCompact = true }: ToolCallItemProps) {
   const wrap = (node: ReactNode) => (
     <TranscriptItemScope id={event.id}><ToolStatusProvider value={status}>
       {node}
-      {(task || subagent) && (
+      {presentation === "tool" && (task || subagent) && (
         <TranscriptItemScope id={`${event.id}/task`}><TaskProgressStrip task={task} subagent={subagent} isCompact={isCompact} /></TranscriptItemScope>
       )}
     </ToolStatusProvider></TranscriptItemScope>
   );
 
-  if (replica) return wrap(<GenericToolDisplay icon={toolIcon} displayName={resolved.displayName} params={metadataInput ?? params}
+  if (replica && presentation === "card") return wrap(<Text size="xs" tone="subtle">App available on {replica.label}</Text>);
+  if (replica && resolved.category !== "Assistants") return wrap(<GenericToolDisplay icon={toolIcon} displayName={resolved.displayName} params={metadataInput ?? params}
     output={event.metadata?.output} isCompact={isCompact} />);
-  if (isEmptyTool) {
+  if (isEmptyTool && resolved.category !== "Assistants") {
     if (isCompact) {
       return wrap(
         <Text as="div" size="s" tone="inherit" className="flex items-center gap-1 px-1 font-sans">
@@ -446,6 +459,7 @@ function ToolCallBody({ event, isCompact = true }: ToolCallItemProps) {
     summary,
     event,
     isCompact,
+    presentation,
   };
 
   for (const renderer of DISPATCH) {

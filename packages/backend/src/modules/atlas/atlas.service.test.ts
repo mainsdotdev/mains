@@ -8,8 +8,7 @@ import { createTestDb } from "../../../test/setup-db";
 import { createAccount, createRun, createRunArtifact, createToolCall } from "../../../test/factories";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
 import type { DatabaseInstance } from "../../db/types";
-import { atlasItems, atlasPageRevisions, collections, runAttachmentRefs, runAttachments, runs } from "../../db/schema";
-import { ownershipOf } from "../bridge/bridge.ownership";
+import { atlasItems, atlasPageRevisions, atlasTags, atlasItemTags, collections, runAttachmentRefs, runAttachments, runs } from "../../db/schema";
 import { HISTORY_CHECKPOINTS } from "./atlas.history";
 import { atlasRepo } from "./atlas.repo";
 import { sourceKey } from "./atlas.storage";
@@ -25,10 +24,13 @@ const replicaOutputs = new Map<string, unknown[]>();
 vi.mock("../../db/client", () => ({ getDb: () => db }));
 // Keep the integration focused on Atlas' real SQLite/storage boundary.
 vi.mock("../runs", () => ({ runsService: {
-  getRunById: async (id: string) => {
-    const run = db.select().from(runs).where(eq(runs.id, id)).get();
-    return run ? { ...run, ...ownershipOf(run.ownerBackendId) } : null;
-  },
+  listOutputs: vi.fn(),
+  readOutputFile: vi.fn(),
+  describeAttachmentFile: vi.fn(),
+  resolveAttachmentPath: vi.fn(),
+  readAttachmentImage: vi.fn(),
+  readArtifactImage: vi.fn(),
+  getRunById: (id: string) => runsRepo.findRunById(id),
   getRunExecutionRoot: async (id: string) => {
     const run = db.select().from(runs).where(eq(runs.id, id)).get();
     return root(id, run?.mode ?? "work");
@@ -53,6 +55,7 @@ vi.mock("../runs", () => ({ runsService: {
   listRunAttachmentRecords: (id: string) => listRunAttachmentRecords(id),
 } }));
 import { atlasService } from "./atlas.service";
+import { atlasMobile } from "./atlas.mobile";
 import { attachmentDescriptor, listRunAttachmentRecords, prepareRunAttachments, resolveRunAttachment } from "../runs/run-attachment-storage";
 import { runsRepo } from "../runs/runs.repo";
 import { insertRunInputArtifact } from "../runs/run-input-artifact";
@@ -274,16 +277,777 @@ describe("Atlas agent access", { timeout: 15000 }, () => {
 });
 afterEach(() => { cleanup(); restoreRuntime(); vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
 
-function output(name = "report.pdf", runId = "conversation") {
-  createRun(db, { id: runId, mode: "work", title: "Research", status: "succeeded" });
-  fs.mkdirSync(root(runId), { recursive: true });
-  const file = path.join(root(runId), name);
+function output(name = "report.pdf", runId = "conversation", mode: "work" | "developer" | "chat" = "work") {
+  createRun(db, { id: runId, mode, title: "Research", status: "succeeded" });
+  fs.mkdirSync(root(runId, mode), { recursive: true });
+  const file = path.join(root(runId, mode), name);
   fs.writeFileSync(file, "original contents");
   createRunArtifact(db, { runId, kind: name.endsWith(".png") ? "image" : "document",
     metadata: JSON.stringify({ path: file }) });
   createRunArtifact(db, { runId, kind: "report", content: `[Output](<${file}>)` });
   return file;
 }
+describe("Atlas phone library", { timeout: 15000 }, () => {
+  it("keeps embedded Page image references between the surrounding text in phone Markdown", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Visual notes" });
+    const image = await atlasService.uploadFile({ accountId: "default", pageId: page.item.id,
+      fileName: "Screenshot.png", data: Buffer.from("prepared image").toString("base64") });
+    await atlasService.savePage({ accountId: "default", id: page.item.id, expectedVersion: 1, title: "Visual notes", blocks: [
+      { type: "paragraph", content: "Before the picture" },
+      { type: "image", props: { url: `atlas-file://${image.id}`, name: "Screenshot.png" } },
+      { type: "paragraph", content: "After the picture" },
+    ] });
+    const result = atlasMobile.readPage({ accountId: "default", id: page.item.id });
+    expect(result.markdown).toContain(`atlas-file://${image.id}`);
+    expect(result.markdown).toMatch(/!\[[^\]]*\]\(/);
+    expect(result.markdown.indexOf("Before the picture")).toBeLessThan(result.markdown.indexOf(`atlas-file://${image.id}`));
+    expect(result.markdown.indexOf("After the picture")).toBeGreaterThan(result.markdown.indexOf(`atlas-file://${image.id}`));
+  });
+
+  it("previews only a pinned Page's embedded image without sending paths or changing content", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Visual notes" });
+    const image = await atlasService.uploadFile({ accountId: "default", pageId: page.item.id,
+      fileName: "photo.png", data: Buffer.from("prepared image").toString("base64") });
+    const saved = await atlasService.savePage({ accountId: "default", id: page.item.id, expectedVersion: 1, title: "Visual notes",
+      blocks: [{ type: "paragraph", children: [{ type: "image", props: { url: `atlas-file://${image.id}`, name: "photo.png" } }] }] });
+    const request = { accountId: "default", id: page.item.id, fileId: image.id, version: saved.item.version };
+    const resize = vi.fn(async () => ({ bytes: Buffer.from("preview"), mime: "image/png" as const, width: 768, height: 384 }));
+    const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize } });
+    try {
+      const result = await atlasMobile.readPageImage(request);
+      expect(result).toMatchObject({ pageId: page.item.id, fileId: image.id, pageVersion: saved.item.version, width: 768, height: 384 });
+      expect(resize).toHaveBeenCalledWith(expect.any(Buffer), 768, true);
+      expect(JSON.stringify(result)).not.toContain(directory);
+      expect(atlasService.getPage({ accountId: "default", id: page.item.id })?.revision).toEqual(saved.revision);
+      await expect(atlasMobile.readPageImage({ ...request, accountId: "foreign" })).rejects.toThrow("not found");
+      await expect(atlasMobile.readPageImage({ ...request, version: 1 })).rejects.toThrow("changed");
+      await expect(atlasMobile.readPageImage({ ...request, version: 0 })).rejects.toThrow("Invalid Page version");
+      const unrelated = await atlasService.createPage({ accountId: "default", title: "Other Page" });
+      await expect(atlasMobile.readPageImage({ ...request, id: unrelated.item.id, version: 1 })).rejects.toThrow("not found in this Page");
+    } finally { reset(); }
+  });
+
+  it.each(["page-changed", "page-trashed", "image-trashed", "file-changed"])(
+    "rejects an embedded image that becomes %s while its preview loads", async condition => {
+      const page = await atlasService.createPage({ accountId: "default", title: "Visual notes" });
+      const image = await atlasService.uploadFile({ accountId: "default", pageId: page.item.id,
+        fileName: "photo.png", data: Buffer.from("prepared image").toString("base64") });
+      const saved = await atlasService.savePage({ accountId: "default", id: page.item.id, expectedVersion: 1, title: "Visual notes",
+        blocks: [{ type: "image", props: { url: `atlas-file://${image.id}`, name: "photo.png" } }] });
+      const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize: async () => {
+        if (condition === "page-changed") await atlasService.savePage({ accountId: "default", id: page.item.id,
+          expectedVersion: saved.item.version, title: "Changed", markdown: "Image removed" });
+        if (condition === "page-trashed") await atlasService.update({ accountId: "default", id: page.item.id, trashed: true });
+        if (condition === "image-trashed") await atlasService.update({ accountId: "default", id: image.id, trashed: true });
+        if (condition === "file-changed") fs.writeFileSync(image.path!, "changed while loading");
+        return { bytes: Buffer.from("old preview"), mime: "image/png", width: 128, height: 96 };
+      } } });
+      try { await expect(atlasMobile.readPageImage({ accountId: "default", id: page.item.id, fileId: image.id, version: saved.item.version })).rejects.toThrow(); }
+      finally { reset(); }
+    },
+  );
+
+  it.each([[false, false], [false, true], [true, false], [true, true]])(
+    "reads Page icon=%s and cover=%s independently without hydrating an image", async (icon, covered) => {
+      const file = output("photo.png");
+      const cover = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
+      const page = await atlasService.createPage({ accountId: "default", title: "Workout", markdown: "Body",
+        metadata: { icon: icon ? "icon:dumbbell|purple" : null, coverFileId: covered ? cover.id : null } });
+      const resolve = vi.spyOn(atlasService, "resolveFile");
+      const result = atlasMobile.readPage({ accountId: "default", id: page.item.id });
+      expect(result).toMatchObject({ title: "Workout", icon: icon ? "icon:dumbbell|purple" : null,
+        coverFileId: covered ? cover.id : null, version: 1 });
+      expect(resolve).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain(directory);
+    },
+  );
+
+  it("reads only the Page's current cover, bounds its preview and retains ordinary thumbnail limits", async () => {
+    const file = output("photo.png"), bytes = Buffer.from("prepared cover preview");
+    const cover = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
+    const page = await atlasService.createPage({ accountId: "default", title: "Cover", metadata: { coverFileId: cover.id } });
+    const request = { accountId: "default", id: page.item.id, coverFileId: cover.id };
+    const resize = vi.fn(async (_bytes: Buffer, maxSide: number) => ({ bytes, mime: "image/png" as const, width: maxSide, height: maxSide / 2 }));
+    const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize } });
+    try {
+      const image = await atlasMobile.readPageCover(request);
+      expect(image).toMatchObject({ pageId: page.item.id, coverFileId: cover.id, width: 768, height: 384 });
+      expect(resize).toHaveBeenCalledWith(expect.any(Buffer), 768, true);
+      expect(Buffer.from(image.base64, "base64")).toEqual(bytes);
+      expect(JSON.stringify(image)).not.toContain(directory);
+      await expect(atlasMobile.readPageCover({ ...request, accountId: "other" })).rejects.toThrow("unavailable");
+      await expect(atlasMobile.readPageCover({ ...request, coverFileId: "not-the-cover" })).rejects.toThrow("changed");
+      expect((await atlasMobile.readImage({ accountId: "default", reference: { itemId: cover.id } })).width).toBe(128);
+      await atlasService.update({ accountId: "default", id: cover.id, trashed: true });
+      expect(atlasMobile.readPage({ accountId: "default", id: page.item.id }).coverFileId).toBeNull();
+      await expect(atlasMobile.readPageCover(request)).rejects.toThrow("unavailable");
+    } finally { reset(); }
+  });
+
+  it.each(["page-trashed", "cover-removed", "cover-trashed", "file-changed", "oversized", "dimensions"])(
+    "refuses a cover that becomes %s during decoding", async (condition) => {
+      const file = output("photo.png");
+      const cover = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
+      const page = await atlasService.createPage({ accountId: "default", title: "Cover", metadata: { coverFileId: cover.id } });
+      const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize: async () => {
+        if (condition === "page-trashed") await atlasService.update({ accountId: "default", id: page.item.id, trashed: true });
+        if (condition === "cover-removed") await atlasService.update({ accountId: "default", id: page.item.id, metadata: { coverFileId: null } });
+        if (condition === "cover-trashed") await atlasService.update({ accountId: "default", id: cover.id, trashed: true });
+        if (condition === "file-changed") fs.writeFileSync(cover.path!, "changed during decoding");
+        return { bytes: condition === "oversized" ? Buffer.alloc(512 * 1024 + 1) : Buffer.from("preview"),
+          mime: "image/png", width: condition === "dimensions" ? 769 : 128, height: 96 };
+      } } });
+      try { await expect(atlasMobile.readPageCover({ accountId: "default", id: page.item.id, coverFileId: cover.id })).rejects.toThrow(); }
+      finally { reset(); }
+    },
+  );
+
+  it("uses a smaller cover derivative when a transparent PNG exceeds the wire budget", async () => {
+    const file = output("photo.png");
+    const cover = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
+    const page = await atlasService.createPage({ accountId: "default", title: "Cover", metadata: { coverFileId: cover.id } });
+    const resize = vi.fn(async (_bytes: Buffer, maxSide: number) => ({ bytes: maxSide === 768 ? Buffer.alloc(512 * 1024 + 1) : Buffer.from("smaller preview"),
+      mime: "image/png" as const, width: maxSide, height: maxSide }));
+    const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize } });
+    try {
+      const result = await atlasMobile.readPageCover({ accountId: "default", id: page.item.id, coverFileId: cover.id });
+      expect(result.width).toBe(256);
+      expect(resize.mock.calls.map(call => call[1])).toEqual([768, 256]);
+    } finally { reset(); }
+  });
+
+  it("returns useful bounded display metadata without paths or embedded image hydration", async () => {
+    output();
+    const page = await atlasService.createPage({ accountId: "default", title: "Brief", markdown: "😀".repeat(500) });
+    const resolve = vi.spyOn(atlasService, "resolveFile");
+    const rows = (await atlasMobile.library({ accountId: "default" })).items;
+    const document = rows.find(item => item.kind === "file")!;
+    expect(document).toMatchObject({ fileName: "report.pdf", mimeType: "application/pdf", byteSize: 17 });
+    expect(Array.from(rows.find(item => item.pageId === page.item.id)!.preview!)).toHaveLength(240);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(JSON.stringify(rows)).not.toContain(directory);
+    expect(rows.every(item => !("blocks" in item) && !("path" in item))).toBe(true);
+    output("x".repeat(239) + "😀.pdf", "unicode-name");
+    const unicode = (await atlasMobile.library({ accountId: "default" })).items.find(item => item.file?.runId === "unicode-name")!;
+    expect(unicode.fileName).toBe("x".repeat(239)); // Never cut a UTF-16 surrogate pair at the wire limit.
+  });
+
+  it("reads bounded thumbnails for selected and saved images, refusing foreign and non-image sources", async () => {
+    const file = output("photo.png"), preview = Buffer.from("small thumbnail");
+    const resize = vi.fn(async () => ({ bytes: preview, mime: "image/png" as const, width: 128, height: 96 }));
+    const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize } });
+    try {
+      const reference = (await atlasMobile.library({ accountId: "default" })).items[0].file!;
+      const image = await atlasMobile.readImage({ accountId: "default", reference });
+      expect(Buffer.from(image.base64, "base64")).toEqual(preview);
+      expect(image).toMatchObject({ reference, width: 128, height: 96, version: expect.stringMatching(/^[a-f0-9]{64}$/) });
+      expect(resize).toHaveBeenCalledWith(expect.any(Buffer), 128, true);
+      expect(JSON.stringify(image)).not.toContain(directory);
+      const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
+      expect((await atlasMobile.readImage({ accountId: "default", reference: { itemId: saved.id } })).base64).toBe(image.base64);
+      await expect(atlasMobile.readImage({ accountId: "other", reference })).rejects.toThrow("not found");
+      const pdf = output("notes.pdf", "pdf-chat");
+      const document = await atlasService.saveFile({ accountId: "default", runId: "pdf-chat", path: pdf });
+      await expect(atlasMobile.readImage({ accountId: "default", reference: { itemId: document.id } })).rejects.toThrow("Not an Atlas image");
+      await atlasService.update({ accountId: "default", id: saved.id, trashed: true });
+      await expect(atlasMobile.readImage({ accountId: "default", reference: { itemId: saved.id } })).rejects.toThrow("not found");
+    } finally { reset(); }
+  });
+
+  it.each(["changed", "trashed", "oversized"])("refuses thumbnail bytes when their source becomes %s during decoding", async (condition) => {
+    const file = output("photo.png");
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
+    const reference = condition === "trashed" ? { itemId: saved.id } : { runId: "conversation", sourceKey: sourceKey("conversation", fs.realpathSync(file)) };
+    const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize: async () => {
+      if (condition === "changed") fs.writeFileSync(file, "changed source during decoding");
+      if (condition === "trashed") await atlasService.update({ accountId: "default", id: saved.id, trashed: true });
+      return { bytes: condition === "oversized" ? Buffer.alloc(128 * 1024 + 1) : Buffer.from("thumbnail"), mime: "image/png", width: 128, height: 96 };
+    } } });
+    try { await expect(atlasMobile.readImage({ accountId: "default", reference })).rejects.toThrow(); }
+    finally { reset(); }
+  });
+
+  it("routes replica thumbnails through the verified conversation image reader", async () => {
+    createRun(db, { id: "replica-image", mode: "work", status: "succeeded", ownerBackendId: "remote-source" });
+    replicaOutputs.set("replica-image", [{ id: -42, kind: "image", metadata: { path: "/remote/photo.png", byteSize: 2 }, createdAt: new Date() }]);
+    const { runsService } = await import("../runs");
+    vi.mocked(runsService.listOutputs).mockReset().mockResolvedValue({ items: [{ runId: "replica-image", artifactId: -42,
+      name: "photo.png", mimeType: "image/png", previewType: "image", byteSize: 2, modifiedAt: 1, version: "d".repeat(64) }], nextOffset: null });
+    const reader = vi.mocked(runsService.readArtifactImage).mockReset().mockResolvedValue({ mime: "image/png", base64: Buffer.from("tiny").toString("base64"), width: 1, height: 1 });
+    const reference = (await atlasMobile.library({ accountId: "default" })).items[0].file!;
+    expect((await atlasMobile.readImage({ accountId: "default", reference })).width).toBe(1);
+    expect(reader).toHaveBeenCalledWith({ runId: "replica-image", artifactId: -42, maxSide: 128 });
+  });
+
+  it.each(["page", "file", "image", "bookmark"] as const)("shows, creates and removes phone tags on a saved %s without changing content or source context", async (kind) => {
+    createRun(db, { id: "tag-conversation", mode: "work" });
+    atlasRepo.insert({ id: "tag-item", accountId: "default", kind, title: "Keep title", sourceRunId: "tag-conversation", isFavorite: true,
+      version: 4, url: kind === "bookmark" ? "https://example.com" : null, description: "Keep description", note: "Keep note" });
+    const identity = { accountId: "default", id: "tag-item" };
+    atlasRepo.setTags(identity.id, identity.accountId, ["Work", "AI suggestion"], "ai");
+    const before = atlasMobile.readTags(identity), work = before.tags.find(tag => tag.name === "Work")!;
+    const result = atlasMobile.setTags({ ...identity, expectedRevision: before.revision, tags: [work.id, "New topic", "Ｗｏｒｋ"] });
+    const current = atlasMobile.readTags(identity);
+    expect(current.tags).toEqual(expect.arrayContaining([{ ...work, source: "ai" }, expect.objectContaining({ name: "New topic", source: "user" })]));
+    expect(current.tags).toHaveLength(2);
+    expect(result).toEqual({ id: identity.id, requestedId: identity.id, title: "Keep title", kind, revision: current.revision });
+    const library = await atlasMobile.library({ accountId: "default", scope: "saved", tagId: work.id });
+    expect(library.items.map(row => row.savedItemId)).toEqual([identity.id]);
+    expect(library.items[0].tags).toEqual(current.tags);
+    expect(atlasService.get(identity)).toMatchObject({ title: "Keep title", sourceRunId: "tag-conversation", isFavorite: true, version: 4, description: "Keep description", note: "Keep note" });
+    expect(JSON.stringify(current)).not.toMatch(/"(path|blocks|markdown|metadata|note|url)":/);
+    atlasMobile.setTags({ ...identity, expectedRevision: current.revision, tags: [] });
+    expect((await atlasMobile.library({ accountId: "default", tagId: work.id })).items).toEqual([]);
+    atlasRepo.setTags(identity.id, identity.accountId, ["Work", "AI suggestion"], "ai");
+    expect(atlasMobile.readTags(identity).tags).toEqual([]);
+    expect(atlasService.listTags({ accountId: "default" })).toHaveLength(3);
+  });
+
+  it("bounds a large merged tag selection without silently replacing hidden tags", async () => {
+    atlasRepo.insert({ id: "merged-tags", accountId: "default", kind: "page", title: "Merged Page" });
+    for (let index = 0; index < 61; index++) {
+      const id = `merged-tag-${index}`, name = `Tag ${String(index).padStart(2, "0")}`;
+      db.insert(atlasTags).values({ id, accountId: "default", name, normalizedName: name.toLowerCase() }).run();
+      db.insert(atlasItemTags).values({ itemId: "merged-tags", tagId: id, source: "user" }).run();
+    }
+    expect((await atlasMobile.library({ accountId: "default" })).items[0].tags).toHaveLength(60);
+    expect(() => atlasMobile.readTags({ accountId: "default", id: "merged-tags" })).toThrow("too many tags");
+    expect(atlasService.get({ accountId: "default", id: "merged-tags" })?.tags).toHaveLength(61);
+  });
+
+  it("keeps the phone tag catalogue bounded, searchable and scoped to the account", async () => {
+    createAccount(db, { id: "tag-foreign" });
+    for (const [id, accountId] of [["one", "default"], ["two", "default"], ["private", "tag-foreign"]]) atlasRepo.insert({ id, accountId, kind: "page", title: id });
+    const names = Array.from({ length: 55 }, (_, index) => `Topic ${String(index).padStart(2, "0")}`);
+    atlasRepo.setTags("one", "default", names.slice(0, 30), "user");
+    atlasRepo.setTags("two", "default", names.slice(30), "user");
+    atlasRepo.setTags("private", "tag-foreign", ["Private"], "user");
+    await atlasService.update({ accountId: "default", id: "two", trashed: true });
+    const first = atlasMobile.tags({ accountId: "default" }), second = atlasMobile.tags({ accountId: "default", page: 2 });
+    expect(first.items).toHaveLength(50); expect(first.hasNext).toBe(true);
+    expect(second.items).toHaveLength(5); expect(second.hasNext).toBe(false);
+    expect([...first.items, ...second.items].map(tag => tag.name)).toEqual(names);
+    expect(first.items[0].count).toBe(1); expect(second.items[0].count).toBe(0);
+    expect(atlasMobile.tags({ accountId: "default", query: "ＴＯＰＩＣ ０" }).items).toHaveLength(10);
+    expect(atlasMobile.tags({ accountId: "default", query: "%" }).items).toEqual([]);
+    expect(atlasMobile.tags({ accountId: "default", page: 3 }).items).toEqual([]);
+    for (const page of [0, -1, 1.5, 100001]) expect(() => atlasMobile.tags({ accountId: "default", page })).toThrow();
+    expect(() => atlasMobile.tags({ accountId: "default", query: "x".repeat(65) })).toThrow();
+  });
+
+  it("refuses stale phone tag edits after another device or enrichment changes them, without creating orphan tags", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Original", markdown: "Keep body" });
+    const identity = { accountId: "default", id: page.item.id };
+    atlasService.setTags({ ...identity, tags: ["Research"] });
+    const before = atlasMobile.readTags(identity);
+    await atlasService.update({ ...identity, isFavorite: true });
+    expect(atlasMobile.readTags(identity).revision).toBe(before.revision);
+    atlasService.renameTag({ accountId: "default", id: before.tags[0].id, name: "Renamed elsewhere" });
+    expect(() => atlasMobile.setTags({ ...identity, expectedRevision: before.revision, tags: ["Unsent new tag"] })).toThrow("changed elsewhere");
+    expect(atlasService.listTags({ accountId: "default" }).map(tag => tag.name)).toEqual(["Renamed elsewhere"]);
+    const fresh = atlasMobile.readTags(identity);
+    atlasRepo.setTags(identity.id, "default", ["Enriched"], "ai");
+    expect(() => atlasMobile.setTags({ ...identity, expectedRevision: fresh.revision, tags: [] })).toThrow("changed elsewhere");
+    expect(atlasService.getPage(identity)?.revision.markdown).toContain("Keep body");
+  });
+
+  it("rejects foreign, trashed or generated-only tag targets and refuses fields beyond tags", async () => {
+    createAccount(db, { id: "tag-other" });
+    atlasRepo.insert({ id: "tag-active", accountId: "default", kind: "page", title: "Active" });
+    atlasRepo.insert({ id: "tag-other-item", accountId: "tag-other", kind: "page", title: "Private" });
+    atlasService.setTags({ accountId: "tag-other", id: "tag-other-item", tags: ["Private tag"] });
+    const identity = { accountId: "default", id: "tag-active" }, revision = atlasMobile.readTags(identity).revision;
+    const foreignTag = atlasService.listTags({ accountId: "tag-other" })[0].id;
+    expect(() => atlasMobile.setTags({ ...identity, expectedRevision: revision, tags: ["Roll back creation", foreignTag] })).toThrow("different account");
+    expect(atlasService.listTags({ accountId: "default" })).toEqual([]);
+    for (const tags of [null, [false], [""], ["a\nb"], ["😀".repeat(33)], Array(31).fill("Tag")])
+      expect(() => atlasMobile.setTags({ ...identity, expectedRevision: revision, tags } as never)).toThrow();
+    for (const field of ["title", "path", "isFavorite", "collectionId", "trashed", "metadata"])
+      expect(() => atlasMobile.setTags({ ...identity, expectedRevision: revision, tags: ["Tag"], [field]: true } as never)).toThrow("Invalid");
+    for (const id of ["tag-other-item", "generated-only"])
+      expect(() => atlasMobile.readTags({ accountId: "default", id })).toThrow("not found");
+    await atlasService.update({ ...identity, trashed: true });
+    expect(() => atlasMobile.setTags({ ...identity, expectedRevision: revision, tags: ["Tag"] })).toThrow("Trash");
+    expect(atlasService.get(identity)?.title).toBe("Active");
+  });
+
+  it.each(["page", "file", "image", "bookmark"] as const)("moves a saved %s to Trash and restores it idempotently without losing metadata", async (kind) => {
+    db.insert(collections).values({ id: "trash-project", accountId: "default", name: "Research" }).run();
+    atlasRepo.insert({ id: "trash-item", accountId: "default", kind, title: "Keep title", collectionId: "trash-project", isFavorite: true, version: 4 });
+    const identity = { accountId: "default", id: "trash-item" };
+    const first = await atlasMobile.setTrash({ ...identity, trashed: true });
+    const date = atlasService.get(identity)!.trashedAt;
+    expect(await atlasMobile.setTrash({ ...identity, trashed: true })).toEqual(first);
+    expect(atlasService.get(identity)!.trashedAt).toBe(date);
+    expect(atlasMobile.trash({ accountId: "default" }).items).toMatchObject([{ id: "trash-item", kind, collectionId: "trash-project" }]);
+    expect(first).toMatchObject({ id: "trash-item", requestedId: "trash-item", kind, trashed: true });
+    expect(first).not.toHaveProperty("path");
+    expect((await atlasMobile.setTrash({ ...identity, trashed: false })).trashed).toBe(false);
+    await atlasMobile.setTrash({ ...identity, trashed: false });
+    expect(atlasService.get(identity)).toMatchObject({ title: "Keep title", collectionId: "trash-project", isFavorite: true, version: 4, trashedAt: null });
+    expect(atlasMobile.trash({ accountId: "default" }).items).toEqual([]);
+  });
+
+  it("pages only the account's trashed metadata in stable Trash-date order", () => {
+    createAccount(db, { id: "trash-foreign" });
+    const date = new Date();
+    for (let index = 0; index < 55; index++) {
+      atlasRepo.insert({ id: `trash-${String(index).padStart(2, "0")}`, accountId: "default", kind: "page", title: `Page ${index}`, trashedAt: date });
+    }
+    atlasRepo.insert({ id: "trash-old", accountId: "default", kind: "file", title: "Older trash", trashedAt: new Date(0), updatedAt: new Date(date.getTime() + 86400_000) });
+    atlasRepo.insert({ id: "active", accountId: "default", kind: "page", title: "Active" });
+    atlasRepo.insert({ id: "foreign", accountId: "trash-foreign", kind: "page", title: "Private", trashedAt: date });
+    const first = atlasMobile.trash({ accountId: "default" }), next = atlasMobile.trash({ accountId: "default", page: 2 });
+    expect(first.items).toHaveLength(50); expect(first.hasNext).toBe(true);
+    expect(next.items).toHaveLength(6); expect(next.hasNext).toBe(false);
+    expect(next.items.at(-1)?.id).toBe("trash-old");
+    expect(new Set([...first.items, ...next.items].map((item) => item.id)).size).toBe(56);
+    expect(first.items.every((item) => item.id !== "foreign" && item.id !== "active")).toBe(true);
+    expect(JSON.stringify(first)).not.toMatch(/"(path|blocks|markdown|note)":/);
+    for (const page of [0, -1, 1.5, 100001]) expect(() => atlasMobile.trash({ accountId: "default", page })).toThrow("Invalid");
+  });
+
+  it("keeps the first Trash timestamp when another device submits the same state before confirmation", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Shared Page", markdown: "Body" });
+    const input = { accountId: "default", id: page.item.id, trashed: true };
+    const update = atlasService.update.bind(atlasService);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-13T10:00:00Z"));
+    let commits = 0;
+    const spy = vi.spyOn(atlasService, "update").mockImplementation((fields, validate) => update(fields, () => {
+      validate?.();
+      if (++commits === 1) vi.setSystemTime(new Date("2026-11-13T10:00:10Z"));
+    }));
+    try {
+      await Promise.all([atlasMobile.setTrash(input), atlasMobile.setTrash(input)]);
+      expect(atlasService.get(input)?.trashedAt).toBe("2026-11-13T10:00:00.000Z");
+    } finally { spy.mockRestore(); vi.useRealTimers(); }
+  });
+  it("preserves both an Atlas file's immutable bytes and its conversation's original through Trash/Restore", async () => {
+    const source = output("kept.pdf", "trash-source");
+    const copy = await atlasService.saveFile({ accountId: "default", runId: "trash-source", path: source });
+    const identity = { accountId: "default", id: copy.id };
+    await atlasMobile.setTrash({ ...identity, trashed: true });
+    expect(fs.existsSync(source) && fs.existsSync(copy.path!)).toBe(true);
+    await expect(atlasMobile.describeFile({ accountId: "default", reference: { itemId: copy.id } })).rejects.toThrow("not found");
+    expect((await atlasMobile.library({ accountId: "default" })).items).toEqual([]);
+    const { runsService } = await import("../runs");
+    expect((await runsService.getOutputArtifacts("trash-source")).some((item) => item.path === fs.realpathSync(source))).toBe(true);
+    await atlasMobile.setTrash({ ...identity, trashed: false });
+    expect((await atlasMobile.describeFile({ accountId: "default", reference: { itemId: copy.id } })).name).toBe("kept.pdf");
+    expect(fs.readFileSync(copy.path!, "utf8")).toBe("original contents");
+  });
+
+  it("deletes only the confirmed saved copy in mobile Trash and preserves its conversation original", async () => {
+    const source = output("delete.pdf", "delete-source");
+    const copy = await atlasService.saveFile({ accountId: "default", runId: "delete-source", path: source });
+    const identity = { accountId: "default", id: copy.id };
+    const trashDate = "2026-11-13T10:00:00.000Z";
+    await expect(atlasMobile.deleteTrash({ ...identity, expectedTrashedAt: trashDate })).rejects.toThrow("Trash status changed");
+
+    atlasRepo.update(copy.id, identity.accountId, { trashedAt: new Date(trashDate) });
+    const trash = atlasMobile.trash({ accountId: identity.accountId });
+    expect(trash.canDeletePermanently).toBe(true);
+    expect((await atlasService.library({ accountId: identity.accountId, scope: "generated" })).items).toEqual([]);
+    const request = { ...identity, expectedTrashedAt: trash.items[0].trashedAt };
+    await expect(atlasMobile.deleteTrash({ ...request, accountId: "other" })).rejects.toThrow("not found");
+    await expect(atlasMobile.deleteTrash({ ...request, path: source } as never)).rejects.toThrow("Invalid");
+
+    await atlasMobile.setTrash({ ...identity, trashed: false });
+    atlasRepo.update(copy.id, identity.accountId, { trashedAt: new Date("2026-11-13T10:00:05.000Z") });
+    await expect(atlasMobile.deleteTrash(request)).rejects.toThrow("Trash status changed");
+    expect(fs.existsSync(copy.path!)).toBe(true);
+
+    await expect(atlasMobile.deleteTrash({ ...identity, expectedTrashedAt: "2026-11-13T10:00:05.000Z" }))
+      .resolves.toEqual({ id: copy.id, requestedId: copy.id, title: copy.title, kind: copy.kind });
+    expect(atlasMobile.trash({ accountId: identity.accountId }).items).toEqual([]);
+    expect(atlasService.get(identity)).toBeNull();
+    expect(fs.existsSync(copy.path!)).toBe(false);
+    expect(fs.readFileSync(source, "utf8")).toBe("original contents");
+    expect((await atlasService.library({ accountId: identity.accountId })).items).toEqual([]);
+    expect((await atlasService.generated({ accountId: identity.accountId })).items).toEqual([]);
+    const savedAgain = await atlasService.saveFile({ accountId: identity.accountId, runId: "delete-source", path: source });
+    expect((await atlasService.library({ accountId: identity.accountId })).items.map((item) => item.key)).toEqual([savedAgain.id]);
+  });
+
+  it("hides a chat upload and matching automatic results across scopes and restores them without changing the chat", async () => {
+    const accountId = "default", runId = "source-upload";
+    createRun(db, { id: runId, mode: "work" });
+    const bytes = Buffer.from("matching image bytes");
+    const [attachment] = (await prepareRunAttachments(runId, [{ name: "upload.png", type: "image",
+      mimeType: "image/png", data: bytes.toString("base64") }]))!;
+    const generated = output("generated.png", "source-output");
+    fs.writeFileSync(generated, bytes);
+    const uploads = () => atlasMobile.library({ accountId, scope: "uploads" });
+    const library = (scope: "all" | "generated", query?: string) => atlasService.library({ accountId, scope, query });
+    const upload = (await uploads()).items[0];
+    expect((await library("all")).items).toHaveLength(1);
+    const input = { accountId, runId, id: upload.key, trashed: true };
+    await expect(atlasMobile.setTrash({ ...input, accountId: "other" })).rejects.toThrow("Conversation not found");
+    const removal = await atlasMobile.setTrash(input);
+    const entry = atlasMobile.trash({ accountId }).items[0];
+    expect(entry).toMatchObject({ id: removal.id, title: "upload.png", sourceOnly: true });
+    expect(atlasService.list({ accountId, trashed: true, includeRemovedSources: true })[0]).toMatchObject({ id: removal.id, sourceOnly: true, path: null });
+    expect(await atlasMobile.setTrash(input)).toEqual(removal);
+    expect(atlasMobile.trash({ accountId }).items).toEqual([entry]);
+    expect((await uploads()).items).toEqual([]);
+    expect((await library("all", "upload")).items).toEqual([]);
+    expect((await library("generated")).items).toEqual([]);
+    expect((await atlasService.generated({ accountId })).items).toEqual([]);
+    expect(fs.readFileSync(attachment.sourcePath)).toEqual(bytes);
+    expect(await atlasMobile.describeFile({ accountId, reference: upload.file! })).toMatchObject({ name: "upload.png" });
+    await expect(atlasMobile.setTrash({ accountId: "other", id: removal.id, trashed: false })).rejects.toThrow("not found");
+    await atlasMobile.setTrash({ accountId, id: removal.id, trashed: false });
+    expect((await uploads()).items).toHaveLength(1);
+    expect((await library("generated")).items).toHaveLength(1);
+
+    const removedAgain = await atlasMobile.setTrash(input);
+    const { trashedAt } = atlasMobile.trash({ accountId }).items[0];
+    await atlasMobile.deleteTrash({ accountId, id: removedAgain.id, expectedTrashedAt: trashedAt });
+    expect(atlasMobile.trash({ accountId }).items).toEqual([]);
+    expect((await library("all")).items).toEqual([]);
+    const saved = await atlasService.saveFile({ accountId, runId, path: attachment.sourcePath });
+    expect((await library("all")).items.map((item) => item.key)).toEqual([saved.id]);
+    expect((await uploads()).items).toHaveLength(1);
+  });
+
+  it("keeps trashed Page assets protected from mobile permanent deletion", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Page with a cover" });
+    const identity = { accountId: "default", id: page.item.id };
+    const cover = await atlasService.uploadFile({ accountId: identity.accountId, pageId: identity.id,
+      fileName: "cover.png", data: Buffer.from("image").toString("base64") });
+    await atlasService.update({ ...identity, metadata: { coverFileId: cover.id } });
+    const file = { ...identity, id: cover.id };
+    await atlasMobile.setTrash({ ...file, trashed: true });
+    const trashedAt = atlasService.get(file)!.trashedAt!;
+    await expect(atlasMobile.deleteTrash({ ...file, expectedTrashedAt: trashedAt })).rejects.toThrow("not found");
+    await atlasMobile.setTrash({ ...file, trashed: false });
+    await atlasService.saveFile({ accountId: identity.accountId, itemId: cover.id });
+    await atlasMobile.setTrash({ ...file, trashed: true });
+    await expect(atlasMobile.deleteTrash({ ...file, expectedTrashedAt: atlasService.get(file)!.trashedAt! })).rejects.toThrow("used by a Page");
+    expect(fs.existsSync(cover.path!)).toBe(true);
+  });
+
+  it("rejects foreign, missing and generated-only Trash targets and all wider mutations", async () => {
+    atlasRepo.insert({ id: "trash-safe", accountId: "default", kind: "file", title: "Keep" });
+    const identity = { accountId: "default", id: "trash-safe", trashed: true };
+    await expect(atlasMobile.setTrash({ ...identity, accountId: "other" })).rejects.toThrow("not found");
+    await expect(atlasMobile.setTrash({ ...identity, id: "a".repeat(64) })).rejects.toThrow("not found");
+    await expect(atlasMobile.setTrash({ ...identity, trashed: "yes" } as never)).rejects.toThrow("Only Trash");
+    for (const field of ["title", "path", "remove", "metadata", "collectionId"]) {
+      await expect(atlasMobile.setTrash({ ...identity, [field]: "forbidden" } as never)).rejects.toThrow("Only Trash");
+    }
+    expect(atlasService.get(identity)?.trashedAt).toBeNull();
+  });
+
+  it.each(["page", "file", "image", "bookmark"] as const)("organizes a permanent %s without changing its content or source", async (kind) => {
+    db.insert(collections).values({ id: "phone-project", accountId: "default", name: "Research" }).run();
+    atlasRepo.insert({ id: "organize", accountId: "default", kind, title: "Keep title", version: 7 });
+    const initial = atlasService.get({ id: "organize", accountId: "default" })!;
+    const identity = { id: "organize", accountId: "default" };
+    const favorite = await atlasMobile.updateItem({ ...identity, isFavorite: true });
+    expect(favorite).toMatchObject({ id: "organize", requestedId: "organize", isFavorite: true, collectionId: null, kind });
+    expect(await atlasMobile.updateItem({ ...identity, isFavorite: true })).toEqual(favorite);
+    const moved = await atlasMobile.updateItem({ ...identity, collectionId: "phone-project" });
+    expect(moved).toMatchObject({ isFavorite: true, collectionId: "phone-project" });
+    expect((await atlasMobile.library({ accountId: "default", scope: "favorites", collectionId: "phone-project" })).items.map((item) => item.savedItemId)).toEqual(["organize"]);
+    await atlasMobile.updateItem({ ...identity, isFavorite: false });
+    expect((await atlasMobile.library({ accountId: "default", scope: "favorites" })).items).toEqual([]);
+    await atlasMobile.updateItem({ ...identity, collectionId: null });
+    const current = atlasService.get(identity)!;
+    expect(current).toMatchObject({ title: initial.title, version: initial.version, metadata: initial.metadata, sourceRunId: initial.sourceRunId, collectionId: null, isFavorite: false });
+    expect(moved).not.toHaveProperty("path");
+  });
+
+  it("refuses foreign/archived projects, Trash, generated-only identities and broader item writes", async () => {
+    createAccount(db, { id: "other" });
+    db.insert(collections).values([{ id: "foreign-project", accountId: "other", name: "Private" }, { id: "archived-project", accountId: "default", name: "Old", isArchived: true }]).run();
+    atlasRepo.insert({ id: "phone-item", accountId: "default", kind: "file", title: "Original" });
+    const identity = { accountId: "default", id: "phone-item" };
+    await expect(atlasMobile.updateItem({ ...identity, accountId: "other", isFavorite: true })).rejects.toThrow("not found");
+    await expect(atlasMobile.updateItem({ ...identity, collectionId: "foreign-project" })).rejects.toThrow();
+    await expect(atlasMobile.updateItem({ ...identity, collectionId: "archived-project" })).rejects.toThrow("archived");
+    await expect(atlasMobile.updateItem({ ...identity, collectionId: "missing" })).rejects.toThrow("not found");
+    await expect(atlasMobile.updateItem({ ...identity, isFavorite: "yes" } as never)).rejects.toThrow("Only favorite");
+    await expect(atlasMobile.updateItem(identity)).rejects.toThrow("Only favorite");
+    for (const field of ["title", "trashed", "metadata", "path"]) {
+      await expect(atlasMobile.updateItem({ ...identity, isFavorite: true, [field]: "forbidden" } as never)).rejects.toThrow("Only favorite");
+    }
+    await expect(atlasMobile.updateItem({ ...identity, id: "a".repeat(64), isFavorite: true })).rejects.toThrow("not found");
+    await atlasService.update({ ...identity, trashed: true });
+    await expect(atlasMobile.updateItem({ ...identity, isFavorite: true })).rejects.toThrow("Trash");
+    expect(atlasService.get(identity)).toMatchObject({ title: "Original", collectionId: null, isFavorite: false });
+  });
+
+  it("rechecks active item ownership after awaiting project validation", async () => {
+    db.insert(collections).values({ id: "race-project", accountId: "default", name: "Research" }).run();
+    atlasRepo.insert({ id: "racing-item", accountId: "default", kind: "page", title: "Notes" });
+    const identity = { accountId: "default", id: "racing-item" };
+    const { collectionsService } = await import("../collections");
+    const original = collectionsService.get.bind(collectionsService);
+    vi.spyOn(collectionsService, "get").mockImplementation(async (input) => {
+      const project = await original(input);
+      await atlasService.update({ ...identity, trashed: true });
+      return project;
+    });
+    await expect(atlasMobile.updateItem({ ...identity, collectionId: "race-project" })).rejects.toThrow("Trash");
+    expect(atlasService.get(identity)?.collectionId).toBeNull();
+  });
+
+  it("organizes the permanent copy of a generated result without moving its source conversation", async () => {
+    const file = output("report.pdf", "organize-source");
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "organize-source", path: file });
+    db.insert(collections).values({ id: "copy-project", accountId: "default", name: "Saved research" }).run();
+    await atlasMobile.updateItem({ accountId: "default", id: saved.id, collectionId: "copy-project", isFavorite: true });
+    const generated = (await atlasMobile.library({ accountId: "default", scope: "generated" })).items[0];
+    expect(generated.key).not.toBe(saved.id);
+    expect(generated).toMatchObject({ savedItemId: saved.id, savedCollectionId: "copy-project", collectionId: null, isFavorite: true });
+    expect(db.select().from(runs).where(eq(runs.id, "organize-source")).get()?.collectionId).toBeNull();
+  });
+
+  it.each(["work", "developer", "chat"] as const)("saves an exact selected output by identity in %s without accepting a path", async (mode) => {
+    const file = output("snapshot.pdf", `save-${mode}`, mode);
+    const { runsService } = await import("../runs");
+    const { describeRunOutput } = await import("../runs/run-output-files");
+    const selected = (await runsService.getOutputArtifacts(`save-${mode}`)).find((row) => row.path === fs.realpathSync(file))!;
+    const descriptor = await describeRunOutput(`save-${mode}`, selected, false);
+    vi.mocked(runsService.listOutputs).mockResolvedValue({ items: [descriptor], nextOffset: null });
+    const input = { accountId: "default", runId: `save-${mode}`, artifactId: descriptor.artifactId, version: descriptor.version };
+    const item = await atlasMobile.saveFile(input);
+    expect(item.kind).toBe("file"); expect(item).not.toHaveProperty("path");
+    expect(await atlasMobile.saveFile(input)).toEqual(item);
+    const stored = atlasService.get({ accountId: "default", id: item.id })!;
+    expect(fs.readFileSync(stored.path!, "utf8")).toBe("original contents");
+    expect(atlasService.list({ accountId: "default" })).toHaveLength(1);
+    await expect(atlasMobile.saveFile({ ...input, accountId: "other" })).rejects.toThrow("not found");
+    await expect(atlasMobile.saveFile({ ...input, attachmentId: "a".repeat(64) })).rejects.toThrow("source");
+    await expect(atlasMobile.saveFile({ ...input, version: "e".repeat(64) })).rejects.toThrow("changed");
+    await expect(atlasMobile.saveFile({ accountId: "default", runId: input.runId, version: descriptor.version, path: file } as never)).rejects.toThrow("source");
+  });
+
+  it("saves generated library files and explicit attachments while refusing replicas", async () => {
+    output();
+    const entry = (await atlasMobile.library({ accountId: "default" })).items[0];
+    const file = await atlasMobile.describeFile({ accountId: "default", reference: entry.file! });
+    const result = await atlasMobile.saveFile({ accountId: "default", runId: "conversation", sourceKey: entry.key, version: file.version });
+    expect(result.kind).toBe("file");
+    const { runsService } = await import("../runs");
+    const { prepareRunAttachments, resolveRunAttachment } = await import("../runs/run-attachment-storage");
+    const { describeAttachmentFile } = await import("../runs/run-attachment-download");
+    const uploaded = (await prepareRunAttachments("conversation", [{ name: "photo.png", type: "image", mimeType: "image/png", data: Buffer.from("png bytes").toString("base64") }], "phone-upload"))![0];
+    const attachment = await describeAttachmentFile({ runId: "conversation", attachmentId: uploaded.attachmentId });
+    vi.mocked(runsService.describeAttachmentFile).mockResolvedValue(attachment);
+    vi.mocked(runsService.resolveAttachmentPath).mockResolvedValue((await resolveRunAttachment("conversation", uploaded.attachmentId)).path);
+    const saved = await atlasMobile.saveFile({ accountId: "default", runId: "conversation", attachmentId: uploaded.attachmentId, version: attachment.version });
+    expect(saved.kind).toBe("image");
+    db.update(runs).set({ ownerBackendId: "different-computer" }).where(eq(runs.id, "conversation")).run();
+    await expect(atlasMobile.saveFile({ accountId: "default", runId: "conversation", attachmentId: uploaded.attachmentId, version: attachment.version })).rejects.toThrow("source computer");
+  });
+  it("keeps replica download hydration with the original output reader and checks ownership on each chunk", async () => {
+    createRun(db, { id: "phone-replica", mode: "work", status: "succeeded", ownerBackendId: "remote-phone-source" });
+    replicaOutputs.set("phone-replica", [{ id: -42, kind: "document", metadata: { path: "/other-device/report.pdf", byteSize: 2 }, createdAt: new Date() }]);
+    const { runsService } = await import("../runs");
+    const version = "d".repeat(64);
+    const describe = vi.mocked(runsService.listOutputs).mockReset().mockResolvedValue({ items: [{ runId: "phone-replica", artifactId: -42,
+      name: "report.pdf", mimeType: "application/pdf", previewType: "native", byteSize: 2, modifiedAt: 1, version }], nextOffset: null });
+    const read = vi.mocked(runsService.readOutputFile).mockReset().mockImplementation(async (input) => {
+      if (input.version !== version) throw new Error("Output changed");
+      return { base64: Buffer.from("x").toString("base64"), byteSize: 2, version, offset: input.offset, nextOffset: input.offset === 0 ? 1 : null };
+    });
+    const reference = (await atlasMobile.library({ accountId: "default" })).items[0].file!;
+    expect((await atlasMobile.describeFile({ accountId: "default", reference })).version).toBe(version);
+    await atlasMobile.readFile({ accountId: "default", reference, version, offset: 0 });
+    await atlasMobile.readFile({ accountId: "default", reference, version, offset: 1 });
+    expect(describe).toHaveBeenCalledTimes(1); expect(read).toHaveBeenCalledTimes(2);
+    await expect(atlasMobile.readFile({ accountId: "default", reference, version: "a".repeat(64), offset: 1 })).rejects.toThrow("changed");
+    await expect(atlasMobile.readFile({ accountId: "other", reference, version, offset: 1 })).rejects.toThrow("not found");
+    expect(JSON.stringify(await atlasMobile.library({ accountId: "default" }))).not.toContain("/other-device");
+  });
+  it("paginates saved Pages, filters favorites/search and never exposes blocks or computer paths", async () => {
+    const date = new Date();
+    for (let index = 0; index < 55; index++) {
+      const id = `phone-page-${String(index).padStart(2, "0")}`;
+      atlasRepo.insert({ id, accountId: "default", kind: "page", title: `Phone notes ${index}`, version: 1, isFavorite: index === 0 });
+      db.update(atlasItems).set({ updatedAt: date }).where(eq(atlasItems.id, id)).run();
+    }
+    const first = await atlasMobile.library({ accountId: "default", type: "page" });
+    const second = await atlasMobile.library({ accountId: "default", type: "page", page: 2 });
+    expect(first.items).toHaveLength(50); expect(first.hasNext).toBe(true);
+    expect(second.items).toHaveLength(5); expect(second.hasNext).toBe(false);
+    expect(new Set([...first.items, ...second.items].map((item) => item.key)).size).toBe(55);
+    expect(first.items.every((item) => item.file === null && item.pageId === item.key)).toBe(true);
+    const favorites = await atlasMobile.library({ accountId: "default", scope: "favorites", query: "Phone" });
+    expect(favorites.items.map((item) => item.key)).toEqual(["phone-page-00"]);
+    const wire = JSON.stringify(first);
+    expect(wire).not.toContain('"path"'); expect(wire).not.toContain('"blocks"'); expect(wire).not.toContain(directory);
+    createAccount(db, { id: "other" });
+    expect((await atlasMobile.library({ accountId: "other" })).items).toEqual([]);
+  });
+
+  it("reads Page Markdown in scalar-safe numbered parts and refuses changed, foreign and trashed Pages", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Travel" });
+    const markdown = "x".repeat(16_383) + "😀" + "İstanbul 🌍";
+    db.update(atlasPageRevisions).set({ markdown }).where(eq(atlasPageRevisions.id, page.revision.id)).run();
+    const first = atlasMobile.readPage({ accountId: "default", id: page.item.id });
+    expect(first.markdown.endsWith("😀")).toBe(true); expect(first.nextOffset).toBe(16_384);
+    const second = atlasMobile.readPage({ accountId: "default", id: page.item.id, offset: first.nextOffset!, version: first.version });
+    expect(first.markdown + second.markdown).toBe(markdown); expect(second.nextOffset).toBeNull();
+    expect(first.organization).toEqual({ collectionId: null });
+    db.insert(collections).values({ id: "page-project", accountId: "default", name: "Research" }).run();
+    await atlasMobile.updateItem({ accountId: "default", id: page.item.id, collectionId: "page-project" });
+    expect(atlasMobile.readPage({ accountId: "default", id: page.item.id, version: first.version }).organization)
+      .toEqual({ collectionId: "page-project" });
+    expect(() => atlasMobile.readPage({ accountId: "default", id: page.item.id, offset: 16_384 })).toThrow("position");
+    expect(() => atlasMobile.readPage({ accountId: "default", id: page.item.id, version: 2 })).toThrow("changed");
+    expect(() => atlasMobile.readPage({ accountId: "other", id: page.item.id })).toThrow("not found");
+    expect(first).not.toHaveProperty("blocks");
+    await atlasService.update({ accountId: "default", id: page.item.id, trashed: true });
+    expect(() => atlasMobile.readPage({ accountId: "default", id: page.item.id })).toThrow("not found");
+  });
+
+  it("downloads only selected Work files by opaque identity, checking revisions on every chunk", async () => {
+    const file = output();
+    const bytes = Buffer.from("😀abc".repeat(50_000)); fs.writeFileSync(file, bytes);
+    const listed = await atlasMobile.library({ accountId: "default" });
+    const reference = listed.items[0].file!;
+    expect(reference).toEqual({ runId: "conversation", sourceKey: sourceKey("conversation", fs.realpathSync(file)) });
+    const descriptor = await atlasMobile.describeFile({ accountId: "default", reference });
+    expect(JSON.stringify(descriptor)).not.toContain(directory);
+    let offset = 0; const parts: Buffer[] = [];
+    while (true) {
+      const chunk = await atlasMobile.readFile({ accountId: "default", reference, version: descriptor.version, offset });
+      const part = Buffer.from(chunk.base64, "base64"); expect(part.length).toBeLessThanOrEqual(128 * 1024); parts.push(part);
+      if (chunk.nextOffset === null) break;
+      offset = chunk.nextOffset;
+    }
+    expect(Buffer.concat(parts)).toEqual(bytes);
+    fs.writeFileSync(file, "changed");
+    await expect(atlasMobile.readFile({ accountId: "default", reference, version: descriptor.version, offset: 0 })).rejects.toThrow("changed");
+    await expect(atlasMobile.describeFile({ accountId: "other", reference })).rejects.toThrow("not found");
+    await expect(atlasMobile.describeFile({ accountId: "default", reference: { runId: "conversation", sourceKey: "a".repeat(64) } })).rejects.toThrow("not found");
+    db.update(runs).set({ mode: "developer" }).where(eq(runs.id, "conversation")).run();
+    await expect(atlasMobile.describeFile({ accountId: "default", reference })).rejects.toThrow("not found");
+    expect((await atlasMobile.library({ accountId: "default" })).items).toEqual([]);
+  });
+
+  it("opens explicit saved copies across modes, but rejects Trash, symlinks and mixed references", async () => {
+    const file = output();
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
+    db.update(runs).set({ mode: "developer" }).where(eq(runs.id, "conversation")).run();
+    const reference = { itemId: saved.id }, request = { accountId: "default", reference };
+    expect((await atlasMobile.library({ accountId: "default" })).items[0].file).toEqual(reference);
+    const descriptor = await atlasMobile.describeFile(request);
+    fs.rmSync(file);
+    const chunk = await atlasMobile.readFile({ ...request, offset: 0, version: descriptor.version });
+    expect(Buffer.from(chunk.base64, "base64").toString()).toBe("original contents");
+    await expect(atlasMobile.describeFile({ accountId: "other", reference })).rejects.toThrow("not found");
+    await expect(atlasMobile.describeFile({ ...request, reference: { ...reference, runId: "conversation" } as never })).rejects.toThrow("reference");
+    await atlasService.update({ accountId: "default", id: saved.id, trashed: true });
+    await expect(atlasMobile.describeFile(request)).rejects.toThrow("not found");
+    await atlasService.update({ accountId: "default", id: saved.id, trashed: false });
+    const outside = path.join(directory, "private.pdf"); fs.writeFileSync(outside, "private");
+    fs.rmSync(saved.path!); fs.symlinkSync(outside, saved.path!);
+    await expect(atlasMobile.describeFile(request)).rejects.toThrow();
+  });
+});
+describe("Atlas Page asset visibility", { timeout: 15000 }, () => {
+  it("distinguishes automatically listed files from permanent copies without saving or returning paths", async () => {
+    output("report.pdf");
+    const entry = (await atlasMobile.library({ accountId: "default" })).items[0];
+    const file = await atlasMobile.describeFile({ accountId: "default", reference: entry.file! });
+    const source = { accountId: "default", runId: "conversation", sourceKey: entry.key, version: file.version };
+    expect(await atlasMobile.saveStatus(source)).toEqual({ saved: false });
+    expect(atlasService.list({ accountId: "default" })).toEqual([]);
+    const saved = await atlasMobile.saveFile(source);
+    expect(await atlasMobile.saveStatus(source)).toEqual({ saved: true });
+    expect((await atlasMobile.library({ accountId: "default" })).items).toHaveLength(1);
+    await expect(atlasMobile.saveStatus({ ...source, version: "0".repeat(64) })).rejects.toThrow("changed");
+    await expect(atlasMobile.saveStatus({ ...source, path: "/private/file" } as never)).rejects.toThrow("source");
+    createAccount(db, { id: "other" });
+    await expect(atlasMobile.saveStatus({ ...source, accountId: "other" })).rejects.toThrow("not found");
+    await atlasService.update({ accountId: "default", id: saved.id, trashed: true });
+    expect(await atlasMobile.saveStatus(source)).toEqual({ saved: false });
+  });
+
+  it("keeps existing Page uploads usable but out of every library view until explicitly saved", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes" });
+    const upload = { accountId: "default", pageId: page.item.id, fileName: "embedded.pdf", data: Buffer.from("page attachment").toString("base64") };
+    const file = await atlasService.uploadFile(upload);
+    const identity = { accountId: "default", id: file.id };
+    const savedPage = await atlasService.savePage({ accountId: "default", id: page.item.id, expectedVersion: 1, title: "Notes",
+      blocks: [{ type: "file", props: { url: `atlas-file://${file.id}`, name: file.fileName } }] });
+    await atlasService.update({ ...identity, isFavorite: true });
+    await atlasService.setTags({ ...identity, tags: ["Embedded"] });
+    const tag = atlasService.listTags({ accountId: "default" })[0];
+    expect(tag.count).toBe(0);
+    expect((await atlasService.uploadFile(upload)).id).toBe(file.id);
+    expect(atlasService.list({ accountId: "default", kind: "file" }).map(item => item.id)).toEqual([file.id]);
+    for (const scope of ["all", "saved", "favorites", "generated", "uploads"] as const) {
+      expect((await atlasService.library({ accountId: "default", scope, query: "embedded" })).items).toEqual([]);
+      expect((await atlasMobile.library({ accountId: "default", scope, tagId: tag.id })).items).toEqual([]);
+    }
+    const request = { accountId: "default", reference: { itemId: file.id } };
+    const descriptor = await atlasMobile.describeFile(request);
+    expect(descriptor.canSaveToLibrary).toBe(true);
+    expect(Buffer.from((await atlasMobile.readFile({ ...request, offset: 0, version: descriptor.version })).base64, "base64").toString()).toBe("page attachment");
+    const promoted = await atlasService.saveFile({ accountId: "default", itemId: file.id });
+    expect(promoted).toMatchObject({ id: file.id, path: file.path, sourceKey: file.sourceKey, metadata: { savedToLibrary: true } });
+    expect((await atlasService.saveFile({ accountId: "default", itemId: file.id })).updatedAt).toBe(promoted.updatedAt);
+    expect((await atlasService.uploadFile(upload)).metadata?.savedToLibrary).toBe(true);
+    expect((await atlasMobile.describeFile(request)).canSaveToLibrary).toBe(false);
+    expect(atlasService.listTags({ accountId: "default" })[0].count).toBe(1);
+    for (const scope of ["all", "saved", "favorites"] as const)
+      expect((await atlasService.library({ accountId: "default", scope, tagId: tag.id })).items.map(entry => entry.key)).toEqual([file.id]);
+    expect(atlasService.getPage({ accountId: "default", id: page.item.id })?.revision).toEqual(savedPage.revision);
+    expect(fs.readFileSync(file.path!, "utf8")).toBe("page attachment");
+    expect(atlasService.list({ accountId: "default", kind: "file" })).toHaveLength(1);
+    await atlasService.update({ ...identity, trashed: true });
+    await expect(atlasService.remove(identity)).rejects.toThrow("used by a Page");
+  });
+
+  it("uses the existing version-checked phone save command to promote one stored identity", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes" });
+    const file = await atlasService.uploadFile({ accountId: "default", pageId: page.item.id, fileName: "photo.png", data: Buffer.from("image").toString("base64") });
+    const version = (await atlasMobile.describeFile({ accountId: "default", reference: { itemId: file.id } })).version;
+    const input = { accountId: "default", itemId: file.id, version };
+    expect(await atlasMobile.saveStatus(input)).toEqual({ saved: false });
+    await expect(atlasMobile.saveFile({ ...input, version: "0".repeat(64) })).rejects.toThrow("changed");
+    await expect(atlasMobile.saveFile({ ...input, runId: "unexpected" })).rejects.toThrow("source");
+    await expect(atlasMobile.saveFile({ ...input, path: file.path } as never)).rejects.toThrow("source");
+    createAccount(db, { id: "other" });
+    await expect(atlasMobile.saveFile({ ...input, accountId: "other" })).rejects.toThrow("not found");
+    expect((await atlasMobile.library({ accountId: "default", type: "image" })).items).toEqual([]);
+    expect(await atlasMobile.saveFile(input)).toMatchObject({ id: file.id, kind: "image" });
+    expect(await atlasMobile.saveStatus(input)).toEqual({ saved: true });
+    expect(await atlasMobile.saveFile(input)).toMatchObject({ id: file.id });
+    expect((await atlasMobile.library({ accountId: "default", type: "image" })).items.map(entry => entry.key)).toEqual([file.id]);
+    await atlasService.update({ accountId: "default", id: file.id, trashed: true });
+    await expect(atlasMobile.saveFile(input)).rejects.toThrow("not found");
+    await expect(atlasService.saveFile({ accountId: "default", itemId: file.id })).rejects.toThrow("unavailable");
+  });
+
+  it("does not let hidden Page images suppress matching Work outputs or count toward library image identities", async () => {
+    const source = output("matching.png");
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes" });
+    const image = await atlasService.uploadFile({ accountId: "default", pageId: page.item.id, fileName: "matching.png", data: fs.readFileSync(source).toString("base64") });
+    expect(atlasRepo.fileIdentities("default", "image")).toEqual([]);
+    expect((await atlasService.library({ accountId: "default", type: "image" })).items.map(entry => entry.generated?.path)).toEqual([fs.realpathSync(source)]);
+    await atlasService.saveFile({ accountId: "default", itemId: image.id });
+    expect(atlasRepo.fileIdentities("default", "image")).toHaveLength(1);
+    expect((await atlasService.library({ accountId: "default", type: "image" })).items.map(entry => entry.key)).toEqual([image.id]);
+  });
+
+  it("rechecks Trash after asynchronous save validation without changing the Page asset", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes" });
+    const file = await atlasService.uploadFile({ accountId: "default", pageId: page.item.id, fileName: "hidden.txt", data: "dGV4dA==" });
+    await expect(atlasService.saveFile({ accountId: "default", itemId: file.id }, async () => {
+      await atlasService.update({ accountId: "default", id: file.id, trashed: true });
+    })).rejects.toThrow("unavailable");
+    expect(atlasService.get({ accountId: "default", id: file.id })?.metadata?.savedToLibrary).toBeUndefined();
+    await expect(atlasService.saveFile({ accountId: "default", itemId: page.item.id })).rejects.toThrow("unavailable");
+  });
+});
+
 describe("Atlas file lifecycle", { timeout: 15000 }, () => {
   it("uses the same final-message, deduplicated outputs as the conversation", async () => {
     const file = output("final.md");
@@ -349,6 +1113,37 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     const result = await atlasService.generated({ accountId: "default" });
     expect(result.items.map((item) => item.fileName).sort()).toEqual(mode === "work" ? ["report.pdf", "summary.txt"] : []);
   });
+
+  it("lists Mate deliverables only after an explicit save and continues to list their Work uploads", async () => {
+    createRun(db, { id: "mate-run", assistantId: "mate", mode: "work", status: "succeeded" });
+    const file = output("itinerary.md", "mate-run");
+    const [attachment] = (await prepareRunAttachments("mate-run", [{ name: "reference.md", type: "document",
+      mimeType: "text/markdown", data: Buffer.from("User reference").toString("base64") }]))!;
+    const items = async (scope: "all" | "generated" | "uploads") => (await atlasService.library({ accountId: "default", scope })).items;
+    expect((await items("all")).map((entry) => entry.title)).toEqual(["reference.md"]);
+    expect(await items("generated")).toEqual([]);
+    expect((await items("uploads")).map((entry) => entry.path)).toEqual([attachment.sourcePath]);
+    expect((await atlasService.generated({ accountId: "default" })).items.map((entry) => entry.path)).toEqual([attachment.sourcePath]);
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "mate-run", path: file });
+    expect(saved.sourceRunId).toBe("mate-run");
+    expect(fs.readFileSync(saved.path!, "utf8")).toBe("original contents");
+    expect((await items("all")).map((entry) => entry.title).sort()).toEqual(["itinerary.md", "reference.md"]);
+    expect(await items("generated")).toEqual([]);
+  });
+
+  it("recognizes synced Mate runs through their frozen configuration", async () => {
+    const source = "/Users/laptop/out/itinerary.md";
+    for (const runId of ["replica-mate", "replica-work"]) {
+      createRun(db, { id: runId, ownerBackendId: "laptop", mode: "work",
+        configSnapshot: runId === "replica-mate" ? JSON.stringify({ assistantId: "mate" }) : null });
+      replicaOutputs.set(runId, [{ id: -42, createdAt: new Date(), metadata: { outputSelected: true, path: source } }]);
+    }
+    try {
+      expect((await atlasService.library({ accountId: "default" })).items.map((entry) => entry.generated?.runId)).toEqual(["replica-work"]);
+      expect((await atlasService.generated({ accountId: "default" })).items.map((entry) => entry.runId)).toEqual(["replica-work"]);
+    } finally { replicaOutputs.clear(); }
+  });
+
   it("projects and saves Codex images from the native thread folder without final file references", async () => {
     vi.spyOn(os, "homedir").mockReturnValue(directory);
     createRun(db, { id: "codex-run", providerId: "codex", mode: "work", sessionId: "native-thread", status: "succeeded" });
@@ -588,7 +1383,8 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     await expect(atlasService.saveFile({ accountId: "default", runId: "conversation", path: escape })).rejects.toThrow("outside");
   });
   it("filters out Code and Chat conversations before paginating older Work files", async () => {
-    output("one.pdf", "first"); output("two.pdf", "second");
+    output("one.pdf", "first");
+    fs.writeFileSync(output("two.pdf", "second"), "second document");
     db.update(runs).set({ createdAt: new Date("2020-01-01") }).run();
     for (let index = 0; index < 30; index++)
       createRun(db, { id: `excluded-${index}`, mode: index % 2 ? "chat" : "developer" });
@@ -632,7 +1428,7 @@ describe("Atlas library pagination", { timeout: 15000 }, () => {
     fs.mkdirSync(root("many-files"), { recursive: true });
     const files = Array.from({ length: 105 }, (_, index) => path.join(root("many-files"), `report-${index}.pdf`));
     for (const file of files) {
-      fs.writeFileSync(file, "document");
+      fs.writeFileSync(file, `Document ${path.basename(file)}`);
       createRunArtifact(db, { runId: "many-files", kind: "document", metadata: JSON.stringify({ path: file }) });
     }
     createRunArtifact(db, { runId: "many-files", kind: "report", content: files.map((file) => `[File](<${file}>)`).join("\n") });
@@ -679,24 +1475,47 @@ describe("Atlas library pagination", { timeout: 15000 }, () => {
     expect(combined.some((entry) => entry.generated?.path === fs.realpathSync(secondFile))).toBe(true);
   });
 
-  it("deduplicates images across page boundaries and retains the permanent copy in All", async () => {
+  it("merges identical Markdown across Work chats and prefers a matching saved copy", async () => {
+    const original = output("itinerary.md", "older");
+    const copy = output("itinerary-copy.md", "newer");
+    const updated = output("itinerary.md", "updated");
+    fs.writeFileSync(updated, "revised itinerary");
+    const recent = new Date("2026-10-02");
+    const old = new Date("2026-10-01");
+    fs.utimesSync(copy, recent, recent);
+    fs.utimesSync(original, old, old);
+    const library = async (query?: string) => (await atlasService.library({ accountId: "default", type: "file", query })).items;
+    const paths = (entries: Awaited<ReturnType<typeof library>>) => entries.map((entry) => entry.path).sort();
+    expect(paths(await library())).toEqual([copy, updated].map((file) => fs.realpathSync(file)).sort());
+    expect(paths(await library("itinerary.md"))).toEqual([original, updated].map((file) => fs.realpathSync(file)).sort());
+
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "older", path: original });
+    db.update(atlasItems).set({ updatedAt: old }).where(eq(atlasItems.id, saved.id)).run();
+    expect(paths(await library())).toEqual([saved.path!, fs.realpathSync(updated)].sort());
+    expect(paths(await library("copy"))).toEqual([fs.realpathSync(copy)]);
+
+    atlasService.setTags({ accountId: "default", id: saved.id, tags: ["copy"] });
+    expect(paths(await library("copy"))).toEqual([saved.path]);
+  });
+
+  it.each([["image", "photo.png"], ["file", "itinerary.md"]] as const)("deduplicates %s entries across page boundaries and retains the permanent copy in All", async (kind, name) => {
     savedFiles(51);
     db.insert(atlasItems).values([
-      { id: "image-first", accountId: "default", kind: "image", title: "Photo", contentHash: "identical", updatedAt: new Date("2026-10-02") },
-      { id: "image-last", accountId: "default", kind: "image", title: "Photo copy", contentHash: "identical", updatedAt: new Date("2026-09-01") },
+      { id: "copy-first", accountId: "default", kind, title: "Original", contentHash: "identical", updatedAt: new Date("2026-10-02") },
+      { id: "copy-last", accountId: "default", kind, title: "Copy", contentHash: "identical", updatedAt: new Date("2026-09-01") },
     ]).run();
     const first = await atlasService.library({ accountId: "default", scope: "saved" });
     const second = await atlasService.library({ accountId: "default", scope: "saved", page: 2 });
     expect(first.items).toHaveLength(50);
     expect(second.items).toHaveLength(2);
-    expect([...first.items, ...second.items].filter((entry) => entry.kind === "image").map((entry) => entry.key)).toEqual(["image-first"]);
+    expect([...first.items, ...second.items].filter((entry) => entry.key.startsWith("copy-")).map((entry) => entry.key)).toEqual(["copy-first"]);
 
-    const file = output("photo.png");
+    const file = output(name);
     const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
-    const images = await atlasService.library({ accountId: "default", type: "image" });
-    expect(images.items.some((entry) => entry.key === saved.id)).toBe(true);
-    expect(images.items.some((entry) => entry.generated?.path === fs.realpathSync(file))).toBe(false);
-    const creations = await atlasService.library({ accountId: "default", type: "image", scope: "generated" });
+    const entries = await atlasService.library({ accountId: "default", type: kind });
+    expect(entries.items.some((entry) => entry.key === saved.id)).toBe(true);
+    expect(entries.items.some((entry) => entry.generated?.path === fs.realpathSync(file))).toBe(false);
+    const creations = await atlasService.library({ accountId: "default", type: kind, scope: "generated" });
     expect(creations.items).toHaveLength(1);
     expect(creations.items[0].saved?.id).toBe(saved.id);
   });
@@ -718,6 +1537,7 @@ describe("Atlas library pagination", { timeout: 15000 }, () => {
   it("keeps the existing activity order across conversations within each discovery batch", async () => {
     const recentFile = output("recent.pdf", "older-chat");
     const oldFile = output("old.pdf", "newer-chat");
+    fs.writeFileSync(oldFile, "older document");
     db.update(runs).set({ createdAt: new Date("2024-01-01") }).where(eq(runs.id, "older-chat")).run();
     db.update(runs).set({ createdAt: new Date("2025-01-01") }).where(eq(runs.id, "newer-chat")).run();
     fs.utimesSync(recentFile, new Date("2026-10-02"), new Date("2026-10-02"));

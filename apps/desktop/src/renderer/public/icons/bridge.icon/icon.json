@@ -1,21 +1,75 @@
 {
-  "fill" : {
-    "automatic-gradient" : "extended-gray:1.00000,1.00000"
-  },
+  "fill-specializations" : [
+    {
+      "value" : {
+        "automatic-gradient" : "display-p3:0.96700,0.96900,0.97500,1.00000"
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "solid" : "display-p3:0.09300,0.09400,0.10800,1.00000"
+      }
+    }
+  ],
   "groups" : [
     {
       "layers" : [
         {
-          "glass-specializations" : [
+          "glass" : true,
+          "image-name-specializations" : [
             {
-              "appearance" : "tinted",
-              "value" : false
+              "value" : "mark-light.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "mark-dark.png"
             }
           ],
-          "image-name" : "bridge 2.png",
-          "name" : "bridge 2",
+          "name" : "02 Mains emblem",
           "position" : {
-            "scale" : 1.05,
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              1
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0
+      }
+    },
+    {
+      "hidden-specializations" : [
+        {
+          "value" : false
+        },
+        {
+          "appearance" : "tinted",
+          "value" : true
+        }
+      ],
+      "layers" : [
+        {
+          "glass" : false,
+          "image-name-specializations" : [
+            {
+              "value" : "halo-light.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "halo-dark.png"
+            }
+          ],
+          "name" : "01 Color halo",
+          "position" : {
+            "scale" : 1,
             "translation-in-points" : [
               0,
               0
@@ -25,18 +79,15 @@
       ],
       "shadow" : {
         "kind" : "neutral",
-        "opacity" : 0.5
+        "opacity" : 0
       },
       "translucency" : {
-        "enabled" : true,
-        "value" : 0.3
+        "enabled" : false,
+        "value" : 0
       }
     }
   ],
   "supported-platforms" : {
-    "circles" : [
-      "watchOS"
-    ],
     "squares" : "shared"
   }
 }

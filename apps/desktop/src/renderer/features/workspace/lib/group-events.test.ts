@@ -87,10 +87,27 @@ describe("groupEvents", () => {
       .toBe("response-artifact-44");
   });
 
+  it("keeps image inspections with surrounding tool calls in chronological order", () => {
+    const view = (id: string, path: string) => ev({ id, type: "tool_call", content: `ImageView: ${JSON.stringify({ path })}`,
+      metadata: { codexItemType: "imageView", input: { path } } });
+    const groups = groupEvents([
+      ev({ id: "capture", type: "tool_call", content: "Bash: capture" }),
+      view("view-1", "/out/first.png"),
+      ev({ id: "first-preview", metadata: { kind: "image", path: "/out/first.png" } }),
+      ev({ id: "edit", type: "tool_call", content: "Edit: view.ts" }),
+      view("view-2", "/out/second.png"),
+      ev({ id: "verify", type: "tool_call", content: "Bash: verify" }),
+    ]);
+
+    expect(groups.map((group) => group.type)).toEqual(["tool_calls"]);
+    expect(groups[0].events.map((event) => event.id)).toEqual(["capture", "view-1", "edit", "view-2", "verify"]);
+  });
+
   it("restores legacy imageView logs as tool calls and hides their large preview artifacts", () => {
     const firstPage = "/runs/work/tmp/pdfs/page-1.png";
     const secondPage = "/runs/work/tmp/pdfs/page-2.png";
     const events = [
+      ev({ id: "render", type: "tool_call", content: "Bash: render pages" }),
       ev({ id: "log-1", type: "log", content: `[codex:item:imageView] ${JSON.stringify({ type: "imageView", id: "view-1", path: firstPage })}`, metadata: { kind: "log", level: "info" } }),
       ev({ id: "image-1", metadata: { kind: "image", path: firstPage } }),
       ev({ id: "log-2", type: "log", content: `[codex:item:imageView] ${JSON.stringify({ type: "imageView", id: "view-2", path: secondPage })}`, metadata: { kind: "log", level: "info" } }),
@@ -100,12 +117,12 @@ describe("groupEvents", () => {
 
     const groups = groupEvents(events);
     expect(groups.map((group) => group.type)).toEqual(["tool_calls", "response"]);
-    expect(groups[0].events).toHaveLength(2);
-    expect(groups[0].events[0]).toMatchObject({
+    expect(groups[0].events).toHaveLength(3);
+    expect(groups[0].events[1]).toMatchObject({
       type: "tool_call",
       metadata: { toolName: "ImageView", input: { path: firstPage } },
     });
-    expect(groups[0].events[1].metadata?.input).toEqual({ path: secondPage });
+    expect(groups[0].events[2].metadata?.input).toEqual({ path: secondPage });
     expect(groups.flatMap((group) => group.events).some((event) => event.metadata?.kind === "image"))
       .toBe(false);
   });

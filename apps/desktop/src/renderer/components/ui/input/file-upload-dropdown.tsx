@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import { Attach, Picture, Document } from "../icons";
 import DropdownWrapper from "../dropdown-wrapper";
 import { Button } from "../button";
@@ -22,6 +22,7 @@ interface FileUploadDropdownProps {
   dropdownRef: RefObject<HTMLDivElement | null>;
   openUpward?: boolean;
   compact?: boolean;
+  triggerIcon?: ReactNode;
 }
 
 /**
@@ -36,6 +37,7 @@ export function FileUploadDropdown({
   dropdownRef,
   openUpward = false,
   compact = false,
+  triggerIcon,
 }: FileUploadDropdownProps) {
   return (
     <div className="relative flex shrink-0 items-center " ref={dropdownRef}>
@@ -49,7 +51,7 @@ export function FileUploadDropdown({
         aria-haspopup="menu"
         aria-expanded={isOpen}
       >
-        <Attach className="text-primary-950 dark:text-primary size-4" />
+        {triggerIcon ?? <Attach className="text-primary-950 dark:text-primary size-4" />}
       </Button>
     
       <DropdownWrapper

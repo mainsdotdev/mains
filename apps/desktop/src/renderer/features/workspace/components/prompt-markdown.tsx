@@ -14,7 +14,13 @@ import { useOpenComposerMention } from "../hooks/use-open-composer-mention";
 import { useOpenFileInEditor } from "../hooks/use-open-file-in-editor";
 import { composerSkillDestination } from "../lib/composer-mention";
 
+import { AssistantAvatar, assistantMentionTextColor } from "@/features/assistants/components/assistant-avatar";
+import type { AssistantAvatar as Avatar } from "@mains/contracts/assistants";
+
 export interface PromptMarkdownSkill {
+  assistantAvatar?: Avatar;
+  assistantId?: string;
+  token?: string;
   name: string;
   path?: string;
   mentionPath?: string;
@@ -168,6 +174,8 @@ function PromptSkillChip({ skill, onOpen }: {
   const label = skill.displayName || skill.name;
   const tooltip = skill.shortDescription || skill.description || label;
   const clickable = composerSkillDestination(skill) !== null;
+  const color = skill.scope === "assistant" ? assistantMentionTextColor(skill.assistantAvatar)
+    : skill.brandColor ? `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))` : undefined;
   const FallbackIcon = ["plugin", "mac", "mac_app", "computer"].includes((skill.scope || "").toLowerCase()) ? Apps : Sparkles;
   const Chip = clickable ? Button : "span";
 
@@ -175,16 +183,14 @@ function PromptSkillChip({ skill, onOpen }: {
     <Chip
       type={clickable ? "button" : undefined}
       className={`inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none text-accent hover:decoration-dotted hover:underline ${clickable ? "cursor-pointer focus-visible:ring-2 focus-visible:ring-accent/40" : "cursor-default"}`}
-      style={
-        skill.brandColor
-          ? { color: `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))` }
-          : undefined
-      }
+      style={color ? { color } : undefined}
       title={tooltip}
       onClick={clickable ? () => onOpen(skill.name) : undefined}
     >
-      <span className="inline-flex items-center justify-center size-3.5 shrink-0 rounded-sm overflow-hidden">
-        {iconPath && resolved && !failed ? (
+      <span className={`inline-flex items-center justify-center ${skill.scope === "assistant" ? "size-5" : "size-3.5"} shrink-0 rounded-sm overflow-hidden`}>
+        {skill.scope === "assistant" ? (
+          <AssistantAvatar avatar={skill.assistantAvatar} seed={skill.assistantId ?? skill.name} className="size-5" />
+        ) : iconPath && resolved && !failed ? (
           <img
             src={resolved}
             alt=""
@@ -287,7 +293,7 @@ export function PromptMarkdown({
   const openSkillMention = useOpenComposerMention(skills, providerId);
   const skillsByToken = useMemo(
     () => new Map(skills.map((skill) => [
-      skill.scope === "computer" ? `@${skill.displayName || skill.name}` : `$${skill.name}`,
+      skill.token ?? (skill.scope === "computer" ? `@${skill.displayName || skill.name}` : `$${skill.name}`),
       skill,
     ])),
     [skills],

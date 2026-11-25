@@ -9,11 +9,27 @@ public struct RunOutput: Decodable, Identifiable, Sendable {
     public let byteSize: Int
     public let version: String
     public let previewType: String
-    public var previewLimit: Int { ["text", "markdown"].contains(previewType) ? 2 * 1024 * 1024 : 25 * 1024 * 1024 }
+    public var downloadLimit: Int { RunFilePolicy.maxBytes }
 }
 public struct RunOutputsPage: Decodable, Sendable {
     public let items: [RunOutput]
     public let nextOffset: Int?
+
+    /// Skip missing-file pages without collecting descriptors or touching history.
+    @MainActor public static func firstAvailable(runID: String, offset: Int = 0, read: (Int) async throws -> Self) async throws -> Self {
+        guard offset >= 0 else { throw MainsError.invalidReply }
+        var cursor = offset
+        for _ in 0..<128 {
+            try Task.checkCancellation()
+            let page = try await read(cursor)
+            try Task.checkCancellation()
+            guard page.items.count <= 100, Set(page.items.map(\.id)).count == page.items.count,
+                  page.items.allSatisfy({ $0.runId == runID }), page.nextOffset.map({ $0 > cursor }) ?? true else { throw MainsError.invalidReply }
+            if !page.items.isEmpty || page.nextOffset == nil { return page }
+            cursor = page.nextOffset!
+        }
+        throw MainsError.server("Open this conversation’s older outputs on your computer.")
+    }
 
     /// Missing files can leave an empty descriptor page before a later output.
     /// Presence checks read metadata only, never the files themselves.
@@ -46,6 +62,10 @@ public struct TranscriptSection: Identifiable, Equatable, Sendable {
     public let breakout: [TranscriptRow]
     public let last: [TranscriptRow]
     public var folded: Bool { !previous.isEmpty }
+    /// Copy all visible-window assistant prose in the turn, including folded work.
+    /// Tool output, prompts and notices do not belong on the clipboard.
+    public var responseText: String { rows.filter { $0.kind == .response && $0.voiceTask == nil && $0.mateTask == nil }.map(\.text).joined(separator: "\n\n") }
+    public var responseIsPreview: Bool { rows.contains { $0.kind == .response && $0.deferredArtifactID != nil } }
     public func displayedRows(expanded: Bool) -> [TranscriptRow] {
         guard folded && !expanded else { return rows }
         let hidden = Set(previous.map(\.id))
@@ -57,15 +77,18 @@ public struct TranscriptSection: Identifiable, Equatable, Sendable {
         return [messages > 0 ? "\(messages) \(messages == 1 ? "message" : "messages")" : "",
                 tools > 0 ? "\(tools) \(tools == 1 ? "tool call" : "tool calls")" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
     }
-    public static func build(_ rows: [TranscriptRow]) -> [Self] {
+    public static func build(_ rows: [TranscriptRow], foldsResponses: Bool = true) -> [Self] {
         var result: [Self] = [], turn: [TranscriptRow] = []
         func flush() {
             guard let first = turn.first else { return }
-            let responses = turn.indices.filter { turn[$0].kind == .response }
-            if responses.count > 1, let cut = responses.last {
+            let responses = turn.indices.filter { turn[$0].kind == .response && turn[$0].mateTask == nil }
+            if foldsResponses, responses.count > 1, let cut = responses.last {
                 let earlier = Array(turn[..<cut])
-                result.append(Self(id: first.id, rows: turn, previous: earlier.filter { $0.kind != .notice && $0.kind != .media && $0.kind != .subagents },
-                                   breakout: earlier.filter { $0.kind == .notice || $0.kind == .media || $0.kind == .subagents }, last: Array(turn[cut...])))
+                let breakout = earlier.filter { row in
+                    row.kind == .notice || row.kind == .media || row.kind == .subagents || row.voice || row.voiceTask != nil || row.mateTask != nil || row.plan != nil
+                }
+                let ids = Set(breakout.map(\.id))
+                result.append(Self(id: first.id, rows: turn, previous: earlier.filter { !ids.contains($0.id) }, breakout: breakout, last: Array(turn[cut...])))
             } else { result.append(Self(id: first.id, rows: turn, previous: [], breakout: [], last: turn)) }
             turn = []
         }
@@ -86,5 +109,6 @@ public struct TranscriptDisclosure: Sendable {
     public init() {}
     public func isExpanded(active: Bool) -> Bool { selection ?? (active || observedActive) }
     public mutating func observe(active: Bool) { observedActive = observedActive || active }
+    public mutating func expand() { selection = true }
     public mutating func toggle(active: Bool) { selection = !isExpanded(active: active) }
 }

@@ -25,3 +25,4 @@
  * whatever owns the edge. See the note in index.css.
  */
 export const CONTENT_COLUMN_GUTTER = "px-12";
+export const CONTENT_COLUMN_WIDTH = "mx-auto max-w-210";

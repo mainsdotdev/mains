@@ -27,6 +27,14 @@ export const KEYBOARD_SHORTCUTS = [
     defaultBinding: "Command+N",
   },
   {
+    id: "app.saveBookmark",
+    title: "Save bookmark to Atlas",
+    description: "Open the bookmark form from anywhere in Mains",
+    category: "General",
+    scope: "app",
+    defaultBinding: "Command+Shift+B",
+  },
+  {
     id: "app.openSettings",
     title: "Open settings",
     description: "Open Mains settings",

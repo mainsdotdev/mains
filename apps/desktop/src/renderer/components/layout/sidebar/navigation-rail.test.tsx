@@ -40,6 +40,7 @@ function tree(state: ReturnType<typeof railStore>) {
       onHomeClick={mocks.homeClick} onSpaceChange={vi.fn()} onSettingsClick={vi.fn()} onHelpClick={vi.fn()} helpMenuOpen={false} />
     <Routes>
       <Route path="/code/:workspaceId" element={<div>Conversation</div>} />
+      <Route path="/assistants" element={<div>Mates page</div>} />
       <Route path="/apps/:appId" element={<McpAppPage />} />
       <Route path="/plugins" element={<div>Plugins page</div>} />
       <Route path="/atlas" element={<div>Atlas page</div>} />
@@ -62,6 +63,25 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("rail app navigation", () => {
+  it("fills the Steps icon while Mates is the current page", () => {
+    renderRail();
+    const assistants = screen.getByRole("button", { name: "Mates" });
+    const outline = () => assistants.querySelector('svg path[stroke="currentColor"]');
+    const fill = () => assistants.querySelector('svg path[fill-rule="evenodd"]');
+
+    expect(outline()).toBeTruthy();
+    expect(fill()).toBeNull();
+    fireEvent.click(assistants);
+    expect(screen.getByText("Mates page")).toBeTruthy();
+    expect(assistants.getAttribute("aria-current")).toBe("page");
+    expect(fill()).toBeTruthy();
+    expect(outline()).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Plugins" }));
+    expect(assistants.getAttribute("aria-current")).toBeNull();
+    expect(outline()).toBeTruthy();
+  });
+
   it.each(["copilot_cli", "cursor", "opencode"])("opens the Atlas library for %s", (providerId) => {
     mocks.providerId = providerId;
     renderRail();

@@ -18,6 +18,8 @@ export function awaitResourceResult<T>(promise: Promise<T>, signal: AbortSignal)
 export function createAsyncResourceLifecycle<T>(options: {
   ttlMs?: number;
   retryMs?: number;
+  /** Double the delay on consecutive failures up to this limit. */
+  maxRetryMs?: number;
   prepare?(key: string, context: ResourceReadContext): Promise<ResourceSnapshot<T> | undefined>;
   load?(key: string, context: ResourceReadContext): Promise<T>;
   /** Some provider DTOs carry a fallback/error instead of rejecting the read. */
@@ -25,9 +27,11 @@ export function createAsyncResourceLifecycle<T>(options: {
   publish?(key: string, snapshot: ResourceSnapshot<T>, context: ResourceReadContext): Promise<void> | void;
 }) {
   type Flight = { controller: AbortController; promise: Promise<ResourceSnapshot<T>>; consumers: number; settled: boolean; retained: boolean };
-  type Entry = { snapshot?: ResourceSnapshot<T>; prepared: boolean; retryAt: number; error?: unknown; flight?: Flight };
+  type Entry = { snapshot?: ResourceSnapshot<T>; prepared: boolean; retryAt: number; retryDelay: number; error?: unknown; flight?: Flight };
   const entries = new Map<string, Entry>();
   const publications = new Map<string, Promise<unknown>>();
+  const initialRetry = options.retryMs ?? 0;
+  const maxRetry = options.maxRetryMs ?? initialRetry;
   let closed = false;
   const retired = () => new DOMException("This discovery cache was retired.", "AbortError");
   const fresh = (snapshot?: ResourceSnapshot<T>) => snapshot !== undefined &&
@@ -42,7 +46,7 @@ export function createAsyncResourceLifecycle<T>(options: {
     if (signal?.aborted) return Promise.reject(signal.reason);
     if (closed) return Promise.reject(retired());
     let entry = entries.get(key);
-    if (!entry) { entry = { prepared: false, retryAt: 0 }; entries.set(key, entry); }
+    if (!entry) { entry = { prepared: false, retryAt: 0, retryDelay: initialRetry }; entries.set(key, entry); }
     const owned = entry;
     if (!owned.flight) {
       if (!force && fresh(owned.snapshot)) return Promise.resolve(owned.snapshot!);
@@ -70,7 +74,7 @@ export function createAsyncResourceLifecycle<T>(options: {
           const previous = publications.get(key) ?? Promise.resolve();
           const publication = previous.catch(() => {}).then(async () => {
             context.assertCurrent(); await options.publish?.(key, snapshot, context); context.assertCurrent();
-            owned.snapshot = snapshot; owned.retryAt = 0; owned.error = undefined;
+            owned.snapshot = snapshot; owned.retryAt = 0; owned.retryDelay = initialRetry; owned.error = undefined;
           });
           publications.set(key, publication);
           const clear = () => { if (publications.get(key) === publication) publications.delete(key); };
@@ -79,7 +83,9 @@ export function createAsyncResourceLifecycle<T>(options: {
           return snapshot;
         }).catch((error: unknown) => {
           if (!controller.signal.aborted && entries.get(key) === owned && owned.flight === flight) {
-            owned.error = error; owned.retryAt = Date.now() + (options.retryMs ?? 0);
+            owned.error = error;
+            owned.retryAt = Date.now() + owned.retryDelay;
+            owned.retryDelay = Math.min(maxRetry, owned.retryDelay * 2);
           }
           throw error;
         }),

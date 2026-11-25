@@ -1,6 +1,6 @@
 import { useToolExpansion } from "../../lib/transcript-view-state";
-import { Text } from "@/components/ui";
-import { SendMessage } from "@/components/ui/icons";
+import { StatusBadge, Text } from "@/components/ui";
+import { Check, Close, SendMessage } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
 import { toolOutputText } from "../../lib/parse-tool-content";
 
@@ -118,15 +118,9 @@ export function SendMessageDisplay({
               <div className="flex flex-wrap items-center gap-2">
                 <Text as="span" size="inherit" tone="inherit" weight="medium">{protocolLabel}</Text>
                 {protocol.approve !== undefined && (
-                  <span
-                    className={`rounded px-1.5 py-px text-t font-medium ${
-                      protocol.approve
-                        ? "bg-success/10 text-success"
-                        : "bg-danger/10 text-danger"
-                    }`}
-                  >
-                    {protocol.approve ? "approved" : "rejected"}
-                  </span>
+                  <StatusBadge tone={protocol.approve ? "success" : "danger"} icon={protocol.approve ? Check : Close}>
+                    {protocol.approve ? "Approved" : "Rejected"}
+                  </StatusBadge>
                 )}
               </div>
             )}

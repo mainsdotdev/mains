@@ -2,6 +2,7 @@ import type { CSSProperties, MouseEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui";
 import {
+  AssistantSteps,
   Bridge,
   Home,
   Plugin,
@@ -64,6 +65,7 @@ export function NavigationRail({
   const destinations: Array<{
     label: string; path: string; Icon: typeof Plugin; disabled?: boolean;
   }> = [
+    { label: "Mates", path: "/assistants", Icon: AssistantSteps },
     { label: "Atlas", path: "/atlas", Icon: Globe },
     {
       label: "Plugins",

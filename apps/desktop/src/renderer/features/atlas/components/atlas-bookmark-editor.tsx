@@ -67,14 +67,14 @@ export function AtlasBookmarkEditor({ accountId, item, collectionId, onClose }: 
         <div>
           <label className="text-xs text-primary-600 dark:text-primary-400" htmlFor={`${prefix}-project`}>Project</label>
           <div className="mt-1.5">
-            <Select id={`${prefix}-project`} aria-label="Project" size="sm" value={project} onChange={setProject} animationDirection="down"
+            <Select id={`${prefix}-project`} aria-label="Project" value={project} onChange={setProject} animationDirection="down"
               options={[{ value: "", label: "No project" }, ...collections.map((collection) => ({ value: collection.id, label: collection.name }))]} />
           </div>
         </div>
       </div>
       {error && <Text role="alert" className="mt-4 text-danger">{error}</Text>}
       <div className="mt-6 flex items-center justify-end">
-        <Button type="submit" variant="primary" disabled={saving.isLoading || !url.trim()}>{saving.isLoading ? "Saving…" : "Save bookmark"}</Button>
+        <Button type="submit" variant="primary" disabled={!url.trim()} isLoading={saving.isLoading}>Save bookmark</Button>
       </div>
     </form>
   </Modal>;

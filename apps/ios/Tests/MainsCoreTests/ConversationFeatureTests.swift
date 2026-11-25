@@ -2,6 +2,23 @@ import Foundation
 import Testing
 @testable import MainsCore
 
+@Test func copyIncludesFoldedAssistantProseAndPreservesRawMarkdownWithoutToolOutput() throws {
+    func row(_ id: String, _ kind: TranscriptRow.Kind, _ text: String, preview: Bool = false) -> TranscriptRow {
+        TranscriptRow(id: id, kind: kind, text: text, date: Date(), live: false, deferredArtifactID: preview ? 9 : nil)
+    }
+    let first = "## İnceleme 👋\n\n**Önemli:** `code`"
+    let last = "```swift\nlet text = \"café\"\n```"
+    let rows = [row("prompt", .prompt, "My private prompt"), row("analysis", .response, first),
+                row("tool", .tool, "Private tool output"), row("notice", .notice, "An error"), row("answer", .response, last)]
+    let section = try #require(TranscriptSection.build(rows).last)
+    #expect(section.folded)
+    #expect(!section.displayedRows(expanded: false).contains { $0.id == "analysis" })
+    #expect(section.responseText == first + "\n\n" + last)
+    #expect(!section.responseIsPreview)
+    let preview = try #require(TranscriptSection.build([row("preview", .response, "A truncated answer", preview: true)]).last)
+    #expect(preview.responseIsPreview && preview.responseText == "A truncated answer")
+}
+
 extension SessionIntegrationTests {
     @Test @MainActor func conversationSettingsAreDurableScopedAndUseOriginalReceipts() async throws {
         let storage = MemoryStorage(), session: BackendSession

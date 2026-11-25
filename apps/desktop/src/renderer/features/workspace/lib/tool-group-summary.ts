@@ -15,17 +15,15 @@
 import type { RunEvent } from "../types";
 import { resolveTool } from "./resolve-tool";
 import { atlasToolHasError } from "./atlas-tool-content";
-import { PHRASES_BY_GROUP_KEY, VENDOR_PHRASE_RANK } from "./tool-registry";
+import { ASSISTANT_TOOL_LABELS } from "./assistant-tool-content";
+import { PHRASES_BY_GROUP_KEY, VENDOR_PHRASE_RANK, type ToolPhrase } from "./tool-registry";
 
 const MAX_SUMMARY_CLAUSES = 3;
 
-interface Clause {
-  rank: number;
+interface Clause extends ToolPhrase {
   /** First position in the group — the tie-break between equal ranks. */
   order: number;
   count: number;
-  one: string;
-  many: string;
 }
 
 /** "A", "A and B", "A, B and C" — the sentence lists integrations, not code. */
@@ -46,12 +44,6 @@ function capitalize(sentence: string): string {
  * header at all in that case.
  */
 export function summarizeToolCalls(events: RunEvent[]): string {
-  if (
-    events.length > 0 &&
-    events.every((event) => event.metadata?.codexItemType === "imageView")
-  ) {
-    return events.length === 1 ? "Viewed an image" : `Viewed ${events.length} images`;
-  }
   const clauses = new Map<string, Clause>();
   // Vendors collapse into a single clause naming the integrations, because
   // "used the Linear integration, used the Gmail integration" is a list of
@@ -81,17 +73,17 @@ export function summarizeToolCalls(events: RunEvent[]): string {
 
     // No registered phrase: name the tool rather than dropping it from the
     // sentence. Reads as "… and used Glob" — duller, never wrong.
+    const action = resolved.category === "Assistants" ? ASSISTANT_TOOL_LABELS[resolved.displayName]?.toLowerCase() : undefined;
+    const fallback = action ?? `used ${resolved.groupLabel}`;
     const phrase = PHRASES_BY_GROUP_KEY[groupKey] ?? {
-      one: `used ${resolved.groupLabel}`,
-      many: `used ${resolved.groupLabel}`,
+      one: fallback,
+      many: fallback,
       rank: 70,
     };
     clauses.set(groupKey, {
-      rank: phrase.rank,
+      ...phrase,
       order: index,
       count: 1,
-      one: phrase.one,
-      many: phrase.many,
     });
   });
 
@@ -108,10 +100,12 @@ export function summarizeToolCalls(events: RunEvent[]): string {
   }
 
   for (const clause of clauses.values()) {
+    const { count, one, many } = clause;
+    const text = count === 1 ? one : typeof many === "function" ? many(count) : many;
     parts.push({
       rank: clause.rank,
       order: clause.order,
-      text: clause.count === 1 ? clause.one : clause.many,
+      text,
     });
   }
 

@@ -75,6 +75,28 @@ describe("Bridge account quotas in real workerd, SQLite and R2", () => {
     const retry = await (await presign(hub, account, id, 3000)).json() as BridgeBlobPresignResult;
     expect(retry.blobs[0].chunks[0].exists).toBe(true);
   });
+  it("checks the reinstated blob charge in a mixed batch using bytes freed by the preceding delete", async () => {
+    const hub = await fixture({ storageLimitBytes: 9500 }), account = randomUUID(), a = await connect(hub, account);
+    const blobId = randomBytes(32).toString("base64url"), size = 4600;
+    const signed = await (await presign(hub, account, blobId, size)).json() as BridgeBlobPresignResult;
+    const url = signed.blobs[0].chunks[0].url;
+    expect((await fetch(url, { method: "PUT", body: randomBytes(size + 40) })).status).toBe(204);
+    const withFile = (id: string) => {
+      const row = record(id);
+      row.header.blobs = [{ blobId, size }];
+      return row;
+    };
+    const push = (records: BridgeEnvelope[]) => a.rpc({ type: "push", stream: "account", records });
+    const original = withFile("original"), small = record("small", 3800);
+    small.header.blobs = [];
+    expect(await push([original])).toMatchObject({ results: [{ seq: 1 }] });
+    expect(await push([small])).toMatchObject({ results: [{ error: "quotaExceeded" }] });
+    const originalDelete = record("original", 64, "delete"), reused = withFile("reused");
+    expect(await push([originalDelete, small, reused])).toMatchObject({ results: [{ seq: 2 }, { seq: 3 }, { error: "quotaExceeded" }] });
+    expect(await usage(hub, account)).toMatchObject({ blobBytes: 0, retainedBlobBytes: size + 40 });
+    expect(await push([record("small", 64, "delete"), reused])).toMatchObject({ results: [{ seq: 4 }, { seq: 5 }] });
+    expect(await usage(hub, account)).toMatchObject({ blobBytes: size + 40, retainedBlobBytes: 0 });
+  });
   it("releases expired reservations and reconciles a crash between an R2 PUT and its SQLite receipt", async () => {
     const hub = await fixture(), account = randomUUID(), id = randomBytes(32).toString("base64url");
     const signed = await (await presign(hub, account, id, 3000)).json() as BridgeBlobPresignResult;

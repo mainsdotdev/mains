@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { assistantHref } from "@/features/assistants/lib/assistant-navigation";
 import { Close, Plus, Search } from "@/components/ui/icons";
 import { useGetPulsesQuery, type Pulse } from "@/lib/redux/api/pulseApi";
 import { useModeConfig } from "@/hooks/use-mode-config";
@@ -16,7 +17,11 @@ import { PageShell } from "@/components/layout/page-shell";
 
 export default function PulsePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: pulses = [], isLoading } = useGetPulsesQuery();
+  const navigate = useNavigate();
+  const { currentData: pulses, isError, isSuccess, refetch } = useGetPulsesQuery(undefined, {
+    pollingInterval: 15_000,
+    skipPollingIfUnfocused: true,
+  });
   const { mode } = useModeConfig();
   const [query, setQuery] = useState("");
   const [editingPulse, setEditingPulse] = useState<Pulse | null>(null);
@@ -33,14 +38,14 @@ export default function PulsePage() {
   const linkedModalOpen = linkedCreate || linkedTemplate !== null;
 
   const searching = query.trim().length > 0;
-  const visiblePulses = pulses.filter((p) =>
+  const visiblePulses = (pulses ?? []).filter((p) =>
     matchesSearch(query, p.title, p.prompt),
   );
   const visibleTemplates = templatesForMode(mode).filter((t) =>
     matchesSearch(query, t.title, t.description),
   );
   const noMatches =
-    searching && visiblePulses.length === 0 && visibleTemplates.length === 0;
+    isSuccess && searching && visiblePulses.length === 0 && visibleTemplates.length === 0;
 
   const openCreate = () => {
     setEditingPulse(null);
@@ -55,6 +60,7 @@ export default function PulsePage() {
   };
 
   const openEdit = (pulse: Pulse) => {
+    if (pulse.assistantId) { navigate(`${assistantHref(pulse.assistantId)}&tab=routines`); return; }
     setEditingPulse(pulse);
     setActiveTemplate(null);
     setModalOpen(true);
@@ -78,7 +84,7 @@ export default function PulsePage() {
         </div>
         <Button
           type="button"
-          variant="submit"
+          variant="primary"
           onClick={openCreate}
           className="flex items-center gap-1.5 cursor-pointer"
         >
@@ -122,7 +128,9 @@ export default function PulsePage() {
         <div className="space-y-12">
           <PulseList
             pulses={visiblePulses}
-            isLoading={isLoading}
+            isLoading={!isSuccess && !isError && !pulses?.length}
+            loadFailed={isError}
+            onRetry={() => void refetch()}
             searching={searching}
             onEdit={openEdit}
           />

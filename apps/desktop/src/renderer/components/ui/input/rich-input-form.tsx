@@ -21,6 +21,11 @@ const sparklesIconMarkup = renderToStaticMarkup(<Sparkles className="size-3.5 sh
 const pluginIconMarkup = renderToStaticMarkup(<Box className="size-3.5 shrink-0" />);
 
 export interface RichSkillChipData {
+  /** Caller-owned artwork; the editor stays independent of feature components. */
+  icon?: ReactNode;
+  iconSize?: "sm" | "md";
+  /** Caller-owned text color, including any theme-dependent CSS. */
+  textColor?: string;
   name: string;
   /** Whether this mention has a destination supplied by the caller. */
   clickable?: boolean;
@@ -116,6 +121,7 @@ const CODE_CHIP_ATTR = "data-code-chip";
 const CODE_KEY_ATTR = "data-code-key";
 const CHIP_KEY_SEP = "";
 const CHIP_LABEL_ATTR = "data-chip-label";
+const CHIP_ICON_ATTR = "data-chip-icon";
 const CHIP_CLICKABLE_ATTR = "data-chip-clickable";
 const CHIP_REMOVE_ATTR = "data-chip-remove";
 const MENTION_CHIP_SELECTOR = `[${CHIP_ATTR}], [${FILE_CHIP_ATTR}], [${CODE_CHIP_ATTR}]`;
@@ -237,6 +243,7 @@ function createChipIconSlot(label: string): { iconSlot: HTMLSpanElement; glyph: 
   iconSlot.className = "relative inline-flex size-3.5 shrink-0 items-center justify-center";
 
   const glyph = document.createElement("span");
+  glyph.setAttribute(CHIP_ICON_ATTR, "true");
   glyph.setAttribute("aria-hidden", "true");
   glyph.className =
     "inline-flex size-full items-center justify-center overflow-hidden rounded-sm transition-opacity group-hover/chip:opacity-0 [@media(hover:none)]:opacity-0";
@@ -270,13 +277,16 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   chip.setAttribute(CHIP_NAME_ATTR, skill.name);
   chip.setAttribute(CHIP_TOKEN_ATTR, skill.token ?? `$${skill.name}`);
   chip.contentEditable = "false";
-  // Fixed height + leading-none + align-middle so the line box height stays constant
-  // regardless of whether the chip carries an icon — keeps the caret height consistent.
+  // Match the editor’s 20px text line without adding vertical or horizontal margins.
+  // A taller inline box shifts the attachment/send controls in compact composers.
   chip.className =
-    "group/chip inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none " +
+    "group/chip inline-flex align-bottom items-center gap-1 h-5 rounded-lg text-s font-medium leading-none select-none " +
     " text-accent hover:decoration-dotted hover:underline " +
     " cursor-default";
-  if (skill.brandColor) {
+  if (skill.textColor) {
+    chip.style.setProperty("--chip-text-color", skill.textColor);
+    chip.style.color = "var(--chip-text-color)";
+  } else if (skill.brandColor) {
     chip.style.color = `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))`;
   }
 
@@ -285,7 +295,10 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   const { iconSlot, glyph } = createChipIconSlot(labelText);
   const iconPath = skill.iconLarge || skill.iconSmall;
   const fallbackIconMarkup = ["plugin", "mac", "mac_app", "computer"].includes((skill.scope || "").toLowerCase()) ? pluginIconMarkup : sparklesIconMarkup;
-  if (iconPath) {
+  if (skill.icon) {
+    if (skill.iconSize === "md") iconSlot.classList.replace("size-3.5", "size-5");
+    glyph.innerHTML = renderToStaticMarkup(<>{skill.icon}</>);
+  } else if (iconPath) {
     const img = document.createElement("img");
     img.alt = "";
     img.className = "size-full object-contain";
@@ -347,7 +360,7 @@ function buildFileChip(file: RichFileChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = file.path;
   chip.className =
-    "group/chip inline-flex align-middle items-center gap-1 h-6 mx-0.5 text-accent hover:decoration-dotted hover:underline rounded-lg text-s font-medium leading-none select-none " +
+    "group/chip inline-flex align-bottom items-center gap-1 h-5 text-accent hover:decoration-dotted hover:underline rounded-lg text-s font-medium leading-none select-none " +
     "  cursor-default";
 
   const { iconSlot, glyph } = createChipIconSlot(file.basename);
@@ -368,7 +381,7 @@ function buildCodeChip(code: RichCodeChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = code.key;
   chip.className =
-    "group/chip inline-flex align-middle items-center gap-1  mb-0.5 h-6 mx-0.5 text-accent hover:underline rounded-lg text-s font-medium leading-none select-none " +
+    "group/chip inline-flex align-bottom items-center gap-1 h-5 text-accent hover:underline rounded-lg text-s font-medium leading-none select-none " +
     " text-accent hover:decoration-dotted hover:underline cursor-default";
 
   const { iconSlot, glyph } = createChipIconSlot(code.label);
@@ -654,6 +667,8 @@ function rebuildContent(
     // Negative lookahead allows path chars (`.`, `/`, `-`, `_`, word) so we don't partial-match a longer path.
     parts.push(`@(?<file>${filePaths.map(escapeRegExp).join("|")})(?![\\w./-])`);
   }
+  // Unsupported or stale token keys must never create an empty global regex.
+  if (parts.length === 0) return;
   const re = new RegExp(parts.join("|"), "g");
 
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -707,14 +722,18 @@ function rebuildContent(
   }
 }
 
-/** Find a raw file mention that became eligible for a chip after context arrived. */
-function hasUnrenderedFileToken(
+/** Find a raw mention that became eligible for a chip after context arrived. */
+function hasUnrenderedContextToken(
   root: HTMLElement,
   fileChipMap?: ReadonlyMap<string, RichFileChipData>,
+  skillChipMap?: ReadonlyMap<string, RichSkillChipData>,
 ): boolean {
-  if (!fileChipMap?.size) return false;
-  const paths = Array.from(fileChipMap.keys());
-  const token = new RegExp(`@(?:${paths.map(escapeRegExp).join("|")})(?![\\w./#-])`);
+  const tokens = [
+    ...Array.from(fileChipMap?.keys() ?? [], path => `@${path}`),
+    ...Array.from(skillChipMap?.keys() ?? []).filter(key => key.startsWith("@") || key.startsWith("$")),
+  ];
+  if (!tokens.length) return false;
+  const token = new RegExp(`(?:${tokens.map(escapeRegExp).join("|")})(?![\\w./#-])`);
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let node: Node | null;
   while ((node = walker.nextNode())) {
@@ -928,6 +947,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
     const lastFileChipsRef = useRef<string>("");
     const lastCodeChipsRef = useRef<string>("");
     const lastFileChipMapRef = useRef(fileChipMap);
+    const lastSkillChipMapRef = useRef(skillChipMap);
 
     const fireCaretContext = useCallback(() => {
       if (!onCaretContextChange) return;
@@ -989,17 +1009,33 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       fireCaretContext();
     }, [onQueryChange, onSkillChipsChange, onFileChipsChange, onCodeChipsChange, query, fireCaretContext]);
 
-    // Sync external query changes and restore raw file mentions when their context arrives later.
+    // Sync external query changes and restore raw mentions when their context arrives later.
     // Typing leaves the query and DOM in lockstep, so ordinary edits do not rebuild the editor.
     useEffect(() => {
       const root = editorRef.current;
       if (!root) return;
       const fileMapChanged = fileChipMap !== lastFileChipMapRef.current;
+      const skillMapChanged = skillChipMap !== lastSkillChipMapRef.current;
       lastFileChipMapRef.current = fileChipMap;
+      lastSkillChipMapRef.current = skillChipMap;
       if (
         query === lastSerializedRef.current &&
-        !(fileMapChanged && hasUnrenderedFileToken(root, fileChipMap))
-      ) return;
+        !((fileMapChanged || skillMapChanged) && hasUnrenderedContextToken(root, fileChipMap, skillChipMap))
+      ) {
+        if (skillMapChanged) {
+          // Avatar data can arrive after a saved draft has already restored its chips.
+          // Keep their nodes and the editor selection in place when the tint changes.
+          for (const chip of root.querySelectorAll<HTMLElement>(`[${CHIP_ATTR}]`)) {
+            const data = skillChipMap?.get(chip.getAttribute(CHIP_TOKEN_ATTR) ?? "");
+            if (!data?.textColor || chip.style.getPropertyValue("--chip-text-color") === data.textColor) continue;
+            chip.style.setProperty("--chip-text-color", data.textColor);
+            chip.style.color = "var(--chip-text-color)";
+            const glyph = chip.querySelector(`[${CHIP_ICON_ATTR}]`);
+            if (data.icon && glyph) glyph.innerHTML = renderToStaticMarkup(<>{data.icon}</>);
+          }
+        }
+        return;
+      }
       rebuildContent(root, query, skillChipMap, fileChipMap, codeChipMap);
       lastSerializedRef.current = query;
       setIsEmpty(query.length === 0);

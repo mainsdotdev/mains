@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "EEFBAC4A7446DFF654C0515D12648CDE"
+               BlueprintIdentifier = "61ED193EF95F7C32A573FA147BD04C71"
                BuildableName = "Mains Native.app"
                BlueprintName = "Mains"
                ReferencedContainer = "container:Mains.xcodeproj">
@@ -40,11 +40,11 @@
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv = "YES">
+      shouldUseLaunchSchemeArgsEnv = "NO">
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "EEFBAC4A7446DFF654C0515D12648CDE"
+            BlueprintIdentifier = "61ED193EF95F7C32A573FA147BD04C71"
             BuildableName = "Mains Native.app"
             BlueprintName = "Mains"
             ReferencedContainer = "container:Mains.xcodeproj">
@@ -62,6 +62,13 @@
             </BuildableReference>
          </TestableReference>
       </Testables>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "MAINS_HOT_RELOAD"
+            value = "0"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
@@ -77,12 +84,19 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "EEFBAC4A7446DFF654C0515D12648CDE"
+            BlueprintIdentifier = "61ED193EF95F7C32A573FA147BD04C71"
             BuildableName = "Mains Native.app"
             BlueprintName = "Mains"
             ReferencedContainer = "container:Mains.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "INJECTION_DIRECTORIES"
+            value = "$(SRCROOT)/Sources/MainsApp,$(HOME)/Library"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
@@ -94,7 +108,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "EEFBAC4A7446DFF654C0515D12648CDE"
+            BlueprintIdentifier = "61ED193EF95F7C32A573FA147BD04C71"
             BuildableName = "Mains Native.app"
             BlueprintName = "Mains"
             ReferencedContainer = "container:Mains.xcodeproj">

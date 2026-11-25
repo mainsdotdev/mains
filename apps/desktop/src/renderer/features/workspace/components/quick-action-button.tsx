@@ -19,7 +19,7 @@ export function QuickActionButton({
       variant="bare"
       onClick={onClick}
       className=" px-3 py-1.5 cursor-pointer text-s duration-200 transition-all rounded-xl
-      text-primary-900 dark:text-primary flex items-center gap-2 glass-surface opacity-80"
+      text-primary-900 dark:text-primary flex items-center gap-2 button-neutral"
     >
       {icon && <span>{icon}</span>}
       <span>{label}</span>

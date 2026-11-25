@@ -8,6 +8,11 @@ public enum Experience {
     public static func modes(for provider: String) -> [String] {
         ["copilot_cli", "cursor", "opencode"].contains(provider) ? ["developer"] : ["developer", "work", "chat"]
     }
+
+    // Mirrors the backend's assistant mention modes and Code workspace requirement.
+    public static func allowsMateMentions(_ mode: String?, isMateConversation: Bool, hasLocalWorkspace: Bool) -> Bool {
+        !isMateConversation && (mode == "work" || mode == "developer" && hasLocalWorkspace)
+    }
 }
 
 public struct ProjectCollection: Codable, Equatable, Identifiable, Sendable {
@@ -65,6 +70,15 @@ public struct ComposerSettings: Codable, Equatable, Sendable {
         if provider == "claude_code", config["ultracode"]?.bool == true { return "ultracode" }
         return config[["codex", "copilot_cli"].contains(provider) ? "modelReasoningEffort" : "effortLevel"]?.string ?? ""
     }
+    /// Display older incompatible settings without silently writing a repair.
+    /// Explicit model selection saves the same compatible value below.
+    public func effort(provider: String, model: ModelChoice?) -> String {
+        let value = effort(provider: provider)
+        guard provider == "claude_code", value == "ultracode", let model else { return value }
+        let levels = model.supportedEffortLevels ?? []
+        guard !EffortControlKind.supportsUltracode(provider: provider, levels: levels) else { return value }
+        return EffortControlKind.ordered(levels).last ?? ""
+    }
     public mutating func setEffort(_ value: String, provider: String) {
         config["thinkingMode"] = .bool(!value.isEmpty)
         if provider == "claude_code", value == "ultracode" { config["ultracode"] = .bool(true); return }
@@ -86,7 +100,13 @@ public struct ComposerSettings: Codable, Equatable, Sendable {
         self.model = model.id
         let levels = model.supportedEffortLevels ?? []
         let current = effort(provider: provider)
-        if !levels.isEmpty, !current.isEmpty, current != "ultracode", !levels.contains(current) {
+        let compatible = effort(provider: provider, model: model)
+        if compatible != current {
+            let thinking = config["thinkingMode"]?.bool ?? true
+            setEffort(compatible, provider: provider)
+            // Claude models with no graded effort still have a Thinking switch.
+            if levels.isEmpty { config["thinkingMode"] = .bool(thinking) }
+        } else if !levels.isEmpty, !current.isEmpty, current != "ultracode", !levels.contains(current) {
             let ranked = ["minimal", "low", "medium", "high", "xhigh", "max"]
             let rank = ranked.firstIndex(of: current) ?? ranked.count
             let next = levels.min { abs((ranked.firstIndex(of: $0) ?? 0) - rank) < abs((ranked.firstIndex(of: $1) ?? 0) - rank) } ?? ""
@@ -98,8 +118,12 @@ public struct ComposerSettings: Codable, Equatable, Sendable {
             config["serviceTier"] = .string(tiers.contains(tier) ? tier : "default")
         }
     }
-    public static func effortLabel(_ value: String) -> String {
-        switch value { case "": "Off"; case "xhigh": "Extra High"; default: value.capitalized }
+    public static func effortLabel(_ value: String, provider: String? = nil) -> String {
+        switch value {
+        case "": ["codex", "opencode"].contains(provider ?? "") ? "Default" : "Off"
+        case "xhigh": "Extra High"
+        default: value.capitalized
+        }
     }
 }
 
@@ -145,29 +169,119 @@ public struct ModelChoice: Codable, Equatable, Identifiable, Sendable {
     public var name: String {
         displayName.lowercased().hasPrefix("gpt-") ? "GPT " + displayName.dropFirst(4).replacingOccurrences(of: "-", with: " ") : displayName
     }
+    /// Compact composer label; catalogue identities and provider groups stay intact.
+    public func label(for providerID: String) -> String {
+        switch providerID {
+        case "claude_code": claudeLabel
+        case "opencode": OpenCodeModelDisplay.parts(displayName)?.name ?? name
+        default: name
+        }
+    }
+
+    // Older Claude catalogues put the version in the lead-in to the description.
+    // Match desktop's model-display.ts and retain the catalogue name for taglines.
+    private var claudeLabel: String {
+        guard let description else { return name }
+        let prefix = description.prefix(while: { $0 != "·" }).trimmingCharacters(in: .whitespacesAndNewlines)
+        let contextSuffix = " with 1M context"
+        guard description.contains("·") || prefix.hasSuffix(contextSuffix) else { return name }
+
+        func withoutBrand(_ value: String) -> String {
+            value.replacingOccurrences(of: #"^Claude\s+"#, with: "", options: [.regularExpression, .caseInsensitive])
+        }
+        let catalogueName = withoutBrand(displayName).trimmingCharacters(in: .whitespacesAndNewlines)
+        let describedName = withoutBrand(prefix)
+        guard !catalogueName.isEmpty, describedName.lowercased().hasPrefix(catalogueName.lowercased()) else { return name }
+        if let boundary = describedName.dropFirst(catalogueName.count).first,
+           !boundary.isWhitespace, boundary != "(", boundary != "[" { return name }
+        return prefix.hasSuffix(contextSuffix) ? String(prefix.dropLast(contextSuffix.count)) + " [1M]" : prefix
+    }
+}
+
+/// Mirrors desktop's model-display.ts; presentation never replaces a catalogue id.
+public enum OpenCodeModelDisplay {
+    public struct Parts: Equatable, Sendable {
+        public let provider: String
+        public let name: String
+    }
+    public struct Group: Identifiable, Sendable {
+        public var id: String { provider }
+        public let provider: String
+        public var models: [ModelChoice]
+    }
+    private static let providers = [
+        "github-copilot": "GitHub Copilot", "copilot": "GitHub Copilot", "openai": "OpenAI",
+        "anthropic": "Anthropic", "google": "Google", "opencode": "OpenCode", "openrouter": "OpenRouter",
+        "groq": "Groq", "mistral": "Mistral", "xai": "xAI", "azure": "Azure",
+        "amazon-bedrock": "Amazon Bedrock", "bedrock": "Amazon Bedrock", "claude-agent": "Claude",
+    ]
+    public static func parts(_ model: String) -> Parts? {
+        guard let slash = model.firstIndex(of: "/"), slash > model.startIndex else { return nil }
+        let slug = String(model[..<slash]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = String(model[model.index(after: slash)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !slug.isEmpty, !name.isEmpty else { return nil }
+        let provider = providers[slug.lowercased()] ?? slug.split(separator: "-").map { word in
+            word.count <= 2 ? word.uppercased() : String(word.prefix(1)).uppercased() + word.dropFirst()
+        }.joined(separator: " ")
+        return Parts(provider: provider, name: name)
+    }
+    public static func groups(_ models: [ModelChoice]) -> [Group] {
+        var result: [Group] = [], indices: [String: Int] = [:]
+        for model in models {
+            let provider = parts(model.displayName)?.provider ?? "Other"
+            if let index = indices[provider] { result[index].models.append(model) }
+            else { indices[provider] = result.count; result.append(Group(provider: provider, models: [model])) }
+        }
+        return result
+    }
 }
 
 public struct PermissionChoice: Identifiable, Equatable, Sendable {
     public let id: String
     public let title: String
     public let detail: String
+    public var shortTitle: String? = nil
     public var disabledReason: String? = nil
-    public static func title(for value: String, provider: String) -> String? {
+
+    public static func shortTitle(for value: String, provider: String) -> String? {
         let mode = provider == "codex" ? CodexPermissions.builtinProfiles.first { "profile:" + $0.value == value }?.key ?? value : value
-        if let choice = choices(provider: provider).first(where: { $0.id == mode }) { return choice.title }
+        if let choice = choices(provider: provider).first(where: { $0.id == mode }) { return choice.shortTitle ?? choice.title }
         if provider == "codex", value.hasPrefix("profile:"), value.count > 8 { return String(value.dropFirst(8)) }
         return nil
     }
+
     public static func choices(provider: String) -> [Self] {
-        let rows: [(String, String, String)] = switch provider {
-        case "claude_code": [("default", "Ask permissions", "Ask before changes"), ("auto", "Auto", "Claude decides when to ask"), ("acceptEdits", "Auto accept edits", "Accept all edits"), ("plan", "Plan mode", "Plan before changes"), ("bypassPermissions", "Bypass permissions", "Bypass all permissions"), ("dontAsk", "Don’t ask", "Deny unapproved tools silently")]
-        case "copilot_cli": [("default", "Ask permissions", "Ask before changes"), ("acceptEdits", "Auto accept edits", "Accept all edits"), ("plan", "Plan mode", "Plan before changes"), ("bypassPermissions", "Bypass permissions", "Bypass all permissions")]
-        case "codex": [("read-only", "Read Only", "Read files without making changes"), ("workspace-write", "Auto", "Edit files in this workspace"), ("danger-full-access", "Full Access", "No restrictions")]
-        case "cursor": [("ask", "Ask", "Ask before changes"), ("agent", "Agent", "Autonomous agent mode"), ("plan", "Plan", "Plan before executing")]
-        case "opencode": [("build", "Build", "Default coding agent"), ("plan", "Plan", "Plan before changing files")]
+        switch provider {
+        case "claude_code": [
+            Self(id: "default", title: "Ask permissions", detail: "Ask before changes", shortTitle: "Ask"),
+            Self(id: "auto", title: "Auto", detail: "Claude decides when to ask"),
+            Self(id: "acceptEdits", title: "Accept edits", detail: "Accept all edits"),
+            Self(id: "plan", title: "Plan mode", detail: "Plan before changes", shortTitle: "Plan"),
+            Self(id: "bypassPermissions", title: "Bypass permissions", detail: "Bypass all permissions", shortTitle: "Bypass"),
+            Self(id: "dontAsk", title: "Don’t ask", detail: "Deny unapproved tools silently"),
+        ]
+        case "copilot_cli": [
+            Self(id: "default", title: "Ask permissions", detail: "Ask before changes", shortTitle: "Ask"),
+            Self(id: "acceptEdits", title: "Auto accept edits", detail: "Accept all edits", shortTitle: "Accept edits"),
+            Self(id: "plan", title: "Plan mode", detail: "Plan before changes", shortTitle: "Plan"),
+            Self(id: "bypassPermissions", title: "Bypass permissions", detail: "Bypass all permissions", shortTitle: "Bypass"),
+        ]
+        case "codex": [
+            Self(id: "read-only", title: "Read Only", detail: "Read files without making changes"),
+            Self(id: "workspace-write", title: "Auto", detail: "Edit files in this workspace"),
+            Self(id: "danger-full-access", title: "Full Access", detail: "No restrictions"),
+        ]
+        case "cursor": [
+            Self(id: "ask", title: "Ask", detail: "Ask before changes"),
+            Self(id: "agent", title: "Agent", detail: "Autonomous agent mode"),
+            Self(id: "plan", title: "Plan", detail: "Plan before executing"),
+        ]
+        case "opencode": [
+            Self(id: "build", title: "Build", detail: "Default coding agent"),
+            Self(id: "plan", title: "Plan", detail: "Plan before changing files"),
+        ]
         default: []
         }
-        return rows.map { Self(id: $0.0, title: $0.1, detail: $0.2) }
     }
 }
 

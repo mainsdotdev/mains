@@ -1,3 +1,5 @@
+import { outputMediaMimeType } from "./output-files";
+
 export const OUTPUT_CHUNK_BYTES = 128 * 1024;
 export const MOBILE_OUTPUT_MAX_BYTES = 100 * 1024 * 1024;
 
@@ -22,7 +24,10 @@ export interface ReadRunOutputPayload { runId: string; artifactId: number; versi
 export interface RunOutputChunk { base64: string; offset: number; nextOffset: number | null; byteSize: number; version: string }
 
 export function outputFileType(name: string): { mimeType: string; previewType: OutputPreviewType } {
-  const extension = name.split(".").pop()?.toLowerCase() ?? "";
+  const dot = name.lastIndexOf(".");
+  const extension = dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+  const media = outputMediaMimeType(extension);
+  if (media) return { mimeType: media, previewType: "native" };
   const types: Record<string, { mimeType: string; previewType: OutputPreviewType }> = {
     md: { mimeType: "text/markdown", previewType: "markdown" }, markdown: { mimeType: "text/markdown", previewType: "markdown" },
     txt: { mimeType: "text/plain", previewType: "text" }, csv: { mimeType: "text/csv", previewType: "text" },

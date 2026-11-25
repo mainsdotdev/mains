@@ -76,12 +76,13 @@ export function CredentialStep({
 
       <div className="flex justify-end gap-3 pt-2">
         <Button
-          variant="submit"
+          variant="primary"
           onClick={onSubmit}
           disabled={loading || !allFieldsFilled}
           isLoading={loading}
+          aria-label={loading ? loadingLabel : undefined}
         >
-          {loading ? loadingLabel : submitLabel}
+          {submitLabel}
         </Button>
       </div>
     </div>

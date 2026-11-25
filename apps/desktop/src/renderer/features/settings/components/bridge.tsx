@@ -30,6 +30,7 @@ import { BridgeDeviceRow } from "./bridge-device-row";
 import { BridgeSignInSection } from "./bridge-sign-in";
 import { BridgeKeyVerification } from "./bridge-key-verification";
 import { BridgeDeviceSetup } from "./bridge-device-setup";
+import { BridgeStorage, storageSize } from "./bridge-storage";
 import { bridgeConnectionDescription } from "../lib/bridge-connection";
 
 async function value<T>(promise: Promise<ServiceResponse<T>>): Promise<T> {
@@ -75,11 +76,6 @@ function CheckboxField({
       </span>
     </Text>
   );
-}
-
-function storageSize(bytes: number) {
-  const unit = bytes >= 1024 ** 3 ? "GiB" : "MiB";
-  return `${(bytes / (unit === "GiB" ? 1024 ** 3 : 1024 ** 2)).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${unit}`;
 }
 
 export default function BridgeSettings() {
@@ -360,6 +356,9 @@ export default function BridgeSettings() {
                   <Text as="span" tone="subtle" align="right" className="whitespace-nowrap tabular-nums">
                     {storageSize(sync.quota.usedBytes)} / {storageSize(sync.quota.limitBytes)}
                   </Text>
+                  {sync.quota.storageManagement && (
+                    <BridgeStorage key={`${status.hubUrl}:${status.accountId}:${status.backendId}`} retainedBytes={sync.quota.retainedBlobBytes} />
+                  )}
                 </div>
               </div>
             ) : (
@@ -410,7 +409,7 @@ export default function BridgeSettings() {
                   }}
                 >
                   {visibleRecoveryCode
-                    ? "I saved it — hide code"
+                    ? "Saved it — hide code"
                     : status.recoveryCodeAvailable
                       ? "Show recovery code"
                       : "New recovery code"}

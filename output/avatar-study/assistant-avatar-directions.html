@@ -1,0 +1,390 @@
+<div id="mains-avatar-directions" lang="tr" role="group" aria-label="Mains asistan avatarları">
+  <div class="avatar-studies">
+    <figure>
+      <canvas class="avatar-portrait" data-family="mosaic" data-size="96" role="img" aria-label="Mozaik, mat renkli bir blok yüz">Mozaik</canvas>
+      <figcaption>Mozaik</figcaption>
+      <div class="avatar-samples" aria-hidden="true">
+        <canvas data-family="mosaic" data-size="24"></canvas>
+        <canvas data-family="mosaic" data-size="32"></canvas>
+      </div>
+    </figure>
+    <figure>
+      <canvas class="avatar-portrait" data-family="badge" data-size="96" role="img" aria-label="Rozet, köşesinde sürüm simgesi olan bir yüz">Rozet</canvas>
+      <figcaption>Rozet</figcaption>
+      <div class="avatar-samples" aria-hidden="true">
+        <canvas data-family="badge" data-size="24"></canvas>
+        <canvas data-family="badge" data-size="32"></canvas>
+      </div>
+    </figure>
+    <figure>
+      <canvas class="avatar-portrait" data-family="felt" data-size="96" role="img" aria-label="Keçe, yumuşak hatlı ve dokulu bir yüz">Keçe</canvas>
+      <figcaption>Keçe</figcaption>
+      <div class="avatar-samples" aria-hidden="true">
+        <canvas data-family="felt" data-size="24"></canvas>
+        <canvas data-family="felt" data-size="32"></canvas>
+      </div>
+    </figure>
+  </div>
+  <div class="viz-controls avatar-states" role="group" aria-label="Canlandırılacak durum">
+    <button class="btn btn-primary" type="button" data-state="idle" aria-pressed="true">Hazır</button>
+    <button class="btn" type="button" data-state="working" aria-pressed="false">Çalışıyor</button>
+    <button class="btn" type="button" data-state="waiting" aria-pressed="false">Yanıt bekliyor</button>
+    <button class="btn" type="button" data-state="done" aria-pressed="false">Tamamlandı</button>
+  </div>
+  <div class="sr-only" aria-live="polite" data-announcement></div>
+</div>
+<style>
+  #mains-avatar-directions {
+    --avatar-space: var(--font-size-base, 14px);
+    display: grid;
+    gap: var(--avatar-space);
+  }
+  #mains-avatar-directions .avatar-studies {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: calc(var(--avatar-space) / 2);
+    padding-block: calc(var(--avatar-space) / 2);
+  }
+  #mains-avatar-directions figure {
+    display: grid;
+    justify-items: center;
+    align-content: start;
+    gap: calc(var(--avatar-space) / 2);
+    margin: 0;
+    min-width: 0;
+  }
+  #mains-avatar-directions figcaption { font-weight: 500; }
+  #mains-avatar-directions canvas {
+    display: block;
+    width: var(--portrait-size);
+    height: var(--portrait-size);
+  }
+  #mains-avatar-directions [data-size="96"] { --portrait-size: 96px; }
+  #mains-avatar-directions [data-size="32"] { --portrait-size: 32px; }
+  #mains-avatar-directions [data-size="24"] { --portrait-size: 24px; }
+  #mains-avatar-directions .avatar-samples {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--avatar-space) / 3);
+  }
+  #mains-avatar-directions .avatar-states { justify-content: center; }
+  @media (max-width: 340px) {
+    #mains-avatar-directions .avatar-studies { gap: 0; }
+  }
+</style>
+<script>
+(() => {
+  const root = document.getElementById("mains-avatar-directions");
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  const darkScheme = matchMedia("(prefers-color-scheme: dark)");
+  const canvases = Array.from(root.querySelectorAll("canvas"), canvas => {
+    const size = Number(canvas.dataset.size);
+    const density = Math.max(2, Math.min(3, window.devicePixelRatio));
+    canvas.width = canvas.height = Math.round(size * density);
+    return { canvas, context: canvas.getContext("2d"), family: canvas.dataset.family, size };
+  });
+  const buttons = Array.from(root.querySelectorAll("[data-state]"));
+  const announcement = root.querySelector("[data-announcement]");
+  const stateDuration = { idle: 1850, working: 3900, waiting: 650, done: 750 };
+  const palette = {
+    light: {
+      mosaic: ["#e58b64", "#f5ae88", "#d77755", "#984934", "#3d251f", "#ffdfaf"],
+      badge: ["#b3a4e1", "#cec2f2", "#8b78c6", "#5e4a9c", "#302350", "#e9ddff"],
+      felt: ["#8bb5a1", "#c4ddbb", "#5b927e", "#436b5c", "#203c33", "#dce9b8"],
+      cue: ["#f0b144", "#288760", "#302309", "#f4fff8"],
+    },
+    dark: {
+      mosaic: ["#e58c68", "#ffb68f", "#c97054", "#a64c35", "#351e18", "#ffe4b9"],
+      badge: ["#ac9adc", "#cbb9f4", "#8370bc", "#5e4a9c", "#2a1f43", "#f0e3ff"],
+      felt: ["#81ad97", "#b9d4ab", "#538875", "#376653", "#182f27", "#e0eab6"],
+      cue: ["#fbc46a", "#92d6aa", "#31230c", "#182e24"],
+    },
+  };
+  const tiles = [
+    [13, 28, 19, 21, [7, 3, 4, 5], 2],
+    [34, 16, 29, 33, [8, 9, 4, 4], 1],
+    [65, 22, 23, 27, [6, 9, 5, 4], 0],
+    [13, 51, 29, 29, [5, 4, 4, 10], 0],
+    [44, 51, 44, 29, [4, 5, 11, 4], 1],
+    [25, 82, 17, 8, 3, 2],
+    [44, 82, 21, 8, 3, 2],
+    [67, 82, 12, 8, 3, 2],
+  ];
+  const badge = new Path2D("M31 17 H75 Q82 17 86 22 L94 33 Q96 37 95 43 L89 69 Q87 75 81 77 L25 88 Q18 89 14 83 L8 72 Q5 68 7 63 L18 29 Q22 17 31 17 Z");
+  const badgeHighlight = new Path2D("M16 20 L89 10 L96 26 L13 40 Z");
+  const badgeEdge = new Path2D("M3 64 L100 55 L100 91 L0 92 Z");
+  const felt = new Path2D("M49 14 C61 17 62 28 72 26 C83 25 94 36 92 51 C90 68 82 81 67 83 C59 84 54 90 43 89 C23 88 9 73 9 57 C9 41 18 28 32 25 C39 23 44 13 49 14 Z");
+  const feltFold = new Path2D("M8 72 C28 76 39 87 58 75 C73 65 84 63 94 52 L99 97 L9 97 Z");
+  const paleFibers = new Path2D();
+  const darkFibers = new Path2D();
+  for (let index = 0; index < 820; index++) {
+    const x = ((index * 277 + 41) % 997) / 9.97;
+    const y = ((index * 583 + 61) % 991) / 9.91;
+    const radius = 0.18 + (index % 7) * 0.1;
+    const fibers = index % 3 === 0 ? paleFibers : darkFibers;
+    fibers.moveTo(x + 1.7 * radius * Math.cos(-0.5), y + 1.7 * radius * Math.sin(-0.5));
+    fibers.ellipse(x, y, radius * 1.7, radius, -0.5, 0, Math.PI * 2);
+  }
+
+  let current = "idle";
+  let selectedAt = null;
+  let pointer = null;
+  let frame = 0;
+
+  function fillRect(ctx, x, y, width, height, radius, color) {
+    ctx.beginPath();
+    ctx.roundRect(x, y, width, height, radius);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  function stroke(ctx, color, width, path) {
+    ctx.beginPath();
+    path();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.stroke();
+  }
+
+  function drawEyes(ctx, centers, y, width, height, ink, mood, square = false) {
+    centers.forEach((x, index) => {
+      const centerX = x + mood.x;
+      const centerY = y + mood.y + (index ? mood.slant : 0);
+      if (mood.smile) {
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = square ? 4.5 : 4;
+        ctx.lineCap = square ? "square" : "round";
+        ctx.lineJoin = square ? "miter" : "round";
+        ctx.beginPath();
+        ctx.moveTo(centerX - width * 0.6, centerY + 2);
+        if (square) {
+          ctx.lineTo(centerX, centerY - 4);
+          ctx.lineTo(centerX + width * 0.6, centerY + 2);
+        } else {
+          ctx.quadraticCurveTo(centerX, centerY - 10, centerX + width * 0.6, centerY + 2);
+        }
+        ctx.stroke();
+        return;
+      }
+      const eyeHeight = Math.max(2.5, height * mood.open);
+      const eyeWidth = width * (mood.open < 0.6 ? 1.15 : 1);
+      fillRect(ctx, centerX - eyeWidth / 2, centerY - eyeHeight / 2, eyeWidth, eyeHeight, square ? 2 : eyeWidth / 2, ink);
+    });
+  }
+
+  function drawMosaic(ctx, colors, mood) {
+    const [, , , shadow, ink, on] = colors;
+    tiles.forEach(([x, y, w, h, r, tone], index) => {
+      fillRect(ctx, x, y + 1.5, w, h, r, shadow);
+      const active = mood.step >= 0 && index === 5 + mood.step;
+      fillRect(ctx, x, y, w, h, r, active ? on : colors[tone]);
+    });
+    drawEyes(ctx, [32, 61], 61, 10.5, 13, ink, mood, true);
+  }
+
+  function drawBadge(ctx, colors, mood, full) {
+    const [bodyColor, highlight, edge, shadow, ink, signal] = colors;
+    ctx.save();
+    ctx.translate(0, 2);
+    ctx.fillStyle = shadow;
+    ctx.fill(badge);
+    ctx.restore();
+    ctx.fillStyle = bodyColor;
+    ctx.fill(badge);
+    ctx.save();
+    ctx.clip(badge);
+    ctx.fillStyle = highlight;
+    ctx.fill(badgeHighlight);
+    ctx.fillStyle = edge;
+    ctx.fill(badgeEdge);
+    if (full) {
+      stroke(ctx, signal, 2, () => {
+        ctx.moveTo(22, 31);
+        ctx.lineTo(35, 29);
+        ctx.moveTo(40, 28);
+        ctx.lineTo(45, 27.5);
+      });
+    }
+    ctx.restore();
+    drawEyes(ctx, [35, 59], 46, 10, 14, ink, mood);
+    for (let index = 0; index < 3; index++) {
+      fillRect(ctx, 22 + index * 8, 71 - index * 0.7, 5.5, 3.5, 1.5, index === mood.step ? signal : shadow);
+    }
+    stroke(ctx, signal, full ? 2.7 : 3.6, () => {
+      ctx.moveTo(74, 72);
+      ctx.lineTo(74, 61);
+      ctx.moveTo(69.5, 65.5);
+      ctx.lineTo(74, 61);
+      ctx.lineTo(78.5, 65.5);
+    });
+  }
+
+  function drawFelt(ctx, colors, mood, full) {
+    const [, highlight, edge, shadow, ink, signal] = colors;
+    const feltFill = ctx.createLinearGradient(35, 18, 62, 88);
+    feltFill.addColorStop(0, highlight);
+    feltFill.addColorStop(0.52, colors[0]);
+    feltFill.addColorStop(1, edge);
+    ctx.fillStyle = feltFill;
+    ctx.fill(felt);
+    ctx.save();
+    ctx.clip(felt);
+    ctx.fillStyle = shadow;
+    ctx.globalAlpha = 0.23;
+    ctx.fill(feltFold);
+    if (full) {
+      ctx.fillStyle = signal;
+      ctx.globalAlpha = 0.5;
+      ctx.fill(paleFibers);
+      ctx.fillStyle = shadow;
+      ctx.globalAlpha = 0.26;
+      ctx.fill(darkFibers);
+    }
+    ctx.restore();
+    drawEyes(ctx, [39, 62], 52, 9, 14.5, ink, mood);
+    if (full) {
+      stroke(ctx, highlight, 2.1, () => {
+        ctx.moveTo(24, 60);
+        ctx.lineTo(28, 61);
+        ctx.moveTo(70, 63);
+        ctx.lineTo(74, 62);
+      });
+    }
+  }
+
+  function drawCue(ctx, colors, full, isDone) {
+    const [amber, green, amberInk, greenInk] = colors;
+    ctx.beginPath();
+    ctx.arc(87, 17, full ? 8.5 : 9, 0, Math.PI * 2);
+    ctx.fillStyle = isDone ? green : amber;
+    ctx.fill();
+    if (isDone) {
+      stroke(ctx, greenInk, full ? 2 : 2.8, () => {
+        ctx.moveTo(83.5, 17);
+        ctx.lineTo(86, 19.5);
+        ctx.lineTo(90.5, 14.5);
+      });
+    } else {
+      fillRect(ctx, 86, 12.5, 2.1, 5.5, 1, amberInk);
+      fillRect(ctx, 86, 20, 2.1, 2.1, 1, amberInk);
+    }
+  }
+
+  function expression(elapsed, family) {
+    const pointed = pointer?.family === family ? pointer : null;
+    const mood = { x: 0, y: 0, slant: 0, open: 1, smile: false, tilt: 0, stretch: 1, step: -1 };
+    if (current === "idle") {
+      const glance = elapsed > 180 && elapsed < 800 ? 3.5 * Math.sin((elapsed - 180) / 620 * Math.PI) : 0;
+      mood.x = pointed?.x ?? glance;
+      mood.y = pointed?.y ?? 0;
+      if (elapsed > 850 && elapsed < 1030) mood.open = 1 - 0.92 * Math.sin((elapsed - 850) / 180 * Math.PI);
+    } else if (current === "working") {
+      const beat = Number.isFinite(elapsed) ? elapsed : 350;
+      mood.x = 2.6 * Math.cos(beat / 280);
+      mood.y = 2.5;
+      mood.open = 0.72;
+      mood.step = Math.floor(beat / 255) % 3;
+      if (family === "felt") mood.stretch = 1 + 0.06 * Math.sin(beat / 190);
+    } else if (current === "waiting") {
+      const tilt = elapsed < 650 ? Math.sin(elapsed / 650 * Math.PI) : 0;
+      mood.y = -3;
+      mood.open = 1.22;
+      mood.slant = -1;
+      mood.tilt = -0.085 * tilt;
+    } else {
+      mood.smile = true;
+      if (elapsed < 750) mood.stretch = 1 + 0.14 * Math.sin(elapsed / 750 * Math.PI * 2) * (1 - elapsed / 750);
+    }
+    return mood;
+  }
+
+  function draw(now = performance.now()) {
+    frame = 0;
+    const inheritedTheme = document.documentElement.dataset.theme;
+    const theme = inheritedTheme || (darkScheme.matches ? "dark" : "light");
+    const colors = palette[theme] ?? palette.light;
+    const elapsed = reducedMotion.matches || selectedAt === null ? Infinity : now - selectedAt;
+    canvases.forEach(({ canvas, context: ctx, family, size }) => {
+      if (!ctx) return;
+      const full = size >= 96;
+      const scale = canvas.width / 100;
+      const mood = expression(elapsed, family);
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      ctx.clearRect(0, 0, 100, 100);
+      ctx.save();
+      ctx.translate(50, 53);
+      ctx.rotate(mood.tilt);
+      ctx.scale(1 / Math.sqrt(mood.stretch), mood.stretch);
+      ctx.translate(-50, -53);
+      if (family === "mosaic") drawMosaic(ctx, colors.mosaic, mood);
+      if (family === "badge") drawBadge(ctx, colors.badge, mood, full);
+      if (family === "felt") drawFelt(ctx, colors.felt, mood, full);
+      ctx.restore();
+      if (current === "waiting" || current === "done") drawCue(ctx, colors.cue, full, current === "done");
+    });
+    if (elapsed < stateDuration[current] && !document.hidden) frame = requestAnimationFrame(draw);
+  }
+
+  function redraw() {
+    cancelAnimationFrame(frame);
+    draw();
+  }
+
+  function select(state, animate) {
+    if (!Object.hasOwn(stateDuration, state)) return;
+    current = state;
+    pointer = null;
+    selectedAt = animate ? performance.now() : null;
+    buttons.forEach(button => {
+      const selected = button.dataset.state === current;
+      button.setAttribute("aria-pressed", String(selected));
+      button.classList.toggle("btn-primary", selected);
+      if (selected && animate) announcement.textContent = button.textContent;
+    });
+    redraw();
+  }
+
+  buttons.forEach(button => button.addEventListener("click", () => {
+    select(button.dataset.state, true);
+    window.openai?.setWidgetState?.({ privateContent: { avatarPose: current } })?.catch(() => {});
+  }));
+
+  canvases.filter(item => item.size >= 96).forEach(({ canvas, family }) => {
+    canvas.addEventListener("pointermove", event => {
+      if (event.pointerType === "touch" || current !== "idle" || reducedMotion.matches) return;
+      const bounds = canvas.getBoundingClientRect();
+      pointer = {
+        family,
+        x: (event.clientX - bounds.left) / bounds.width * 8 - 4,
+        y: (event.clientY - bounds.top) / bounds.height * 6 - 3,
+      };
+      redraw();
+    });
+    canvas.addEventListener("pointerleave", () => {
+      if (!pointer) return;
+      pointer = null;
+      redraw();
+    });
+  });
+
+  function restore(snapshot) {
+    const saved = snapshot?.privateContent?.avatarPose;
+    if (saved && saved !== current) select(saved, false);
+  }
+
+  window.addEventListener("openai:set_globals", event => {
+    if (event.detail?.globals?.widgetState) restore(event.detail.globals.widgetState);
+    redraw();
+  });
+  reducedMotion.addEventListener("change", () => {
+    pointer = null;
+    redraw();
+  });
+  darkScheme.addEventListener("change", redraw);
+  document.addEventListener("visibilitychange", redraw);
+  select("idle", false);
+  restore(window.openai?.widgetState);
+})();
+</script>

@@ -30,6 +30,8 @@ export interface SessionInfo {
   turn?: RunTurn;
 }
 
+export type TranscriptLayout = "turns" | "conversation";
+
 /** Join `content` from every `response` group in [fromIdx, toIdx] (inclusive, clamped). */
 function collectResponseContent(
   groups: EventGroup[],
@@ -66,12 +68,14 @@ export function matchTurnsToGroups(
   turns: RunTurn[],
   runStartedAt?: Date,
   isRunCompleted?: boolean,
+  layout: TranscriptLayout = "turns",
 ): Map<number, SessionInfo> {
   const result = new Map<number, SessionInfo>();
 
   if (turns.length === 0) {
     // Fallback: no turns from backend yet — compute from events like before
-    return sessionBarsInRenderOrder(groups, computeSessionTimesFromEvents(groups, runStartedAt, isRunCompleted));
+    const sessions = computeSessionTimesFromEvents(groups, runStartedAt, isRunCompleted);
+    return layout === "conversation" ? sessions : sessionBarsInRenderOrder(groups, sessions);
   }
 
   // For each turn, find the group range and place the session bar
@@ -158,7 +162,7 @@ export function matchTurnsToGroups(
     lastGroupIdx = bestIdx + 1;
   }
 
-  return sessionBarsInRenderOrder(groups, result);
+  return layout === "conversation" ? result : sessionBarsInRenderOrder(groups, result);
 }
 
 /** A final-answer segment can render after a chronologically later artifact or
@@ -561,7 +565,8 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
 
 /** Async questions, compaction boundaries, speech and native voice tools stay in chronological chat flow. Typed turns
  * keep the existing layout; voice work never adds a separate work disclosure. */
-export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
+export function buildTurnRenderRows(groups: EventGroup[], layout: TranscriptLayout = "turns"): TurnRenderRow[] {
+  if (layout === "conversation") return groups.flatMap((group, index) => group.representedByQuestion ? [] : [{ kind: "flat", indices: [index] }]);
   const rows: TurnRenderRow[] = [];
   const flushRegular = (from: number, to: number) => {
     if (from >= to) return;
@@ -584,7 +589,7 @@ export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
     const metadata = group.events[0]?.metadata;
     const workId = typeof metadata?.voiceWorkId === "string" ? metadata.voiceWorkId : null;
     const speech = group.events.some((event) => event.metadata?.voice === true || event.metadata?.kind === "voice-task");
-    const asyncQuestions = group.events.some((event) => event.metadata?.source === "codex_async_questions");
+    const asyncQuestions = group.events.some((event) => event.metadata?.source === "codex_async_questions" || event.metadata?.source === "assistant_welcome" || event.metadata?.source === "assistant_assignment" || (event.metadata?.assistantTaskInput as { kind?: string } | undefined)?.kind === "request");
     if (group.type !== "context_compaction" && !workId && !speech && !asyncQuestions) continue;
     flushRegular(regularStart, index);
     regularStart = index + 1;

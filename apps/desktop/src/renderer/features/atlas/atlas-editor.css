@@ -241,8 +241,18 @@
   max-width: min(24rem, calc(100vw - 2rem));
   max-height: min(24rem, var(--available-height, 60vh));
 }
+.bn-root.bn-shadcn .bn-color-picker-dropdown {
+  min-width: min(8rem, var(--available-width, 100vw));
+  max-width: var(--available-width, 100vw);
+}
+.bn-root.bn-shadcn .bn-select[data-slot="select-content"] {
+  width: max-content;
+  min-width: min(11rem, var(--available-width, 100vw));
+  max-width: var(--available-width, 100vw);
+}
+/* BlockNote repeats the item class on the icon, title and description. */
 .bn-root.bn-shadcn :is(
-  .bn-suggestion-menu-item,
+  :where(.bn-suggestion-menu) > .bn-suggestion-menu-item,
   [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-sub-trigger"],
   [data-slot="dropdown-menu-checkbox-item"], [data-slot="dropdown-menu-radio-item"],
   [data-slot="select-item"]
@@ -250,8 +260,14 @@
   @apply gap-3 rounded-[10px] px-2 py-1.5 text-s;
   color: var(--bn-colors-menu-text);
 }
+.bn-root.bn-shadcn .bn-suggestion-menu > .bn-suggestion-menu-item {
+  @apply rounded-xl;
+}
+.bn-root.bn-shadcn .bn-suggestion-menu > .bn-suggestion-menu-item + .bn-suggestion-menu-item {
+  @apply mt-0.5;
+}
 .bn-root.bn-shadcn :is(
-  .bn-suggestion-menu-item,
+  :where(.bn-suggestion-menu) > .bn-suggestion-menu-item,
   [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-sub-trigger"],
   [data-slot="dropdown-menu-checkbox-item"], [data-slot="dropdown-menu-radio-item"],
   [data-slot="select-item"]
@@ -259,12 +275,26 @@
   background-color: var(--bn-colors-hovered-background);
   color: var(--bn-colors-hovered-text);
 }
+/* Shadcn applies the accent foreground to the contents of focused options. */
+.bn-root.bn-shadcn [data-slot="select-item"] {
+  @apply pe-8;
+  --color-accent-foreground: var(--bn-colors-hovered-text);
+}
 .bn-root.bn-shadcn [data-slot][data-variant="destructive"] {
   color: var(--color-danger);
 }
 .bn-root.bn-shadcn [data-slot][data-variant="destructive"]:is(:hover, :focus-visible, [data-highlighted]) {
   color: var(--color-danger);
   background-color: color-mix(in srgb, var(--color-danger) 10%, transparent);
+}
+.bn-root.bn-shadcn .bn-color-picker-dropdown [data-slot="dropdown-menu-checkbox-item"] {
+  @apply pe-8;
+}
+.bn-root.bn-shadcn .bn-color-picker-dropdown [data-slot="dropdown-menu-checkbox-item-indicator"] {
+  inset-inline: auto 0.5rem;
+}
+.bn-root.bn-shadcn .bn-color-picker-dropdown [data-slot="dropdown-menu-checkbox-item-indicator"] svg {
+  @apply size-3.5;
 }
 .bn-root.bn-shadcn .bn-suggestion-menu-item > [data-position="left"] {
   display: flex;
@@ -395,7 +425,7 @@
   color: var(--bn-colors-side-menu);
 }
 .bn-root.bn-shadcn .bn-panel [data-slot="tabs-trigger"][data-active] {
-  @apply glass-button;
+  @apply button-neutral;
   color: var(--bn-colors-menu-text);
 }
 .bn-root.bn-shadcn [data-slot="tooltip-content"] {

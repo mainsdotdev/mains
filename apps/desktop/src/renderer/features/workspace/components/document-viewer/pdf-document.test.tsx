@@ -9,7 +9,7 @@ vi.mock("@/lib/local-document-url", () => ({ fetchLocalDocument: native.fetch,
 vi.mock("pdfjs-dist", () => ({ GlobalWorkerOptions: {}, getDocument: native.getDocument,
   TextLayer: class { textDivs: HTMLElement[] = []; render = async () => {}; cancel = native.textCancel; } }));
 vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?worker", () => ({ default: class {} }));
-vi.mock("./document-annotations", () => ({ DocumentAnnotations: () => null }));
+vi.mock("./document-annotations", () => ({ DocumentAnnotations: ({ active }: { active: boolean }) => <div data-testid="annotation-layer" data-active={active} /> }));
 vi.mock("./document-fallback", () => ({ DocumentFallback: ({ doc }: { doc: { fileName: string } }) => <div role="alert">{doc.fileName}</div> }));
 import { PdfDocument } from "./pdf-document";
 
@@ -37,6 +37,7 @@ describe("PDF document lifetime", () => {
     native.getDocument.mockReturnValue({ promise: Promise.resolve({ numPages: 1, getPage: vi.fn(async () => p) }), destroy });
     const view = render(<PdfDocument doc={doc} zoom={1} />);
     await screen.findByLabelText("Page 1");
+    expect(screen.getByTestId("annotation-layer").getAttribute("data-active")).toBe("false");
     await waitFor(() => expect(native.visible).toHaveLength(1));
     act(() => native.visible[0]([{ isIntersecting: true }]));
     await waitFor(() => expect(p.render).toHaveBeenCalledTimes(1));

@@ -1,12 +1,13 @@
 import Foundation
 
 public struct TranscriptRow: Identifiable, Equatable, Sendable {
+    public var plan: PlanProposal? { tool.flatMap(PlanProposal.init) }
     public enum Kind: String, Sendable { case prompt, response, tool, notice, media, subagents }
     public let id: String
     public let kind: Kind
     public let text: String
     public let date: Date
-    public let live: Bool
+    public var live: Bool
     public let deferredArtifactID: Int?
     public var tool: ToolCall? = nil
     public var media: [TranscriptMedia] = []
@@ -15,6 +16,15 @@ public struct TranscriptRow: Identifiable, Equatable, Sendable {
     public var delivery: PendingMessage.Status? = nil
     public var pendingAttachments: [PromptAttachment] = []
     public var subagents: [SessionSubagent] = []
+    public var voiceTask: VoiceTaskLink? = nil
+    public var mateTask: MateAssignmentLink? = nil
+    public var voice = false
+    var mateQuestions: [MateQuestion] = []
+    var mateSetupTurns: [MateWelcome.Turn] = []
+    /// Display-only lifecycle adjustment; the history/cache keeps the wire status.
+    public var toolDisplayStatus: String? = nil
+    public var toolPresentation: ToolPresentation? { tool.map { ToolPresentation($0, status: toolDisplayStatus) } }
+    var sourceID: Int? = nil
 }
 
 /// One bounded backend page plus ephemeral previews. Acknowledgements outlive page replacement.
@@ -29,6 +39,7 @@ public struct Transcript: Sendable {
     private struct PromptIdentity: Equatable, Sendable { let id: String; let date: Date }
     private var promptIdentities: [Int: PromptIdentity] = [:]
     private var streamDates: [String: Date] = [:]
+    private var speechConnections: [String: String] = [:]
     private struct Thought: Sendable {
         let text: String
         let date: Date
@@ -48,8 +59,11 @@ public struct Transcript: Sendable {
         self.page = page
         let artifactIDs = Set(page.artifacts.map(\.id))
         promptIdentities = promptIdentities.filter { artifactIDs.contains($0.key) }
-        if let pending, let artifact = page.artifacts.first(where: pending.matches) {
-            promptIdentities[artifact.id] = PromptIdentity(id: "pending:" + pending.id, date: pending.date)
+        if let pending, !pending.isSteering, !pending.isQueueOwned, let artifact = page.artifacts.first(where: pending.matches) {
+            // Mate requests are saved after their prompt and can share its server timestamp.
+            // Keep the optimistic row ID and use server order once the prompt is saved.
+            let date = pending.contextSkills.contains { $0.mateID != nil } ? artifact.createdAt : pending.date
+            promptIdentities[artifact.id] = PromptIdentity(id: "pending:" + pending.id, date: date)
         }
         if previousPrompt != page.artifacts.last(where: { $0.kind == "user-prompt" })?.id { suppressStoredThoughts = false }
         if direction == "latest" { following = true; frozenEnd = nil; isHistorical = false }
@@ -64,6 +78,7 @@ public struct Transcript: Sendable {
                 if let preview = streams[id] { streamDates[id] = preview.date }
                 if let preview = childStreams[id] { streamDates[id] = preview.row.date }
                 streams.removeValue(forKey: id)
+                speechConnections.removeValue(forKey: id)
                 childStreams.removeValue(forKey: id)
                 thoughts.removeValue(forKey: id)
             }
@@ -76,12 +91,27 @@ public struct Transcript: Sendable {
         let event = payload["event"], metadata = event["metadata"]
         guard event["type"].string == "artifact", let id = event["streamId"].string,
               !acknowledged.contains(id), !settled.contains(id) else { return }
+        if metadata["voice"].bool {
+            guard ["user-prompt", "report"].contains(event["kind"].string ?? ""),
+                  let connectionID = metadata["realtimeSessionId"].string,
+                  let text = event["content"].string, !text.isEmpty else { return }
+            let kind: TranscriptRow.Kind = event["kind"].string == "user-prompt" ? .prompt : .response
+            streams[id] = TranscriptRow(id: "stream:" + id, kind: kind, text: String(text.prefix(16_384)),
+                date: streams[id]?.date ?? Date(timeIntervalSince1970: (metadata["voiceStartedAt"].number ?? payload["ts"].number ?? 0) / 1000),
+                live: metadata["streaming"] != .bool(false), deferredArtifactID: nil, turnID: Self.turnID(metadata), voice: true)
+            speechConnections[id] = connectionID
+            if streams[id]?.live == false { settled.insert(id) }
+            if speechConnections.count > 50, let oldest = speechConnections.keys.min(by: { (streams[$0]?.date ?? .distantPast) < (streams[$1]?.date ?? .distantPast) }) {
+                speechConnections.removeValue(forKey: oldest); streams.removeValue(forKey: oldest)
+            }
+            return
+        }
         if !AgentActivity.foreground(metadata) {
             guard ["report", "result", "command_result"].contains(event["kind"].string ?? ""),
                   !AgentActivity.thinking(kind: event["kind"].string ?? "", metadata: metadata),
                   let parent = metadata["parentToolUseId"].string ?? metadata["parentToolCallId"].string ?? metadata["agentId"].string,
                   let text = event["content"].string, !text.isEmpty else { return }
-            let row = TranscriptRow(id: "stream:" + id, kind: .response, text: String(text.prefix(8192)),
+            let row = TranscriptRow(id: "stream:" + id, kind: .response, text: text,
                 date: childStreams[id]?.row.date ?? Date(timeIntervalSince1970: (payload["ts"].number ?? 0) / 1000),
                 live: metadata["streaming"] != .bool(false), deferredArtifactID: nil)
             childStreams[id] = SubagentMessagePreview(streamID: id, parentID: parent, row: row)
@@ -103,6 +133,7 @@ public struct Transcript: Sendable {
             return
         }
         guard event["kind"].string == "report", ["agent_message_streaming", "assistant.message_delta"].contains(metadata["source"].string ?? "") else { return }
+        guard !voiceNarration(metadata) else { return }
         guard let text = event["content"].string, !text.isEmpty else { streams.removeValue(forKey: id); return }
         clearThoughts(); suppressStoredThoughts = true
         streams[id] = TranscriptRow(id: "stream:" + id, kind: .response, text: text,
@@ -118,7 +149,7 @@ public struct Transcript: Sendable {
         }
     }
     public mutating func settleTurn() {
-        for id in Array(streams.keys) { settle(id) }
+        for id in Array(streams.keys) where speechConnections[id] == nil { settle(id) }
         for id in Array(childStreams.keys) {
             if let preview = childStreams[id] {
                 let row = preview.row
@@ -129,7 +160,12 @@ public struct Transcript: Sendable {
         clearThoughts(); suppressStoredThoughts = true
     }
     private mutating func clearThoughts() { settled.formUnion(thoughts.keys); thoughts.removeAll() }
-    public mutating func clearStreams() { streams.removeAll(); childStreams.removeAll(); clearThoughts(); suppressStoredThoughts = true }
+    public mutating func clearStreams() { streams.removeAll(); speechConnections.removeAll(); childStreams.removeAll(); clearThoughts(); suppressStoredThoughts = true }
+    public mutating func closeVoice(_ connectionID: String) {
+        for (id, owner) in speechConnections where owner == connectionID && streams[id]?.live == true {
+            streams.removeValue(forKey: id); speechConnections.removeValue(forKey: id); settled.insert(id)
+        }
+    }
 
     public var subagents: [SessionSubagent] { SubagentProjection(calls: page?.toolCalls ?? []).agents }
     public func subagentFlow(for agent: SessionSubagent) -> SubagentFlow? {
@@ -146,11 +182,10 @@ public struct Transcript: Sendable {
             if let turnID, let candidateTurn { return candidateTurn == turnID }
             return prompt.map { date >= $0.createdAt } ?? true
         }
-        if let tool = page?.toolCalls.last(where: {
-            ["running", "queued"].contains($0.status) && $0.parentToolCallId == nil && AgentActivity.foreground($0.metadata ?? .null) &&
-            !SubagentProjection.isAgent($0) &&
-            current($0.createdAt, Self.turnID($0.metadata ?? .null))
-        }) { return AgentActivity(tool: tool) }
+        // Use the same display projection as the rows/group. A stale persisted
+        // call must not reappear as a second "Searching" footer after it settles.
+        if let row = rows.last(where: { $0.kind == .tool && $0.live && current($0.date, $0.turnID) }),
+           let tool = row.tool { return AgentActivity(tool: tool) }
         if streams.values.contains(where: { $0.live && current($0.date, $0.turnID) }) { return nil }
         if let thought = thoughts.values.filter({ current($0.date, $0.turnID) }).max(by: { $0.sequence < $1.sequence }) {
             return AgentActivity(thinking: thought.text)
@@ -175,41 +210,82 @@ public struct Transcript: Sendable {
         else if frozenEnd == nil { frozenEnd = page?.end ?? page?.last?.exclusiveEnd }
     }
 
-    public var rows: [TranscriptRow] {
-        var rows = (page?.artifacts ?? []).compactMap { artifact -> TranscriptRow? in
+    public func rowID(for artifact: Artifact) -> String {
+        promptIdentities[artifact.id]?.id ?? artifact.metadata?["streamId"].string.map { "stream:" + $0 } ?? "artifact:\(artifact.id)"
+    }
+
+    public var rows: [TranscriptRow] { projectedRows(forMate: false) }
+
+    private func projectedRows(forMate: Bool) -> [TranscriptRow] {
+        let artifacts = page?.artifacts ?? []
+        let asyncHistory = forMate ? MateQuestion.asyncHistory(artifacts) : (questions: [:], representedReplies: [])
+        let hiddenImageCopies = TranscriptMedia.hiddenGeneratedImageCopies(in: artifacts)
+        var rows = artifacts.compactMap { artifact -> TranscriptRow? in
             let metadata = artifact.metadata ?? .null
-            guard AgentActivity.foreground(metadata), !AgentActivity.thinking(kind: artifact.kind, metadata: metadata),
-                  artifact.kind != "prompt_suggestion" else { return nil }
+            guard (metadata["voice"].bool || AgentActivity.foreground(metadata)), !AgentActivity.thinking(kind: artifact.kind, metadata: metadata),
+                  artifact.kind != "prompt_suggestion", !hiddenImageCopies.contains(artifact.id),
+                  !asyncHistory.representedReplies.contains(artifact.id) else { return nil }
+            if forMate && !metadata["outputSelected"].bool && (metadata["working"].bool || metadata["viewed"].bool) { return nil }
+            if artifact.kind == "report", voiceNarration(metadata) { return nil }
             var text = artifact.content ?? ""
             let kind: TranscriptRow.Kind
             var media: [TranscriptMedia] = []
+            var mateTask: MateAssignmentLink?
+            let taskInput = metadata["assistantTaskInput"]
+            let isTaskInput = artifact.kind == "user-prompt" && taskInput["messageId"].string != nil
+                && taskInput["assignmentId"].string != nil
             switch artifact.kind {
             case "user-prompt":
-                kind = .prompt
+                if isTaskInput {
+                    guard taskInput["kind"].string == "request", let id = taskInput["assignmentId"].string else { return nil }
+                    kind = .response
+                    mateTask = MateAssignmentLink(id: id, runID: artifact.runId)
+                    text = "Mate request"
+                } else { kind = .prompt }
                 media = TranscriptMedia.prompt(metadata, runID: artifact.runId)
-            case "report", "result", "command_result": kind = .response
+            case "report", "result", "command_result":
+                kind = .response
+                if metadata["source"].string == "assistant_assignment", let id = metadata["assignmentId"].string {
+                    mateTask = MateAssignmentLink(id: id, runID: artifact.runId)
+                    text = "Mate request"
+                }
             case "log":
-                guard metadata["level"].string == "error" else { return nil }
+                guard metadata["level"].string == "error" || forMate && metadata["level"].string == "warn" else { return nil }
+                if forMate && metadata["source"].string == "context_compaction" { return nil }
                 kind = .notice
             case "file", "document", "image", "visualization":
                 guard let item = TranscriptMedia.artifact(artifact) else { return nil }
                 kind = .media; media = [item]; text = ""
             default: return nil
             }
-            guard !text.isEmpty || !media.isEmpty else { return nil }
+            let questions = asyncHistory.questions[artifact.id] ?? []
+            let setup = metadata["question"]["profileSetup"]
+            let setupTurns = forMate && metadata["source"].string == "assistant_welcome" && setup["saved"].bool
+                ? Array(((try? setup["turns"].decode([MateWelcome.Turn].self)) ?? []).prefix(2)) : []
+            guard !text.isEmpty || !media.isEmpty || !questions.isEmpty || !setupTurns.isEmpty else { return nil }
             let streamID = metadata["streamId"].string
             let identity = promptIdentities[artifact.id]
-            let id = identity?.id ?? streamID.map { "stream:" + $0 } ?? "artifact:\(artifact.id)"
-            let date = identity?.date ?? streamID.flatMap { streamDates[$0] } ?? artifact.createdAt
+            let id = rowID(for: artifact)
+            let date = identity?.date ?? streamID.flatMap { streamDates[$0] } ?? metadata["voiceStartedAt"].number.map { Date(timeIntervalSince1970: $0 / 1000) } ?? artifact.createdAt
+            let mates = metadata["assistantMentions"].array.compactMap { mention -> ContextSkill? in
+                guard let id = mention["id"].string, let name = mention["name"].string,
+                      mention["token"].string == "@assistant-" + id else { return nil }
+                return .mate(id: id, name: name)
+            }
+            let files = kind == .prompt ? metadata["files"].array.compactMap { WorkspaceFileMatch.read($0, history: true) }.map(ContextSkill.workspaceFile) : []
             return TranscriptRow(id: id, kind: kind, text: text, date: date, live: false,
-                                 deferredArtifactID: metadata["mobileContentDeferred"].bool ? artifact.id : nil, media: media,
-                                 turnID: Self.turnID(metadata), contextSkills: (try? metadata["skills"].decode([ContextSkill].self)) ?? [],
-                                 delivery: identity == nil ? nil : .accepted)
+                                 deferredArtifactID: mateTask == nil && questions.isEmpty && (metadata["mobileContentDeferred"].bool || metadata["mobileContentDeferred"]["chars"].number != nil) ? artifact.id : nil, media: media,
+                                 turnID: Self.turnID(metadata), contextSkills: mates + files + ((try? metadata["skills"].decode([ContextSkill].self)) ?? []),
+                                 delivery: identity == nil ? nil : .accepted,
+                                 voiceTask: VoiceTaskLink.read(metadata["voiceTask"]), mateTask: mateTask, voice: metadata["voice"].bool,
+                                 mateQuestions: questions, mateSetupTurns: setupTurns, sourceID: artifact.id)
         }
         let projection = SubagentProjection(calls: page?.toolCalls ?? [])
-        rows += (page?.toolCalls ?? []).filter { $0.parentToolCallId == nil && AgentActivity.foreground($0.metadata ?? .null) && !projection.rootCallIDs.contains($0.id) }.map {
+        rows += (page?.toolCalls ?? []).filter {
+            $0.parentToolCallId == nil && AgentActivity.foreground($0.metadata ?? .null) && !projection.rootCallIDs.contains($0.id)
+        }.map {
             TranscriptRow(id: "tool:\($0.id)", kind: .tool, text: "\($0.toolName) · \($0.status)", date: $0.createdAt,
-                          live: ["queued", "running"].contains($0.status), deferredArtifactID: nil, tool: $0, turnID: Self.turnID($0.metadata ?? .null))
+                          live: ["queued", "running"].contains($0.statusForDisplay()), deferredArtifactID: nil, tool: $0, turnID: Self.turnID($0.metadata ?? .null), sourceID: $0.id)
         }
         if let first = projection.firstCall, !projection.agents.isEmpty {
             rows.append(TranscriptRow(id: "subagents:\(first.id)", kind: .subagents,
@@ -218,18 +294,53 @@ public struct Transcript: Sendable {
         }
         // Historical pages never pull live output into an older reading position.
         if !isHistorical { rows += streams.values }
-        return rows.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+        let projected = Self.projectToolStatuses(rows.sorted(by: Self.ordered))
+        // Match the desktop Mate transcript while leaving the full page available to approvals and history.
+        guard forMate else { return projected }
+        return projected.filter { row in
+            if row.kind == .subagents { return false }
+            guard let tool = row.tool else { return true }
+            return tool.isMateQuestion || (tool.metadata?["mcpApp"] ?? .null) != .null
+        }
+    }
+
+    private static func ordered(_ lhs: TranscriptRow, _ rhs: TranscriptRow) -> Bool {
+        // The phone can timestamp the first prompt before the server writes the welcome.
+        if lhs.mateSetupTurns.isEmpty != rhs.mateSetupTurns.isEmpty { return !lhs.mateSetupTurns.isEmpty }
+        if lhs.date != rhs.date { return lhs.date < rhs.date }
+        // Desktop orders artifacts before tools on timestamp ties, then by the
+        // numeric database id ("tool:10" must never sort before "tool:9").
+        if (lhs.kind == .tool) != (rhs.kind == .tool) { return rhs.kind == .tool }
+        let left = lhs.sourceID ?? 0, right = rhs.sourceID ?? 0
+        if left != right { return left < right }
+        return lhs.id < rhs.id
+    }
+
+    private static func projectToolStatuses(_ rows: [TranscriptRow]) -> [TranscriptRow] {
+        func inflight(_ row: TranscriptRow) -> Bool { row.tool.map { ["running", "queued"].contains($0.status) } ?? false }
+        // Match desktop's demoteStaleRunningTools: later foreground output
+        // retires earlier unfinished previews. The trailing parallel batch stays
+        // live, even with partial output. Thinking/progress and child activity
+        // are outside these rows and cannot finish a foreground call.
+        guard let cut = rows.lastIndex(where: { $0.kind != .subagents && !inflight($0) }), cut > 0 else { return rows }
+        return rows.enumerated().map { index, original in
+            guard index < cut, inflight(original), let call = original.tool else { return original }
+            var row = original
+            row.toolDisplayStatus = "done"
+            row.live = ["running", "queued"].contains(call.statusForDisplay(overriding: "done"))
+            return row
+        }
     }
 
     /// The optimistic prompt occupies its chronological slot from the first frame,
     /// then the durable artifact takes over that same identity without a second row.
-    public func rows(pending: PendingMessage?, runID: String) -> [TranscriptRow] {
-        var result = rows
-        guard !isHistorical, let pending, pending.runID == runID, page?.artifacts.contains(where: pending.matches) != true else { return result }
+    public func rows(pending: PendingMessage?, runID: String, forMate: Bool = false) -> [TranscriptRow] {
+        var result = projectedRows(forMate: forMate)
+        guard !isHistorical, let pending, !pending.isSteering, !pending.isQueueOwned, pending.runID == runID, page?.artifacts.contains(where: pending.matches) != true else { return result }
         result.append(TranscriptRow(id: "pending:" + pending.id, kind: .prompt, text: pending.text, date: pending.date,
                                     live: false, deferredArtifactID: nil, contextSkills: pending.contextSkills,
                                     delivery: pending.status, pendingAttachments: pending.attachments))
-        return result.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+        return result.sorted(by: Self.ordered)
     }
 
     private static func turnID(_ metadata: JSONValue) -> Int? {
@@ -237,8 +348,18 @@ public struct Transcript: Sendable {
         return Int(number)
     }
 
+    private func voiceNarration(_ metadata: JSONValue) -> Bool {
+        if metadata["voice"].bool || metadata["inputSource"].string == "text" { return false }
+        if metadata["inputSource"].string == "voice" { return true }
+        guard let nativeID = metadata["providerTurnId"].string else { return false }
+        if let turn = page?.turns.first(where: { $0.metadata?["providerTurnId"].string == nativeID }) {
+            return turn.metadata?["inputSource"].string == "voice"
+        }
+        return metadata["realtimeSessionId"].string != nil
+    }
+
     public func request(runID: String, direction: String) throws -> JSONValue {
-        var body: [String: JSONValue] = ["runId": .string(runID), "profile": .string("mobile"), "direction": .string(direction), "deferToolOutput": .bool(true)]
+        var body: [String: JSONValue] = ["runId": .string(runID), "profile": .string("mobile"), "conversationWindow": .bool(true), "direction": .string(direction), "deferToolOutput": .bool(true)]
         if direction == "older", let cursor = page?.start { body["cursor"] = try .encode(cursor) }
         if direction == "newer", let cursor = page?.end { body["cursor"] = try .encode(cursor) }
         if direction == "refresh" {

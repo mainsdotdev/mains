@@ -40,6 +40,19 @@ public struct BackendDescriptor: Codable, Equatable, Sendable {
     public let serverTime: String
 }
 
+public struct MobileGoalSummary: Codable, Equatable, Sendable {
+    public let objective: String
+    public let status: String
+    public let tokensUsed: Int?
+    public let timeUsedSeconds: Int?
+    public var revision: String?
+    public var objectiveTruncated: Bool?
+}
+
+public enum MobileGoalChange: Sendable {
+    case edit(String), pause, resume, clear
+}
+
 public struct PairedBackend: Codable, Equatable, Sendable {
     public let descriptor: BackendDescriptor
     public let endpoints: [URL]
@@ -55,6 +68,7 @@ public struct Conversation: Codable, Equatable, Identifiable, Sendable {
     public let providerId: String
     public let mode: String
     public let spaceId: String?
+    public var assistantId: String? = nil
     public var workspaceId: String? = nil
     public var collectionId: String? = nil
     public let title: String?
@@ -66,8 +80,14 @@ public struct Conversation: Codable, Equatable, Identifiable, Sendable {
     public let lastError: String?
     public let createdAt: Date
     public let updatedAt: Date
-    public var displayTitle: String { title?.isEmpty == false ? title! : "New conversation" }
+    public var displayTitle: String {
+        let label = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return label.isEmpty ? "Untitled chat" : label
+    }
     public var isActive: Bool { status == "queued" || status == "running" }
+    public var supportsSteering: Bool { ["codex", "claude_code"].contains(providerId) }
+    public var canSteer: Bool { status == "running" && supportsSteering && isReplica != true }
+    public var canFork: Bool { !isActive && isReplica != true && !isArchived && archivedReplyError == nil }
     public var archivedReplyError: String? {
         // A provider-archived chat is distinct from Mains' isArchived flag.
         // The backend currently exposes this state through its normalized error.
@@ -99,7 +119,7 @@ public struct Workspace: Codable, Equatable, Identifiable, Sendable {
     public var updatedAt: Date? = nil
 }
 
-public struct HistoryCursor: Codable, Equatable, Sendable {
+public struct HistoryCursor: Codable, Hashable, Sendable {
     public let timestamp: Double
     public let source: String
     public var id: Int
@@ -114,15 +134,18 @@ public struct Artifact: Codable, Equatable, Identifiable, Sendable {
     public let metadata: JSONValue?
     public let createdAt: Date
     public var path: String? = nil
-    public init(id: Int, runId: String, kind: String, content: String?, metadata: JSONValue?, createdAt: Date, path: String? = nil) {
+    public var contentHash: String? = nil
+    public init(id: Int, runId: String, kind: String, content: String?, metadata: JSONValue?, createdAt: Date, path: String? = nil, contentHash: String? = nil) {
         self.id = id; self.runId = runId; self.kind = kind; self.content = content; self.metadata = metadata; self.createdAt = createdAt; self.path = path
+        self.contentHash = contentHash
     }
-    private enum CodingKeys: String, CodingKey { case id, runId, kind, content, metadata, createdAt, path }
+    private enum CodingKeys: String, CodingKey { case id, runId, kind, content, metadata, createdAt, path, contentHash }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id); runId = try c.decode(String.self, forKey: .runId); kind = try c.decode(String.self, forKey: .kind)
         content = try c.decodeWireIfPresent(String.self, forKey: .content); metadata = try c.decodeIfPresent(JSONValue.self, forKey: .metadata)
         createdAt = try c.decode(Date.self, forKey: .createdAt); path = try c.decodeWireIfPresent(String.self, forKey: .path)
+        contentHash = try c.decodeWireIfPresent(String.self, forKey: .contentHash)
     }
 }
 
@@ -163,13 +186,15 @@ public struct RunTurn: Codable, Equatable, Sendable {
     public var endedAt: Date? = nil
     public var createdAt: Date? = nil
     public var changes: RunTurnChanges? = nil
-    private enum CodingKeys: String, CodingKey { case id, status, model, turnIndex, startedAt, endedAt, createdAt, changes }
+    public var metadata: JSONValue? = nil
+    private enum CodingKeys: String, CodingKey { case id, status, model, turnIndex, startedAt, endedAt, createdAt, changes, metadata }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id); status = try c.decode(String.self, forKey: .status)
         model = try c.decodeWireIfPresent(String.self, forKey: .model); turnIndex = try c.decodeWireIfPresent(Int.self, forKey: .turnIndex)
         startedAt = try c.decodeWireIfPresent(Date.self, forKey: .startedAt); endedAt = try c.decodeWireIfPresent(Date.self, forKey: .endedAt)
         createdAt = try c.decodeWireIfPresent(Date.self, forKey: .createdAt); changes = try c.decodeWireIfPresent(RunTurnChanges.self, forKey: .changes)
+        metadata = try c.decodeIfPresent(JSONValue.self, forKey: .metadata)
     }
 }
 
@@ -182,6 +207,14 @@ public struct HistoryPage: Codable, Equatable, Sendable {
     public let last: HistoryCursor?
     public let hasOlder: Bool
     public let hasNewer: Bool
+    public var activity: HistoryActivityRange? = nil
+}
+
+public struct HistoryActivityRange: Codable, Equatable, Identifiable, Sendable {
+    public let start: HistoryCursor
+    public let end: HistoryCursor
+    public let omittedCount: Int
+    public var id: String { "\(start.timestamp):\(start.source):\(start.id):\(end.timestamp):\(end.source):\(end.id)" }
 }
 
 public enum Provider {

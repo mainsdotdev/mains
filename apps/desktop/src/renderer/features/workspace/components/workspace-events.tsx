@@ -1,3 +1,4 @@
+import type { Assistant } from "@mains/contracts/assistants";
 import type { PlanDecisionResult } from "@mains/contracts/plan-decision";
 import { Fragment, type ReactNode, RefObject, useMemo, useRef, useState, useCallback, useEffect } from "react";
 import {
@@ -23,7 +24,9 @@ import type { ProviderVariant } from "@/lib/provider-variants";
 import { useTranscriptScroll } from "../hooks/use-transcript-scroll";
 import { RealtimeVoiceBar } from "./realtime-voice-bar";
 import { projectVoiceTranscriptEvents } from "../lib/voice-transcript-view";
-import { CONTENT_COLUMN_GUTTER } from "../lib/content-column";
+import { assistantTranscriptGroups, isAssistantReplyStreaming } from "../lib/assistant-transcript-view";
+import { AssistantTypingIndicator } from "./assistant-typing-indicator";
+import { CONTENT_COLUMN_GUTTER, CONTENT_COLUMN_WIDTH } from "../lib/content-column";
 import { buildTurnMarkers, type TurnMarker } from "../lib/turn-markers";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import type { Run, RunEvent, Workspace } from "../types";
@@ -238,9 +241,11 @@ function ModelChangeNotice({
 function SessionTimeBar({
   info,
   onFork,
+  revealOnHover = false,
 }: {
   info: SessionInfo;
   onFork?: (responseContent: string) => void;
+  revealOnHover?: boolean;
 }) {
   const handleFork = useCallback(() => {
     if (onFork) {
@@ -254,7 +259,7 @@ function SessionTimeBar({
   const hasUsage = turn && (turn.inputTokens || turn.outputTokens || turn.cacheReadTokens || turn.cacheWriteTokens || turn.costMicros);
 
   return (
-    <Text as="div" size="s" tone="muted" className="flex items-center gap-2 -mt-1">
+    <Text as="div" size="s" tone="muted" className={`flex items-center gap-2 -mt-1 ${revealOnHover ? "opacity-0 pointer-events-none transition-opacity duration-150 group-hover/agent-turn:opacity-100 group-hover/agent-turn:pointer-events-auto group-focus-within/agent-turn:opacity-100 group-focus-within/agent-turn:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto motion-reduce:transition-none" : ""}`}>
       {hasUsage ? (
         <Tooltip
           content={<UsageTooltipContent turn={turn} />}
@@ -289,7 +294,7 @@ function SessionTimeBar({
         </>
       )}
       {info.receivedAt && Number.isFinite(info.receivedAt.getTime()) && (
-        <Text as="span" size="xs" tone="faint" className="ml-1 shrink-0 select-none whitespace-nowrap tabular-nums opacity-0 transition-opacity group-hover/agent-turn:opacity-100 group-focus-within/agent-turn:opacity-100 motion-reduce:transition-none">
+        <Text as="span" size="xs" tone="faint" className={`ml-1 shrink-0 select-none whitespace-nowrap tabular-nums ${revealOnHover ? "" : "opacity-0 transition-opacity group-hover/agent-turn:opacity-100 group-focus-within/agent-turn:opacity-100 motion-reduce:transition-none"}`}>
           <time dateTime={info.receivedAt.toISOString()} title={formatAbsoluteDate(info.receivedAt)}>
             {messageTimeFormatter.format(info.receivedAt)}
           </time>
@@ -377,7 +382,7 @@ function AgentTurnMessagesAccordion({
         }`}
       >
         <div className="min-h-0 overflow-hidden">
-          <div className="border-b border-primary-200/50 dark:border-primary-800/50 pb-1">
+          <div className=" pb-1">
             <Button
               type="button"
               onClick={() => setOpen((v) => !v)}
@@ -427,6 +432,11 @@ function AgentTurnMessagesAccordion({
 }
 
 interface WorkspaceEventsProps {
+  /** Assistant conversations omit workspace edit/review controls. */
+  hideTurnChanges?: boolean;
+  appearance?: "default" | "assistant";
+  assistant?: Pick<Assistant, "id" | "name" | "avatar">;
+  mode?: Run["mode"];
   runs: Run[];
   activeTab: "editor" | string;
   currentEvents: RunEvent[];
@@ -442,11 +452,18 @@ interface WorkspaceEventsProps {
   onApplyPlan?: (toolCallId: number) => Promise<PlanDecisionResult>;
   onDismissPlan?: (toolCallId: number) => Promise<PlanDecisionResult>;
   hasPendingPlanApproval?: boolean;
+  /** Questions and approvals already present their own waiting UI. */
+  hasPendingUserInput?: boolean;
   floatingChat?: boolean;
   history?: TranscriptHistory;
 }
 
 export function WorkspaceEvents({
+  hideTurnChanges = false,
+  appearance = "default",
+  assistant,
+  hasPendingUserInput = false,
+  mode,
   runs,
   activeTab,
   currentEvents,
@@ -566,16 +583,16 @@ export function WorkspaceEvents({
   // Filter out tool_calls groups when setting is off — except plan groups, which stay visible
   // so Apply / Dismiss remain accessible regardless of the toggle.
   const eventGroups = useMemo(
-    () => showToolCalls
+    () => appearance === "assistant" ? assistantTranscriptGroups(allEventGroups) : showToolCalls
       ? allEventGroups
       : allEventGroups.filter((g) => g.type !== "tool_calls" || isPlanToolCallGroup(g)),
-    [allEventGroups, showToolCalls],
+    [allEventGroups, showToolCalls, appearance],
   );
 
   // Session times: index-based map of "show session bar after this group index"
   const sessionTimes = useMemo(
-    () => matchTurnsToGroups(eventGroups, turns, activeRun?.startedAt, isRunCompleted),
-    [eventGroups, turns, activeRun?.startedAt, isRunCompleted],
+    () => matchTurnsToGroups(eventGroups, turns, activeRun?.startedAt, isRunCompleted, appearance === "assistant" ? "conversation" : "turns"),
+    [eventGroups, turns, activeRun?.startedAt, isRunCompleted, appearance],
   );
   const modelChanges = useMemo(
     () => matchModelChangesToPromptGroups(eventGroups, turns),
@@ -601,10 +618,11 @@ export function WorkspaceEvents({
     [activeRun, onForkRun],
   );
 
-  const { showTurnChanges } = useModeConfig();
+  const modeConfig = useModeConfig(mode);
+  const showTurnChanges = modeConfig.showTurnChanges && !hideTurnChanges && appearance !== "assistant";
   const turnRenderRows = useMemo(
-    () => buildTurnRenderRows(eventGroups),
-    [eventGroups],
+    () => buildTurnRenderRows(eventGroups, appearance === "assistant" ? "conversation" : "turns"),
+    [eventGroups, appearance],
   );
   const hasTranscript = turnRenderRows.length > 0 || isRunning || Boolean(history?.error);
   const hasRunContent = isRunTabActive && hasTranscript;
@@ -672,7 +690,7 @@ export function WorkspaceEvents({
 
       return (
         <TranscriptItemScope key={group.id} id={group.id}>
-          {modelChange && (
+          {modelChange && appearance !== "assistant" && (
             <ModelChangeNotice
               fromModel={modelChange.fromModel}
               toModel={modelChange.toModel}
@@ -686,6 +704,7 @@ export function WorkspaceEvents({
               {sessionBarForThis && (
                 <SessionTimeBar
                   info={sessionBarForThis}
+                  revealOnHover={appearance === "assistant"}
                   onFork={index === lastSessionIndex && isRunCompleted && onForkRun ? handleFork : undefined}
                 />
               )}
@@ -709,7 +728,7 @@ export function WorkspaceEvents({
               <ContextCompactionActivity active={activeCompaction?.id === group.events[0].id} />
             ) : <ContextCompactionSeparator />
           ) : group.type === "mcp_app" ? (
-            <ToolCallItem event={group.events[0]} isCompact={false} />
+            <ToolCallItem event={group.events[0]} isCompact={false} presentation={appearance === "assistant" ? "card" : "tool"} />
           ) : group.type === "tool_calls" ? (
             planToolName === "plan" ||
             planToolName === "create plan" ||
@@ -728,15 +747,12 @@ export function WorkspaceEvents({
                 onDismissPlan={onDismissPlan}
               />
             ) : (
-              <ToolCallGroup
-                group={group}
-                defaultExpanded={index === eventGroups.length - 1}
-                variant={variant}
-              />
+              <ToolCallGroup group={group} />
             )
           ) : (
             <InfoGroup
               group={group}
+              bubble={appearance === "assistant"}
               runId={activeRun?.id}
               providerId={activeRun?.providerId ?? getProviderVariant(variant).providerId}
               floatingChat={floatingChat}
@@ -746,6 +762,7 @@ export function WorkspaceEvents({
           {group.type !== "prompt_suggestion" && sessionBarForThis && (
             <SessionTimeBar
               info={sessionBarForThis}
+              revealOnHover={appearance === "assistant"}
               onFork={index === lastSessionIndex && isRunCompleted && onForkRun ? handleFork : undefined}
             />
           )}
@@ -753,6 +770,7 @@ export function WorkspaceEvents({
       );
     },
     [
+      appearance,
       showTurnChanges,
       activeRun,
       eventGroups,
@@ -786,17 +804,19 @@ export function WorkspaceEvents({
   }), [turnRenderRows, eventGroups, renderGroupAt, isRunning, history?.historical, suppressLiveAccordionForStaleEvents]);
 
   const activeTool = useMemo(() => selectActiveTool(currentEvents), [currentEvents]);
-  const hasStreamingResponse = useMemo(() => displayEvents.some((event) =>
+  const hasStreamingResponse = useMemo(() => appearance === "assistant" ? isAssistantReplyStreaming(displayEvents) : displayEvents.some((event) =>
     event.type === "artifact" && event.metadata?.kind === "report" &&
     event.metadata.streaming === true && event.metadata.isFromSubagent !== true &&
     event.content.trim().length > 0,
-  ), [displayEvents]);
+  ), [displayEvents, appearance]);
 
-  // Foreground thoughts are scoped to the current prompt, including legacy logs.
+  // A visible foreground reply retires older thoughts; newer thoughts still show.
+  // Use the visible transcript so hidden voice-work reports cannot clear activity.
   const latestThinking = useMemo(() => {
-    for (let index = currentEvents.length - 1; index >= 0; index--) {
-      const event = currentEvents[index];
+    for (let index = displayEvents.length - 1; index >= 0; index--) {
+      const event = displayEvents[index];
       if (event.metadata?.isFromSubagent || event.metadata?.parentToolCallId) continue;
+      if (event.type === "artifact" && event.metadata?.kind === "report" && event.content.trim()) break;
       if (event.type === "artifact" && event.metadata?.kind === "user-prompt" && event.metadata.streaming !== true) break;
       if (event.type === "artifact" && event.metadata?.kind === "thinking" && event.content.trim()) return event.content;
       if (event.type === "log") {
@@ -805,7 +825,7 @@ export function WorkspaceEvents({
       }
     }
     return undefined;
-  }, [currentEvents]);
+  }, [displayEvents]);
 
   const hasActiveImageGeneration = useMemo(
     () =>
@@ -842,7 +862,7 @@ export function WorkspaceEvents({
             <div className={floatingChat ? "px-4" : CONTENT_COLUMN_GUTTER}>
             {/* Keep the latest message above the orb when following the tail;
                 this padding scrolls away with history beneath the overlay. */}
-            <div className={floatingChat ? "min-h-75-max-w-125 mx-auto space-y-4 pt-4 pb-0" :"min-h-75 max-w-210 mx-auto space-y-4 pt-12 pb-24 group-has-data-voice-orb-overlay/voice-chat:pb-52 sm:group-has-data-voice-orb-overlay/voice-chat:pb-68" }>
+            <div className={floatingChat ? "min-h-75-max-w-125 mx-auto space-y-4 pt-4 pb-0" : `min-h-75 ${CONTENT_COLUMN_WIDTH} space-y-4 pt-12 pb-24 group-has-data-voice-orb-overlay/voice-chat:pb-52 sm:group-has-data-voice-orb-overlay/voice-chat:pb-68`}>
               {(history?.hasOlder || history?.error) && (
                 <button type="button" className="block mx-auto text-secondary text-xs py-2 hover:text-primary"
                   disabled={history.loading} onClick={() => void pageHistory(history?.error ? "refresh" : "older")}>
@@ -857,10 +877,10 @@ export function WorkspaceEvents({
                   message={activeRun?.lastError}
                 />
               )}
-              {isRunning && !history?.historical && !hasActiveImageGeneration && !activeCompaction &&
-                (activeTool || !hasStreamingResponse) && (
-                <AsciiLoader activeTool={activeTool} thinkingText={latestThinking} />
-              )}
+              {isRunning && !history?.historical && !hasActiveImageGeneration && (appearance === "assistant"
+                ? !hasStreamingResponse && <AssistantTypingIndicator assistant={assistant} thinkingText={latestThinking} awaitingInput={hasPendingUserInput} />
+                : !activeCompaction && (latestThinking || activeTool || !hasStreamingResponse) &&
+                  <AsciiLoader activeTool={activeTool} thinkingText={latestThinking} />)}
               <div ref={eventsEndRef} />
             </div>
             </div>

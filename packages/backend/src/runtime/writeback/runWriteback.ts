@@ -104,7 +104,7 @@ export function createRunWriteback(config: RunWritebackConfig): RunWriteback {
       accepting = false;
       finishing = tail.then(async () => {
         let failure: unknown;
-        for (const report of reports.pending()) {
+        for (const report of reports.settle().recoverable) {
           try {
             await persist(reports.prepare({ ...report, ephemeral: false, metadata: {
               ...report.metadata, streaming: false, interrupted: status !== "succeeded",

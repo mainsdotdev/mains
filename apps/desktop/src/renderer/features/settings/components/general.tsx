@@ -31,12 +31,6 @@ function UpdateButton({
   onInstall: () => void;
 }) {
   switch (state.status) {
-    case "checking":
-      return (
-        <Button type="button" variant="ghost" disabled isLoading>
-          Checking...
-        </Button>
-      );
     case "available":
     case "downloading":
       return (
@@ -52,7 +46,7 @@ function UpdateButton({
       );
     case "downloaded":
       return (
-        <Button type="button" variant="submit" onClick={onInstall}>
+        <Button type="button" variant="primary" onClick={onInstall}>
           Restart &amp; Update
         </Button>
       );
@@ -74,23 +68,17 @@ function UpdateButton({
         </div>
       );
     case "not-available":
-      return (
-        <div className="flex items-center gap-2">
-          <Text as="span" size="xs" tone="subtle">
-            Up to date
-          </Text>
-          <Button type="button" variant="ghost" onClick={onCheck}>
-            Check Again
-          </Button>
-        </div>
-      );
+    case "checking":
     default:
       return (
-        <div className="">
+        <div className="flex items-center gap-2">
+          {state.status === "not-available" && (
+            <Text as="span" size="xs" tone="subtle">Up to date</Text>
+          )}
           <Button
-            className="flex"
             type="button"
-            variant="primary"
+            variant="secondary"
+            isLoading={state.status === "checking"}
             onClick={onCheck}
           >
             <Refresh className="w-4 h-4 mr-1" />

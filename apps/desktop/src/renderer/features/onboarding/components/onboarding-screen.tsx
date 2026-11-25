@@ -23,6 +23,7 @@ import {
 } from "../hooks/use-onboarding";
 import { AgentsStep } from "./agents-step";
 import { ChoiceStep } from "./choice-step";
+import { GitHubCliStep } from "./github-cli-step";
 import { ThemeStep } from "./theme-step";
 import { WelcomeIntroStep } from "./welcome-intro-step";
 import { RisoBackdrop } from "./riso-backdrop";
@@ -40,6 +41,11 @@ const COPY: Record<OnboardingStepId, { title: string; description: string }> = {
     title: "Who’s on\nyour team?",
     description:
       "Choose the provider you’d like to start with. Your other agents will be here when you need them.",
+  },
+  "github-cli": {
+    title: "GitHub CLI",
+    description:
+      "Publish repositories and open pull requests from Mains with the GitHub CLI.",
   },
   theme: {
     title: "A little more\nyou.",
@@ -109,6 +115,13 @@ export function OnboardingScreen() {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const started = useRef(false);
   const { goNext, goBack } = flow;
+  const nextLabel = flow.isLastStep
+    ? "Get started"
+    : flow.step === "welcome"
+      ? "Let’s begin"
+      : flow.step === "github-cli" && flow.gitHubCliStatus?.status !== "ready"
+        ? "Set up later"
+        : "Continue";
   const palette = paintedPalette(
     resolveAppearance(flow.palettes[flow.appearance], flow.appearance),
     flow.appearance,
@@ -174,6 +187,15 @@ export function OnboardingScreen() {
           isDetecting={flow.isDetecting}
           hasError={flow.providerError}
           onRecheck={flow.recheckProviders}
+        />
+      );
+      break;
+    case "github-cli":
+      panel = (
+        <GitHubCliStep
+          status={flow.gitHubCliStatus}
+          isChecking={flow.isCheckingGitHubCli}
+          onRecheck={flow.recheckGitHubCli}
         />
       );
       break;
@@ -344,19 +366,13 @@ export function OnboardingScreen() {
                   )}
 
                   <Button
-                    variant="submit"
+                    variant="primary"
                     className="onboarding-next"
                     onClick={flow.goNext}
                     disabled={!flow.canContinue}
+                    isLoading={flow.isSaving}
                   >
-                    {flow.isSaving
-                      ? "Saving…"
-                      : flow.isLastStep
-                        ? "Get started"
-                        : flow.step === "welcome"
-                          ? "Let’s begin"
-                          : "Continue"}
-
+                    {nextLabel}
                   </Button>
                   <div className="onboarding-footer-note">
                     {flow.step === "providers" ? (
@@ -367,13 +383,9 @@ export function OnboardingScreen() {
                       >
                         Set up later
                       </Button>
-                    ) : (
-                      <span>
-                        {flow.step === "welcome"
-                          ? ""
-                          : "You can change these later in Settings."}
-                      </span>
-                    )}
+                    ) : flow.step !== "welcome" && flow.step !== "github-cli" ? (
+                      <span>You can change these later in Settings.</span>
+                    ) : null}
                   </div>
                   <div
                     className="onboarding-progress"

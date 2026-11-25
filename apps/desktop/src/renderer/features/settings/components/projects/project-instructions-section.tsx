@@ -72,7 +72,7 @@ export function ProjectInstructionsSection({ commitInstructions, prInstructions,
           <div className="flex justify-end">
             <Button
               type="button"
-              variant="primary"
+              variant="secondary"
               disabled={importing || saving}
               isLoading={importing}
               onClick={handleImportPrTemplate}

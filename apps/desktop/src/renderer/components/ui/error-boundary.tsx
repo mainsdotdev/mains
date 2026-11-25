@@ -46,7 +46,7 @@ function ErrorFallback({ error, resetError, level }: ErrorFallbackProps) {
 
         <div className="mt-5 flex gap-2">
           <Button
-          className="glass-outline"
+            className="button-outline"
             variant="ghost"
             onClick={() => setShowDetails((shown) => !shown)}
             aria-expanded={showDetails}
@@ -54,7 +54,7 @@ function ErrorFallback({ error, resetError, level }: ErrorFallbackProps) {
           >
             {showDetails ? "Hide details" : "Learn more"}
           </Button>
-          <Button variant="submit" onClick={isApp ? handleReload : resetError}>
+          <Button variant="primary" onClick={isApp ? handleReload : resetError}>
             {isApp ? "Reload" : "Try again"}
           </Button>
         </div>

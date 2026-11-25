@@ -2,6 +2,62 @@ import Foundation
 import Testing
 @testable import MainsCore
 
+@Test func conversationTitlesMatchDesktopWhitespaceAndUntitledFallback() throws {
+    for (title, expected) in [(nil, "Untitled chat"), ("", "Untitled chat"), (" \n\t", "Untitled chat"),
+                              ("  Hallo  ", "Hallo"), ("Hey, naber", "Hey, naber"), ("🌍 İstanbul", "🌍 İstanbul")] as [(String?, String)] {
+        let run = Conversation(id: "chat", accountId: "account", providerId: "codex", mode: "work", spaceId: nil,
+            title: title, status: "succeeded", model: nil, isArchived: false, isReplica: false,
+            lastError: nil, createdAt: Date(), updatedAt: Date())
+        let decoded = try JSONValue.encode(run).decode(Conversation.self)
+        #expect(decoded.displayTitle == expected)
+    }
+}
+
+@Test func openCodeModelLabelsKeepDesktopGroupsAndOriginalSelectionIdentities() throws {
+    let names = [
+        ("github-copilot/raw-sonnet", "github-copilot/Claude Sonnet 5.5"),
+        ("openai/raw-sol", "openai/GPT-6.1 Sol"),
+        ("copilot/raw-haiku", "copilot/Claude Haiku 4.5"),
+        ("openai/raw-fast", "openai/GPT-6.1 Sol Fast"),
+        ("local/custom", "local-ai-lab/some-org/model-v2"),
+        ("auto", "Auto"),
+    ]
+    let models = try JSONValue.array(names.map { .object(["id": .string($0.0), "displayName": .string($0.1)]) }).decode([ModelChoice].self)
+    let groups = OpenCodeModelDisplay.groups(models)
+    #expect(groups.map(\.provider) == ["GitHub Copilot", "OpenAI", "Local AI Lab", "Other"])
+    #expect(groups[0].models.map(\.id) == ["github-copilot/raw-sonnet", "copilot/raw-haiku"])
+    #expect(groups[1].models.map(\.id) == ["openai/raw-sol", "openai/raw-fast"])
+    #expect(models[0].label(for: "opencode") == "Claude Sonnet 5.5")
+    #expect(models[1].label(for: "opencode") == "GPT-6.1 Sol")
+    #expect(models[4].label(for: "opencode") == "some-org/model-v2")
+    #expect(OpenCodeModelDisplay.parts(models[4].displayName)?.name == "some-org/model-v2")
+    var settings = ComposerSettings()
+    settings.select(groups[0].models[1], provider: "opencode")
+    #expect(settings.model == "copilot/raw-haiku")
+    #expect(Set(groups.flatMap(\.models).map(\.id)) == Set(models.map(\.id)))
+}
+
+@Test func claudeModelLabelsMatchDesktopCatalogueFormats() throws {
+    let cases: [(String, String, String?, String)] = [
+        ("fable", "Fable", "Fable 5.2 · Best for complex work", "Fable 5.2"),
+        ("sonnet", "Claude Sonnet", "Claude Sonnet 5.5 · Best for everyday work", "Claude Sonnet 5.5"),
+        ("opus[1m]", "Opus", "Opus 5.5 with 1M context", "Opus 5.5 [1M]"),
+        ("opus", "Opus 5.5", "Most capable · Ambitious work", "Opus 5.5"),
+        ("sonnet", "Sonnet", "SonnetPlus 5.5 · A different model", "Sonnet"),
+        ("haiku", "Haiku", nil, "Haiku"),
+    ]
+    for (id, displayName, description, label) in cases {
+        let model = try JSONValue.object([
+            "id": .string(id), "displayName": .string(displayName), "description": description.map(JSONValue.string) ?? .null,
+        ]).decode(ModelChoice.self)
+        #expect(model.label(for: "claude_code") == label)
+        #expect(model.label(for: "codex") == displayName)
+        var settings = ComposerSettings()
+        settings.select(model, provider: "claude_code")
+        #expect(settings.model == id)
+    }
+}
+
 @Test func pairingLinkPreservesEncodedEndpointsAndAcceptsVariants() throws {
     for scheme in ["mains", "mains-dev", "mains-preview", "mains-native"] {
         let link = try PairingLink("\(scheme)://pair#code=a%2Bb&name=Work+Mac&endpoint=http%3A%2F%2F192.168.1.2%3A8787&endpoint=https%3A%2F%2Fmac.example.com&endpoint=javascript%3Abad")

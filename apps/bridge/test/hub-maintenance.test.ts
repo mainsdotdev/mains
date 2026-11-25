@@ -14,7 +14,8 @@ async function runtime() {
     import {AccountHub} from './src/index';
     export class Probe extends AccountHub {
       async invoke(input) {
-        const realNow=Date.now; Date.now=()=>input.now;
+        let at=input.now;
+        const realNow=Date.now; Date.now=()=>{const time=at; at+=input.tick??0; return time;};
         try {
           const sql=this.ctx.storage.sql;
           if(input.op==='push')return this.store.push('A',input.stream,input.records);
@@ -95,6 +96,50 @@ it("postpones durable idle cleanup after accepted run activity, including across
   expect(await p.call("expiry")).toBe(activity + BRIDGE_IDLE_RETENTION_MS);
   await p.compact(activity + BRIDGE_IDLE_RETENTION_MS);
   expect((await p.pull("run:run")).records).toEqual([]);
+});
+
+it("keeps the last activity and retention deadline when time advances during a batch", async () => {
+  const p = await runtime(), stream = "run:run" as const;
+  await p.push([record("run", 1)]);
+  const records = [record("first", 1, stream, true), record("last", 1, stream, true)];
+  // Each admitted record reads the clock for skew and then again for activity.
+  await p.call("push", { stream, records, tick: 1 });
+  const deadline = now + 3 + BRIDGE_IDLE_RETENTION_MS;
+  expect(await p.call("expiry")).toBe(deadline);
+  await p.compact(deadline - 1);
+  expect((await p.pull(stream)).records.map(({ envelope }) => envelope)).toEqual(records);
+  await p.compact(deadline);
+  expect((await p.pull(stream)).records).toEqual([]);
+});
+
+it("replaces legacy retention triggers and removes the unused index on an existing hub", async () => {
+  const p = await runtime(), stream = "run:run" as const;
+  await p.push([record("run", 1)]);
+  await p.push([record("mirror", 1, stream, true)]);
+  const legacyNames = new Map([
+    ["schedule_retention_on_insert", "latest_retention_insert"],
+    ["reschedule_retention_on_update", "latest_retention_update"],
+    ["reschedule_retention_on_activity", "activity_retention_update"],
+  ]);
+  const readSchema = async () => (await p.begin()).schema;
+  const triggers = (await readSchema()).filter(({ name }) => legacyNames.has(name));
+  expect(triggers).toHaveLength(3);
+  for (const trigger of triggers) {
+    const legacySql = trigger.sql.replace(trigger.name, legacyNames.get(trigger.name)!)
+      .replace(" WHERE compaction_jobs.due_at IS NOT excluded.due_at", "")
+      .replace(` AND due_at IS NOT NEW.last_activity+${BRIDGE_IDLE_RETENTION_MS}`, "");
+    await p.sql(`DROP TRIGGER ${trigger.name}; ${legacySql}`);
+  }
+  await p.sql("CREATE INDEX log_row ON log(row_key)");
+  await p.evict();
+  const schema = await readSchema();
+  const removed = ["log_row", ...legacyNames.values()];
+  expect(schema.filter(({ name }) => removed.includes(name))).toEqual([]);
+  const migratedTriggers = schema.filter(({ name }) => legacyNames.has(name));
+  expect(migratedTriggers).toHaveLength(3);
+  for (const { sql } of migratedTriggers) expect(sql).toContain("due_at IS NOT");
+  expect(await p.call("expiry")).toBe(now + BRIDGE_IDLE_RETENTION_MS);
+  expect((await p.pull(stream)).records).toHaveLength(1);
 });
 
 it("rolls back an interrupted pass and retries its original jobs without partial compaction", async () => {

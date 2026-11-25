@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
+import type { TerminalSession } from "@mains/contracts/terminal";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
-import { useGetTerminalSessionsQuery, useListProjectsQuery, useListWorkspacesQuery } from "@/lib/redux/api";
+import { useListProjectsQuery, useListWorkspacesQuery } from "@/lib/redux/api";
 import { setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { useIsMobile } from "@/lib/platform";
@@ -17,9 +18,11 @@ const POP_EASE = "cubic-bezier(0.34, 1.56, 0.64, 1)";
 const COLLAPSE_EASE = "cubic-bezier(0.4, 0, 1, 1)";
 
 interface SessionPanelProps {
+  allowSessionDetails: boolean;
   providerId?: string;
   /** The run whose sources and deliverables the panel describes. */
   runId: string | null;
+  serverSessions: TerminalSession[];
   /**
    * Width of whatever else occupies the right lane (browser, document viewer,
    * right panel), as a CSS length. The box aligns just inside it.
@@ -34,9 +37,8 @@ interface SessionPanelProps {
 }
 
 /**
- * The session box: the active workspace's environment plus the sources and
- * deliverables belonging to the open run. Sections are mode-driven: Code gets
- * Environment + Running servers + Sources; Work gets Sources + Deliverables.
+ * The session box shows running servers and the mode-specific details of the
+ * current workspace or run.
  *
  * A standalone box pinned to the top-right corner. It always sits *over* the
  * content surface rather than taking a column out of it — shrinking the content
@@ -50,8 +52,10 @@ interface SessionPanelProps {
  * preserving its draft until the editor returns or the PR is created.
  */
 export function SessionPanel({
+  allowSessionDetails,
   providerId,
   runId,
+  serverSessions,
   laneOffset,
   floating,
 }: SessionPanelProps) {
@@ -65,22 +69,15 @@ export function SessionPanel({
   const [prTransitioning, setPrTransitioning] = useState(false);
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
   const { showGitActions, showSources, showDeliverables, showTerminal } = useModeConfig();
-  const showEnvironment = showGitActions && !!activeWorkspaceId;
+  const showEnvironment = allowSessionDetails && showGitActions && !!activeWorkspaceId;
   const { data: workspaces = [] } = useListWorkspacesQuery(undefined, { skip: !showEnvironment });
   const { data: projects = [] } = useListProjectsQuery(undefined, { skip: !showEnvironment });
-  const { currentData: terminals } = useGetTerminalSessionsQuery(undefined, { skip: !showTerminal });
-  const serverSessions = useMemo(
-    () => showTerminal ? (terminals ?? [])
-      .filter((session) => session.workspaceId && session.status === "running" && (session.servers?.length ?? 0) > 0)
-      .sort((a, b) => Number(b.workspaceId === activeWorkspaceId) - Number(a.workspaceId === activeWorkspaceId)) : [],
-    [terminals, showTerminal, activeWorkspaceId],
-  );
   const showServers = serverSessions.length > 0;
   const workspace = workspaces.find((item) => item.id === activeWorkspaceId);
   const project = projects.find((item) => item.id === workspace?.projectId);
   const repositoryName = project?.name ?? workspace?.rootPath.split("/").filter(Boolean).at(-1) ?? "Repository";
-  const showRunResources = showSources && !!runId;
-  const hasContent = showEnvironment || showRunResources;
+  const showRunResources = allowSessionDetails && showSources && !!runId;
+  const hasContent = showEnvironment || showServers || showRunResources;
 
   const { isVisible, isAnimatedIn } = usePanelAnimation(
     (isOpen || prEditorOpen) && hasContent,
@@ -174,7 +171,11 @@ export function SessionPanel({
           </section>
         )}
         {showServers && (
-          <SessionServersSection sessions={serverSessions} separated={showEnvironment} />
+          <SessionServersSection
+            sessions={serverSessions}
+            separated={showEnvironment}
+            allowStop={allowSessionDetails && showTerminal}
+          />
         )}
         {showRunResources && runId && (
           <SessionResourcesSection

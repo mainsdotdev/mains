@@ -64,7 +64,7 @@ export const atlasBookmarks = {
       return config;
     });
   },
-  save(input: AtlasSaveBookmark) {
+  save(input: AtlasSaveBookmark, validate?: () => void) {
     return worker.prepare(async (signal) => {
       const urls = bookmarkUrl(input?.url);
       const accountId = text(input?.accountId, 128, "account");
@@ -108,6 +108,7 @@ export const atlasBookmarks = {
         metadata: JSON.stringify(metadata), sourceKey: key,
         collectionId: input.collectionId === undefined ? old?.collectionId ?? null : input.collectionId,
         bookmarkJob: JSON.stringify(job), ...(urlChanged ? { storageKey: null, contentHash: null, mimeType: null, byteSize: null, fileName: null } : {}) };
+      validate?.();
       atlasRepo.saveBookmark(id, accountId, fields, tags);
       changed(); this.kick();
       return atlasRepo.find(id, accountId)!;

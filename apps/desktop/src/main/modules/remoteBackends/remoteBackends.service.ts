@@ -1,76 +1,115 @@
 import { app, safeStorage } from "electron";
-import { readFile, writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { isUtf8 } from "node:buffer";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 
-/**
- * Encrypted at-rest storage for direct-mode backend owner tokens, keyed by
- * backend id. Tokens are encrypted with the OS keychain via Electron
- * `safeStorage` (same approach as connection credentials) and kept in a small
- * JSON map under userData — never in the renderer's localStorage.
- *
- * SSH-launch tokens are ephemeral and never reach here (see ssh.service).
- * See docs/design/remote-backend.md (owner token).
- */
+const sealed = "safeStorage:";
+const sessionTokens = new Map<string, string>();
+let pending = Promise.resolve();
 
-function tokenFilePath(): string {
-  return path.join(app.getPath("userData"), "backend-tokens.json");
+function serialized<T>(operation: () => Promise<T>): Promise<T> {
+  const result = pending.then(operation);
+  pending = result.then(() => {}, () => {});
+  return result;
 }
 
-async function readMap(): Promise<Record<string, string>> {
-  try {
-    const text = await readFile(tokenFilePath(), "utf-8");
-    const parsed = JSON.parse(text) as unknown;
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, string>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-async function writeMap(map: Record<string, string>): Promise<void> {
-  await mkdir(path.dirname(tokenFilePath()), { recursive: true });
-  await writeFile(tokenFilePath(), JSON.stringify(map), "utf-8");
+function canPersist(): boolean {
+  return safeStorage.isEncryptionAvailable() &&
+    (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text");
 }
 
 function encrypt(token: string): string {
-  if (safeStorage.isEncryptionAvailable()) {
-    return safeStorage.encryptString(token).toString("base64");
-  }
-  // Best-effort fallback when the OS keychain is unavailable.
-  return Buffer.from(token, "utf-8").toString("base64");
+  return sealed + safeStorage.encryptString(token).toString("base64");
 }
 
-function decrypt(stored: string): string {
-  const buffer = Buffer.from(stored, "base64");
-  if (safeStorage.isEncryptionAvailable()) {
-    try {
-      return safeStorage.decryptString(buffer);
-    } catch {
-      return buffer.toString("utf-8");
+function tokenFile(): string {
+  return path.join(app.getPath("userData"), "backend-tokens.json");
+}
+
+async function writeMap(tokens: Map<string, string>): Promise<void> {
+  const file = tokenFile();
+  const temp = file + "." + randomUUID() + ".tmp";
+  await mkdir(path.dirname(file), { recursive: true });
+  try {
+    await writeFile(temp, JSON.stringify(Object.fromEntries(tokens)), { flag: "wx", mode: 0o600 });
+    await rename(temp, file);
+  } finally {
+    await rm(temp, { force: true });
+  }
+}
+
+async function readMap(): Promise<Map<string, string>> {
+  let text: string;
+  try { text = await readFile(tokenFile(), "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+    throw error;
+  }
+  const raw: unknown = JSON.parse(text);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid backend token store");
+  const tokens = new Map<string, string>();
+  const volatile = new Map<string, string>();
+  let migrated = false;
+  for (const [id, stored] of Object.entries(raw)) {
+    if (typeof stored !== "string") throw new Error("Invalid backend token entry");
+    if (stored.startsWith(sealed)) { tokens.set(id, stored); continue; }
+
+    // Older versions used the same base64 representation for ciphertext and UTF-8 tokens.
+    migrated = true;
+    const bytes = Buffer.from(stored, "base64");
+    if (!isUtf8(bytes)) { tokens.set(id, sealed + stored); continue; }
+    let token = bytes.toString("utf8");
+    if (canPersist()) {
+      try { token = safeStorage.decryptString(bytes); }
+      catch { /* The historical fallback stored the UTF-8 token directly. */ }
+      // A platform may accept unencrypted input when decrypting legacy data.
+      // Always seal the recovered token, including after a successful decrypt.
+      tokens.set(id, encrypt(token));
+    } else {
+      volatile.set(id, token);
     }
   }
-  return buffer.toString("utf-8");
+  if (migrated) {
+    await writeMap(tokens);
+    for (const [id, token] of volatile) sessionTokens.set(id, token);
+  }
+  return tokens;
 }
 
-// Throw-style: plain values out, throws on failure; envelope applied by
-// handle() at the IPC seam.
 export const remoteBackendsService = {
-  async setToken(id: string, token: string): Promise<void> {
-    const map = await readMap();
-    map[id] = encrypt(token);
-    await writeMap(map);
+  async migrateLegacyTokens(): Promise<void> {
+    await serialized(readMap);
   },
-
-  async getToken(id: string): Promise<string | null> {
-    const map = await readMap();
-    const stored = map[id];
-    return stored ? decrypt(stored) : null;
+  setToken(id: string, token: string): Promise<void> {
+    return serialized(async () => {
+      const tokens = await readMap();
+      if (canPersist()) {
+        tokens.set(id, encrypt(token));
+        await writeMap(tokens);
+        sessionTokens.delete(id);
+      } else {
+        if (tokens.delete(id)) await writeMap(tokens);
+        sessionTokens.set(id, token);
+      }
+    });
   },
-
-  async deleteToken(id: string): Promise<void> {
-    const map = await readMap();
-    delete map[id];
-    await writeMap(map);
+  getToken(id: string): Promise<string | null> {
+    return serialized(async () => {
+      const tokens = await readMap();
+      const session = sessionTokens.get(id);
+      if (session !== undefined) return session;
+      const stored = tokens.get(id);
+      if (stored === undefined) return null;
+      if (!canPersist()) throw new Error("Unlock the OS credential store to access the saved owner token.");
+      return safeStorage.decryptString(Buffer.from(stored.slice(sealed.length), "base64"));
+    });
+  },
+  deleteToken(id: string): Promise<void> {
+    return serialized(async () => {
+      const tokens = await readMap();
+      if (tokens.delete(id)) await writeMap(tokens);
+      sessionTokens.delete(id);
+    });
   },
 };

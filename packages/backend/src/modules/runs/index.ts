@@ -5,6 +5,7 @@ export { managedExecutionRoots } from "./run-execution";
 export { isStoredAttachmentFile } from "./run-attachment-storage";
 export { startAttachmentMaintenance, stopAttachmentMaintenance } from "./run-attachment-maintenance";
 export {
+  requestToolApproval,
   handleToolApprovalResponse,
   listPendingApprovals,
 } from "./user-input-broker";

@@ -1,9 +1,13 @@
 import SwiftUI
 
 struct FullMessageView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let artifactID: Int
     var source = "artifact"
+    var expectedRunID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var offset = 0
@@ -12,8 +16,13 @@ struct FullMessageView: View {
     @State private var error: String?
     @State private var loading = false
     var body: some View {
-        ScrollView { Text(text).font(source == "artifact" ? .body : .system(.callout, design: .monospaced)).textSelection(.enabled).padding(20).frame(maxWidth: .infinity, alignment: .leading) }
-            .overlay { if loading { ProgressView() } }
+        ScrollView {
+            Group {
+                if source == "artifact" || source == "plan" { ChatMessageBody(text: text) }
+                else { Text(text).font(.system(.callout, design: .monospaced)).textSelection(.enabled) }
+            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+        }
+            .overlay(alignment: .top) { if loading && text.isEmpty { ContentSkeleton(label: "Loading message…", layout: .text, count: 6) } }
             .safeAreaInset(edge: .bottom) {
                 VStack {
                     if let error { Text(error).font(.caption).foregroundStyle(.red) }
@@ -27,16 +36,21 @@ struct FullMessageView: View {
                     }
                 }.padding().background(.bar)
             }
-            .navigationTitle(source == "tool-output" ? "Tool output" : source == "tool-input" ? "Tool input" : "Full message").navigationBarTitleDisplayMode(.inline)
+            .navigationHeaderFade()
+            .actionToastHost()
+            .expandedNavigationTitle(source == "plan" ? "Plan" : source == "tool-output" ? "Tool output" : source == "tool-input" ? "Tool input" : "Full message")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task(id: offset) { await load() }
             .onChange(of: session.ownership) { _, _ in text = ""; dismiss() }
+            .onChange(of: session.viewingRunID) { _, current in
+                if let expectedRunID, current != expectedRunID { text = ""; dismiss() }
+            }
     }
     private func load() async {
         loading = true; error = nil
         defer { loading = false }
         do {
-            let result = try await session.readContent(artifactID: artifactID, offset: offset, source: source)
+            let result = try await session.readContent(artifactID: artifactID, offset: offset, source: source, expectedRunID: expectedRunID)
             try Task.checkCancellation()
             text = result["text"].string ?? ""
             next = result["nextOffset"].number.map(Int.init)

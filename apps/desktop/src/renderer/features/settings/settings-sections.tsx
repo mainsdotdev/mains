@@ -100,6 +100,7 @@ export type SettingsNavItem = {
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "general", label: "General", icon: Settings, showInNav: true, Component: GeneralSettings },
   { id: "appearance", label: "Appearance", icon: Sun, showInNav: true, Component: AppearanceSettings },
+  { id: "backends", label: "Connect", icon: Relay, showInNav: true, Component: BackendsSettings },
   { id: "atlas", label: "Atlas", icon: Globe, showInNav: true, Component: AtlasSettings },
   { id: "notifications", label: "Notifications", icon: Bell, showInNav: capabilities.nativeNotifications, Component: NotificationsSettings },
   { id: "git", label: "Git", icon: FolderGit, showInNav: true, Component: GitSettings },
@@ -108,7 +109,6 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   // Hidden for now: connections are managed from the /tasks sidebar. The section
   // stays registered (its modals are shared), but Settings.tsx redirects it away.
   { id: "connections", label: "Connections", icon: Connect, showInNav: false, Component: ConnectionsSettings },
-  { id: "backends", label: "Mains Connect", icon: Relay, showInNav: true, Component: BackendsSettings },
   { id: "dashboard", label: "Dashboard", icon: Chart, showInNav: true, Component: DashboardPage },
   { id: "archive", label: "Archive", icon: Archive, showInNav: true, Component: ArchiveSettings },
 

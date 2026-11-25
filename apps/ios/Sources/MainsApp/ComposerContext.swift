@@ -4,19 +4,32 @@ import SwiftUI
 struct ComposerContext {
     let providerId: String
     let mode: String
-    let name: String
+    private let name: String?
     let spaceID: String?
     let runID: String?
     let workspaceID: String?
+    let lockedProfile: Bool
+    let mate: Mate?
+    var supportsGoalMode: Bool { providerId == "codex" && mode != "chat" }
+    var placeholder: String {
+        if lockedProfile { return name.map { "Message \($0)" } ?? "Message this Mate…" }
+        if runID == nil, let name { return "Start a run in \(name)" }
+        return "Continue this run…"
+    }
     init(space: Space, runID: String? = nil) {
         providerId = space.providerId; mode = space.mode; name = space.name
-        spaceID = space.id; self.runID = runID; workspaceID = nil
+        spaceID = space.id; self.runID = runID; workspaceID = nil; lockedProfile = false; mate = nil
     }
-    init(run: Conversation) {
-        providerId = run.providerId; mode = run.mode; name = Provider.name(run.providerId)
-        spaceID = nil; runID = run.id; workspaceID = run.workspaceId
+    init(run: Conversation, mateName: String? = nil) {
+        providerId = run.providerId; mode = run.mode; name = mateName
+        spaceID = nil; runID = run.id; workspaceID = run.workspaceId; lockedProfile = run.assistantId != nil; mate = nil
+    }
+    init(mate: Mate, runID: String? = nil) {
+        providerId = mate.providerId; mode = "work"; name = mate.name
+        spaceID = nil; self.runID = runID; workspaceID = nil; lockedProfile = true; self.mate = mate
     }
     @MainActor func settings(_ session: BackendSession) -> ComposerSettings {
+        if let runID, let editing = session.existingMessageQueue(for: runID)?.editingSettings { return editing }
         if let runID, let settings = session.settings(forRunID: runID) { return settings }
         if let space = session.spaces.first(where: { $0.id == spaceID }) { return session.settings(for: space) }
         return ComposerSettings()
@@ -30,9 +43,12 @@ struct ComposerContext {
             session.isConnected && session.models[providerId] == nil && session.modelErrors[providerId] == nil
     }
     @MainActor func saving(_ session: BackendSession) -> Bool {
-        runID.map { session.savingConversationSettings.contains($0) || session.uncertainConversationSettings.contains($0) } ?? false
+        if session.pendingConversationAction != nil { return true }
+        if let runID, session.existingMessageQueue(for: runID)?.editingID != nil { return false }
+        return runID.map { session.savingConversationSettings.contains($0) || session.uncertainConversationSettings.contains($0) } ?? false
     }
     @MainActor func save(_ settings: ComposerSettings, session: BackendSession) {
+        if let runID, let queue = session.existingMessageQueue(for: runID), queue.editingID != nil { queue.editingSettings = settings; return }
         if let runID {
             let owner = session.ownership
             Task {
@@ -43,6 +59,7 @@ struct ComposerContext {
         } else if let spaceID { session.setSettings(settings, spaceID: spaceID) }
     }
     @MainActor func commit(_ settings: ComposerSettings, session: BackendSession) async throws {
+        if let runID, let queue = session.existingMessageQueue(for: runID), queue.editingID != nil { queue.editingSettings = settings; return }
         if let runID { try await session.updateConversationSettings(settings, runID: runID) }
         else if let spaceID { session.setSettings(settings, spaceID: spaceID) }
     }
@@ -55,23 +72,101 @@ struct ComposerContext {
 }
 
 struct ComposerModelLabel: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let model: ModelChoice?
     let loading: Bool
+    let providerID: String
     var body: some View {
         if let model {
-            Text(model.name).fontWeight(.semibold)
-        } else if loading {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.mini).accessibilityHidden(true)
-                Text("Loading…")
+            HStack(spacing: 5) {
+                ComposerModelIcon(name: model.displayName, providerID: providerID)
+                ComposerModelNameLayout {
+                    Text(model.label(for: providerID)).fontWeight(.semibold)
+                        .lineLimit(1).truncationMode(.tail)
+                }
             }
+        } else if loading {
+            SkeletonLine(width: 82, height: 12)
+                .accessibilityLabel("Loading model…")
         } else {
-            Text("Select model").fontWeight(.semibold)
+            HStack(spacing: 5) {
+                ComposerModelIcon(name: "", providerID: providerID)
+                Text("Select model").fontWeight(.semibold)
+            }
         }
     }
 }
 
+/// A ceiling, not a reserved slot: short names hug their text and long names
+/// still accept less space when effort and permission controls need it.
+private struct ComposerModelNameLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let name = subviews.first else { return .zero }
+        let natural = name.sizeThatFits(.unspecified)
+        let width = max(0, min(natural.width, 128, proposal.width ?? 128))
+        let fitted = name.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+        return CGSize(width: width, height: fitted.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+struct ComposerModelIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let name: String
+    let providerID: String
+    private var providerToken: String {
+        switch providerID {
+        case "codex": "codex"
+        case "claude_code": "claude"
+        case "copilot_cli": "copilot"
+        case "cursor": "cursor"
+        case "opencode": "opencode"
+        default: "model-bot"
+        }
+    }
+    private var token: String {
+        let displayName = providerID == "opencode" ? OpenCodeModelDisplay.parts(name)?.name ?? name : name
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if name.contains("muse") { return "model-muse" }
+        if name.contains("deepseek") { return "model-deepseek" }
+        if name.contains("gpt") { return "model-gpt" }
+        if name.contains("llama") { return "model-meta" }
+        if ["opus", "sonnet", "haiku", "claude", "fable"].contains(where: { name.contains($0) }) { return "claude" }
+        if name.contains("gemini") { return "model-gemini" }
+        if name.contains("composer") { return "cursor" }
+        if name.contains("auto") {
+            if providerID == "copilot_cli" { return "copilot" }
+            return ["cursor", "opencode"].contains(providerID) ? "cursor" : providerToken
+        }
+        if name.contains("codex") { return "model-gpt" }
+        if name.contains("grok") { return "model-grok" }
+        if name.contains("kimi") { return "model-kimi" }
+        if name.contains("glm") { return "model-zai" }
+        return providerToken
+    }
+    var body: some View {
+        Group {
+            if ["model-muse", "model-deepseek", "model-meta", "model-gemini"].contains(token) {
+                Image("registry-" + token).renderingMode(.original).resizable().scaledToFit().frame(width: 14, height: 14)
+            } else {
+                RegistryIcon(token: "icon:" + token, fallback: "cpu", size: 14,
+                             tint: token == "claude" ? Provider.accent("claude_code") : .primary, useStoredColor: false)
+            }
+        }.frame(width: 16, height: 16).accessibilityHidden(true)
+    }
+}
+
 struct SettingsRecoveryNotice: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let runID: String?
     var body: some View {

@@ -7,7 +7,7 @@ import { ArrowUp, Brain, BoltFill, Check } from "../icons";
 import { Bolt } from "../icons/space";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import { getModelIcon } from "@/lib/model-icons";
-import { formatModelDisplayName, groupModelsByOpenCodeProvider, openCodeModelParts, selectableModelNames } from "@/lib/model-display";
+import { formatComposerModelName, formatModelDisplayName, groupModelsByOpenCodeProvider, openCodeModelParts, selectableModelNames } from "@/lib/model-display";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import { ULTRACODE_GRADIENT_TEXT } from "./ultracode-styles";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
@@ -83,7 +83,7 @@ export function CompactComposerControls({
   useClickOutside(containerRef, () => setIsOpen(false));
 
   const modelList = selectableModelNames(models, variant);
-  const displayModel = formatModelDisplayName(model, variant);
+  const displayModel = formatComposerModelName(model, variant);
   const hasEffortLevels =
     !!supportedEffortLevels && supportedEffortLevels.length > 0;
   const selectedEffortLabel =

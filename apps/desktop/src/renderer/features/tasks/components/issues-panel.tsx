@@ -4,7 +4,7 @@ import {
   useGetIssueStatusesQuery,
   type IssueWithEntity,
 } from "@/lib/redux/api";
-import { Body, Button, Input, SegmentedTabs, Text } from "@/components/ui";
+import { Button, Input, SegmentedTabs } from "@/components/ui";
 import { Close, Search } from "@/components/ui/icons";
 import { useIsMobile } from "@/lib/platform";
 import type { IssueStatus } from "@mains/contracts/issue-status";
@@ -24,15 +24,17 @@ import { matchesIssueScope, type TasksScope } from "../lib/scope";
 import { buildIssueFacetGroups, IssueFilterButton, IssueFilterChips } from "./issue-filter-menu";
 import { IssueRow } from "./issue-row";
 import { OPEN_ISSUES_QUERY } from "./tasks-sidebar";
+import { TasksLoadError, TasksState } from "./tasks-state";
 
 const EMPTY_STATUSES: IssueStatus[] = [];
+const EMPTY_ISSUES: IssueWithEntity[] = [];
 
 interface IssuesPanelProps {
   /** Connection / resource picked in the sidebar. */
   scope: TasksScope;
   activeEntityId: string | null;
   /** `null` clears the drawer — the list has nothing left to point at. */
-  onSelectIssue: (issue: IssueWithEntity | null) => void;
+  onSelectIssue: (issue: IssueWithEntity | null, opener?: HTMLElement) => void;
 }
 
 export function IssuesPanel({ scope, activeEntityId, onSelectIssue }: IssuesPanelProps) {
@@ -47,9 +49,11 @@ export function IssuesPanel({ scope, activeEntityId, onSelectIssue }: IssuesPane
   // (that is how they leave this list) but aren't listed. "Open" is Mains'
   // status category: a provider's own state names are never literally "open".
   const {
-    currentData: issues = [],
+    currentData: issues = EMPTY_ISSUES,
     isLoading,
     isFetching,
+    isError,
+    refetch,
   } = useGetIssuesInboxQuery(OPEN_ISSUES_QUERY);
 
   const { data: statuses = EMPTY_STATUSES } = useGetIssueStatusesQuery();
@@ -91,8 +95,8 @@ export function IssuesPanel({ scope, activeEntityId, onSelectIssue }: IssuesPane
   // A priority column only when something in view has one (GitHub never does).
   const showPriority = filteredIssues.some((row) => row.issue.priority > 0);
 
-  // The detail drawer is always open — keep it pointed at the top row
-  // whenever nothing (or something no longer listed) is selected.
+  // Keep the split view pointed at a visible row. The compact view opens
+  // only when the user activates a row.
   useEffect(() => {
     if (filteredIssues.length === 0) {
       // Revoking a connection deletes its issues, so a settled empty list has
@@ -158,25 +162,17 @@ export function IssuesPanel({ scope, activeEntityId, onSelectIssue }: IssuesPane
 
       {/* Scrolling list — rows fade out as they slide under the controls */}
       <div className="scroll-bounce flex-1 min-h-0 overflow-y-auto noscrollbar px-6 pt-3 pb-16 mask-[linear-gradient(to_bottom,transparent,black_1.75rem)]">
-        {isLoading || (isFetching && issues.length === 0) ? (
-          <div className="flex items-center justify-center py-10">
-            <Text as="span" size="xs" tone="inherit" className="shine-text">
-              Loading issues...
-            </Text>
-          </div>
-        ) : filteredIssues.length === 0 ? (
-          <div className="flex flex-col items-center gap-1 py-12 text-center">
-            <Body size="s" tone="secondary">
-              {narrowed ? "No issues match these filters." : "No open issues synced yet."}
-            </Body>
-            {!narrowed && (
-              <Body size="xs" tone="subtle">
-                Issues arrive from your connections (GitHub, Linear, Jira, ...)
-                via sync.
-              </Body>
-            )}
-          </div>
-        ) : (
+        {isError ? (
+          <TasksLoadError title="Unable to load issues." onRetry={() => void refetch()} />
+        ) : isLoading || (isFetching && issues.length === 0) ? (
+          <TasksState title="Loading issues…" role="status" />
+        ) : filteredIssues.length === 0 && (
+          <TasksState
+            title={narrowed ? "No issues match these filters." : "No open issues synced yet."}
+            description={narrowed ? undefined : "Open issues from your connected trackers appear here after sync."}
+          />
+        )}
+        {filteredIssues.length > 0 && (
           <div className="space-y-1">
             {filteredIssues.map((row, index) => (
               <div
@@ -190,7 +186,7 @@ export function IssuesPanel({ scope, activeEntityId, onSelectIssue }: IssuesPane
                   isActive={activeEntityId === row.issue.entityId}
                   showProvider={!scope.provider}
                   showPriority={showPriority}
-                  onClick={() => onSelectIssue(row)}
+                  onClick={(opener) => onSelectIssue(row, opener)}
                 />
               </div>
             ))}

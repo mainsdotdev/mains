@@ -3,6 +3,9 @@ import AVFoundation
 import VisionKit
 
 struct PairingView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     private enum EntryMode { case camera, manual }
     let session: BackendSession
     let initialLink: String
@@ -29,7 +32,10 @@ struct PairingView: View {
         VStack(spacing: 0) {
             HStack {
                 Color.clear.frame(width: 46, height: 46).accessibilityHidden(true)
-                Text("Pair a Computer").font(.title3.weight(.semibold)).frame(maxWidth: .infinity)
+                Text("Pair a Computer")
+                    .font(.title3.weight(.semibold).width(.expanded))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
                 RoundControl(symbol: "xmark", label: "Close pairing") {
                     pairingTask?.cancel(); dismiss()
                 }.accessibilityIdentifier("closePairing")
@@ -105,8 +111,7 @@ struct PairingView: View {
                             }.font(.subheadline.weight(.semibold))
                         }
                     } else {
-                        ProgressView()
-                        Text("Opening camera…").font(.subheadline).foregroundStyle(.secondary)
+                        MediaSkeleton(symbol: "qrcode.viewfinder").accessibilityLabel("Opening camera")
                     }
                 }.padding(28)
             }
@@ -160,7 +165,7 @@ struct PairingView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(session.pairingInProgress ? "PAIRING" : "CODE DETECTED")
                     .font(.caption.weight(.semibold)).tracking(0.6).foregroundStyle(.secondary)
-                Text(review.name).font(.title3.weight(.semibold))
+                Text(review.name).font(.title3.weight(.semibold).width(.expanded))
                 ForEach(review.endpoints, id: \.self) { endpoint in
                     Text(Self.address(endpoint)).font(.footnote.monospaced()).foregroundStyle(.secondary)
                         .textSelection(.enabled)
@@ -178,7 +183,7 @@ struct PairingView: View {
             .background(Color(.tertiarySystemBackground), in: .rect(cornerRadius: 18))
         } else if let error {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Not a Mains pairing link").font(.headline)
+                Text("Not a Mains pairing link").font(.headline.width(.expanded))
                 Text(error).font(.subheadline).foregroundStyle(.secondary).accessibilityIdentifier("pairingError")
                 retryButton
             }
@@ -200,10 +205,8 @@ struct PairingView: View {
     }
     private var pairButton: some View {
         Button(action: pair) {
-            HStack(spacing: 8) {
-                if session.pairingInProgress { ProgressView().tint(.white) }
-                Text(session.pairingInProgress ? "Pairing…" : "Pair with this computer")
-            }.fixedSize(horizontal: true, vertical: false)
+            Text(session.pairingInProgress ? "Pairing…" : "Pair with this computer")
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(PairingActionStyle(compact: true)).disabled(session.pairingInProgress)
         .accessibilityIdentifier("confirmPairing")
@@ -266,6 +269,9 @@ struct PairingActionStyle: ButtonStyle {
 }
 
 private struct QRScanner: UIViewControllerRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let scanning: Bool
     let onScan: (String) -> Void
     let onError: (String) -> Void

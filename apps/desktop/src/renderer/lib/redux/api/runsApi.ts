@@ -39,6 +39,7 @@ export type RunArtifactKind =
   | "visualization";
 
 export interface Run extends Partial<BackendOwnership> {
+  assistantId?: string | null;
   id: string;
   accountId: string;
   workspaceId: string | null;
@@ -290,6 +291,7 @@ export const runsApi = baseApi.injectEndpoints({
       query: (id) => ({
         handler: CHANNELS.runs.getById,
         args: [id],
+        timeoutMs: 10_000,
       }),
       providesTags: (_result, _error, id) => [{ type: "Runs", id }],
     }),

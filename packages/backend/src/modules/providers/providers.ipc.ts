@@ -4,6 +4,7 @@ import type { IpcInvokeContext } from "../../ipc-kit/handler-registry";
 import { ok, fail } from "@mains/contracts/service-response";
 import { providersService, providerForPairedDevice } from "./providers.service";
 import { skillsForPairedDevice } from "./providers.device-projection";
+import { readMobilePluginIcons } from "./providers.mobile-plugin-icons";
 import type {
   CreateProviderPayload,
   UpdateProviderPayload,
@@ -153,6 +154,14 @@ export function registerProvidersIpc(): void {
     CHANNELS.providers.getGoal,
     handle((id: string, runId: string) => providersService.getGoal(id, runId)),
   );
+  ipcMain.handle(
+    CHANNELS.providers.getMobileGoalSummary,
+    handle((runId: string) => providersService.getMobileGoalSummary(runId)),
+  );
+  ipcMain.handle(
+    CHANNELS.providers.changeMobileGoal,
+    handle((runId: string, input: unknown) => providersService.changeMobileGoal(runId, input)),
+  );
 
   ipcMain.handle(
     CHANNELS.providers.clearGoal,
@@ -201,6 +210,11 @@ export function registerProvidersIpc(): void {
   ipcMain.handle(
     CHANNELS.providers.getInstalledPlugins,
     handle((id: string) => providersService.getInstalledPlugins(id)),
+  );
+  const getMobilePluginIcons = handle(readMobilePluginIcons);
+  ipcMain.handle(
+    CHANNELS.providers.getMobilePluginIcons,
+    (ctx: IpcInvokeContext, vendorIds: unknown) => getMobilePluginIcons(ctx, vendorIds, ctx?.connectionSignal),
   );
 
   ipcMain.handle(
@@ -274,12 +288,15 @@ export function unregisterProvidersIpc(): void {
     CHANNELS.providers.resetCodexMemories,
     CHANNELS.providers.setGoal,
     CHANNELS.providers.getGoal,
+    CHANNELS.providers.getMobileGoalSummary,
+    CHANNELS.providers.changeMobileGoal,
     CHANNELS.providers.clearGoal,
     CHANNELS.providers.getAccountInfo,
     CHANNELS.providers.updateCli,
     CHANNELS.providers.getPlugins,
     CHANNELS.providers.cancelPluginCatalog,
     CHANNELS.providers.getInstalledPlugins,
+    CHANNELS.providers.getMobilePluginIcons,
     CHANNELS.providers.getConnectors,
     CHANNELS.providers.startConnectorOAuth,
     CHANNELS.providers.readPlugin,

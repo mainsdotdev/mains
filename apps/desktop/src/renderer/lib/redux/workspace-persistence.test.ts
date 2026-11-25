@@ -50,6 +50,21 @@ async function persistedWorkspace(storage: ReturnType<typeof memoryStorage>) {
 }
 
 describe("workspace persistence — open chats", () => {
+  it("restores the Atlas new-image draft for the provider-independent composer", async () => {
+    const storage = memoryStorage();
+    const oldKey = JSON.stringify(["local", "atlas-image", "account", "codex-space", "new", "collection"]);
+    const newKey = JSON.stringify(["local", "atlas-image", "account", null, "new", "collection"]);
+    await storage.setItem("persist:workspace", JSON.stringify({
+      composerContextKey: JSON.stringify(oldKey),
+      draftTextByKey: JSON.stringify({ [oldKey]: "$imagegen A mountain", other: "An unrelated draft" }),
+      _persist: JSON.stringify({ version: 2, rehydrated: true }),
+    }));
+    const restored = await persistedWorkspace(storage);
+    expect(restored.store.getState().composerContextKey).toBe(newKey);
+    expect(restored.store.getState().draftTextByKey).toEqual({ [newKey]: "$imagegen A mountain", other: "An unrelated draft" });
+    restored.persistor.pause();
+  });
+
   it("restores open and closed tab choices after restart and workspace changes", async () => {
     const storage = memoryStorage();
     const first = await persistedWorkspace(storage);

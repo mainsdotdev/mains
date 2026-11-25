@@ -53,6 +53,16 @@ it("checks an uncertain plan delivery without sending a second continuation", as
   await expect(decidePlan(payload, operations)).resolves.toEqual({ status: "applied" });
   expect(operations.continueRun).toHaveBeenCalledTimes(1);
 });
+it("checks for a native receipt without admitting a first or second continuation", async () => {
+  const { payload, operations } = fixture();
+  await expect(decidePlan({ ...payload, checkOnly: true }, operations)).rejects.toThrow("not been confirmed");
+  expect(operations.continueRun).not.toHaveBeenCalled();
+  operations.continueRun.mockRejectedValueOnce(new Error("RPC timeout: turn/start"));
+  await expect(decidePlan(payload, operations)).rejects.toThrow("unknown");
+  operations.getInputStatus.mockResolvedValueOnce({ accepted: true });
+  await expect(decidePlan({ ...payload, checkOnly: true }, operations)).resolves.toEqual({ status: "applied" });
+  expect(operations.continueRun).toHaveBeenCalledTimes(1);
+});
 it("rejects a foreign account and a plan replaced by a newer proposal", async () => {
   const { payload, operations, run } = fixture();
   await expect(decidePlan({ ...payload, accountId: "other" }, operations)).rejects.toThrow("account");

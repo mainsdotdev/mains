@@ -1,24 +1,38 @@
 {
-  "fill" : {
-    "automatic-gradient" : "extended-gray:1.00000,1.00000"
-  },
+  "fill-specializations" : [
+    {
+      "value" : {
+        "solid" : "display-p3:0.94328,0.95255,0.97420,1.00000"
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "solid" : "display-p3:0.00462,0.00771,0.02920,1.00000"
+      }
+    }
+  ],
   "groups" : [
     {
       "layers" : [
         {
-          "glass-specializations" : [
+          "glass" : false,
+          "image-name-specializations" : [
             {
-              "value" : true
+              "value" : "earth-light.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "earth-dark.png"
             },
             {
               "appearance" : "tinted",
-              "value" : false
+              "value" : "earth-mono.png"
             }
           ],
-          "image-name" : "atlas.png",
-          "name" : "atlas",
+          "name" : "Earth",
           "position" : {
-            "scale" : 1.05,
+            "scale" : 1,
             "translation-in-points" : [
               0,
               0
@@ -28,11 +42,52 @@
       ],
       "shadow" : {
         "kind" : "neutral",
-        "opacity" : 0.5
+        "opacity" : 0
       },
       "translucency" : {
-        "enabled" : true,
-        "value" : 0.3
+        "enabled" : false,
+        "value" : 0
+      }
+    },
+    {
+      "hidden-specializations" : [
+        {
+          "value" : false
+        },
+        {
+          "appearance" : "tinted",
+          "value" : true
+        }
+      ],
+      "layers" : [
+        {
+          "glass" : false,
+          "image-name-specializations" : [
+            {
+              "value" : "sky-light.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "sky-dark.png"
+            }
+          ],
+          "name" : "Star field",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0
       }
     }
   ],

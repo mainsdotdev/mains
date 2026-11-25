@@ -1,4 +1,4 @@
-import type { BridgeEnvelope, BridgeLogRecord, BridgeStream, BridgeUpsertBody, BridgeValue } from "@mains/contracts/bridge-protocol";
+import { isBridgeRetiredRunDelete, type BridgeEnvelope, type BridgeLogRecord, type BridgeStream, type BridgeUpsertBody, type BridgeValue } from "@mains/contracts/bridge-protocol";
 import { isSeededSpaceId } from "@mains/contracts/spaces";
 import { bridgeRecordKeys } from "./bridge.crypto";
 import { BRIDGE_TABLES } from "./bridge.records";
@@ -22,10 +22,13 @@ export function verifyEnvelope(store: BridgeStore, envelope: BridgeEnvelope) {
   if (def?.idKind === "run-integer" && !/^.+:\d+$/.test(body.pk)) throw new Error("Invalid Bridge integer identity");
   if (def?.idKind === "run-integer" && header.runId !== body.pk.slice(0, body.pk.lastIndexOf(":"))) throw new Error("Bridge integer identity is routed to a different run");
   if (body.table === "run_attachment_refs" && header.runId !== JSON.parse(body.pk)[0]) throw new Error("Bridge attachment reference is routed to a different run");
-  if (def?.ownerRoot && (!header.owner || header.owner !== header.origin)) throw new Error("Invalid Bridge owner");
+  const retiredRunDelete = isBridgeRetiredRunDelete(header);
+  if (retiredRunDelete && (!envelope.auth || body.table !== "runs" || body.pk !== header.runId))
+    throw new Error("Bridge account deletion must identify the retired run");
+  if (def?.ownerRoot && (!header.owner || header.owner !== header.origin && !retiredRunDelete)) throw new Error("Invalid Bridge owner");
   // A remotely supplied owner id must never create an executable root on this host.
   // Its local capture clock is the provenance; a verified echo may repair a lost projection.
-  if (def?.ownerRoot === body.table && header.owner === store.backendId &&
+  if (!retiredRunDelete && def?.ownerRoot === body.table && header.owner === store.backendId &&
       !(def.primaryRegister && getClock(store.sqlite, body.table, body.pk, def.primaryRegister)) && !readRow(store, body.table, body.pk))
     throw new Error("Bridge cannot introduce a locally owned execution root");
   if (def && !def.ownerRoot && (header.owner || header.runId) || def?.stream === "account" && body.table !== "runs" && header.runId)

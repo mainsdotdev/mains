@@ -13,6 +13,7 @@ import appSettingsReducer from "./slices/appSettingsSlice";
 import workspaceReducer from "./slices/workspaceSlice";
 import backendsReducer from "./slices/backendsSlice";
 import runQueueReducer from "./slices/runQueueSlice";
+import assistantsReducer from "./slices/assistantsSlice";
 import atlasReducer from "./slices/atlasSlice";
 import terminalReducer from "./slices/terminalSlice";
 import previewReducer from "./slices/previewSlice";
@@ -63,6 +64,7 @@ const appSettingsPersistConfig = {
     "showSuggestions",
     "sidebarWidth",
     "rightPanelWidth",
+    "assistantInfoPanelWidth",
     "browserPanelWidth",
     // Persist the panel width but NOT `documentViewerOpen`/`documentViewerDoc`:
     // the loaded document isn't persisted, so reopening to an empty panel on
@@ -119,6 +121,14 @@ const persistedAtlasReducer = persistReducer({
   whitelist: ["coverPositions"],
 }, atlasReducer);
 
+// Assistant views and unsent execution choices are scoped to backend/account/assistant.
+const persistedAssistantsReducer = persistReducer({
+  key: "assistants",
+  storage,
+  version: 1,
+  whitelist: ["views"],
+}, assistantsReducer);
+
 export const store = configureStore({
   reducer: {
     [baseApi.reducerPath]: baseApi.reducer,
@@ -128,6 +138,7 @@ export const store = configureStore({
     // Unsent messages and their delivery mode live only in this renderer.
     runQueue: runQueueReducer,
     atlas: persistedAtlasReducer,
+    assistants: persistedAssistantsReducer,
     terminal: terminalReducer,
     preview: previewReducer,
   },

@@ -5,7 +5,6 @@ import JiraModal from "./jira/jira-modal";
 import LinearModal from "./linear/linear-modal";
 import TrelloModal from "./trello/trello-modal";
 import SentryModal from "./sentry/sentry-modal";
-import SocketDevModal from "./socketdev/socketdev-modal";
 
 export type ConnectionModalProps = {
   open: boolean;
@@ -25,7 +24,6 @@ const CONNECTION_MODALS: Array<{
   { id: "linear", Component: LinearModal },
   { id: "trello", Component: TrelloModal },
   { id: "sentry", Component: SentryModal },
-  { id: "socketdev", Component: SocketDevModal },
 ];
 
 /**

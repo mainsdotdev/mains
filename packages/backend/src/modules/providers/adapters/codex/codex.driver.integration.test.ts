@@ -148,6 +148,24 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it("explains another client's writer lock without starting a turn or replacing the thread", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-writer-lock-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    vi.stubEnv("MAINS_CODEX_FIXTURE_RPC_ERROR", JSON.stringify({ method: "thread/resume", code: -32600, message: "thread thread-1 already has an active writer" }));
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const created = await driver.createSession(request("writer-conflict"));
+    await driver.cleanup?.(created.session);
+    await expect(driver.resumeSession!({
+      ...request("writer-conflict"), message: "Continue the existing task", clientUserMessageId: "same-delivery-id",
+    })).rejects.toThrow("another Codex application");
+    const messages = readProtocolLog(logPath);
+    expect(messages.filter(message => message.method === "thread/start")).toHaveLength(1);
+    expect(messages.some(message => message.method === "turn/start")).toBe(false);
+  });
+
   it("sends named permissions without legacy sandbox overrides on create, resume, and fork", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-permission-profiles-"));
     tempDirs.push(tempDir);
@@ -235,6 +253,34 @@ describe("codex.driver / app-server protocol", () => {
     expect(capabilities.experimentalApi).toBe(true);
     if (enabled) expect(capabilities.requiredHumanApproval).toBe(true);
     else expect(capabilities).not.toHaveProperty("requiredHumanApproval");
+  });
+
+  it.each([
+    ["0.169.0", "Codex withheld this response."],
+    ["0.170.0", "Codex blocked this response."],
+    ["0.171.0", "Codex blocked this response."],
+  ])("streams live replies but uses Codex %s display decisions for completed messages", async (version, notice) => {
+    vi.stubEnv("MAINS_CODEX_FIXTURE_VERSION", version);
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const acquired = await driver.createSession({ ...request("answer-display"), goal: "answer display" });
+    const events: Array<Record<string, unknown>> = [];
+    const outcome = await driver.executePrompt(
+      acquired.session, acquired.prompt, async (event) => { events.push({ ...event }); }, new AbortController().signal,
+    );
+    expect(outcome.status).toBe("succeeded");
+    const reports = events.filter((event) => event.type === "artifact" && event.kind === "report");
+    expect(reports.map((event) => event.content)).toEqual([
+      "Private test", "Private test draft", "Ordinary draft", notice, "Ordinary test answer", "Private unfinished draft",
+    ]);
+    const previews = reports.filter((event) => event.ephemeral);
+    expect(previews).toHaveLength(4);
+    expect(previews.every((event) => event.requiresCompletedItem === true)).toBe(true);
+    expect(previews[0].streamId).toBe(previews[1].streamId);
+    const completed = reports.filter((event) => !event.ephemeral);
+    expect(completed.map((event) => [event.content, event.streamId])).toEqual([
+      [notice, previews[0].streamId], ["Ordinary test answer", previews[2].streamId],
+    ]);
   });
 
   it("routes a native human command to one-call approval and waits for the response", async () => {
@@ -518,7 +564,10 @@ describe("codex.driver / app-server protocol", () => {
           pageId: "page-1", expectedVersion: 3, markdown: "Updated page",
         }, { workspaceId: base.execution.workspaceId, rootPath: base.execution.cwd, runId: expectedRunId });
       } else {
-        expect(reply?.error).toMatchObject({ code: -32601, message: "Unknown dynamic tool: AtlasUpdatePage" });
+        expect(reply?.result).toMatchObject({
+          success: false,
+          contentItems: [{ type: "inputText", text: "Unknown dynamic tool: AtlasUpdatePage" }],
+        });
         expect(dispatch).not.toHaveBeenCalled();
       }
     };
@@ -527,6 +576,35 @@ describe("codex.driver / app-server protocol", () => {
     await execute(await driver.resumeSession!({ ...base, mode, message }), runId);
     await execute(await driver.forkSession!({ ...base, runId: `${runId}-fork`, sourceRunId: runId, mode, message }), `${runId}-fork`);
     expect(dispatch).toHaveBeenCalledTimes(mode === "work" ? 3 : 0);
+  });
+
+  it.each((["work", "developer"] as const).flatMap(mode => ["ReportAssistantTask", "CreateAssistantRoutine"].map(tool => ({ mode, tool }))))("routes $mode assistant $tool through start, resume and fork", async ({ mode, tool }) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-assistant-tools-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const dispatch = vi.spyOn(mainsTools, "dispatchMainsTool").mockResolvedValue({ content: [{ type: "text", text: "assistant-result" }] });
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const base = { ...request("assistant-tools"), mode, configSnapshot: { assistantId: "assistant-1" } };
+    const execute = async (acquired: Awaited<ReturnType<typeof driver.createSession>>, tool: string, runId: string) => {
+      const outcome = await driver.executePrompt(acquired.session, acquired.prompt, async () => undefined, new AbortController().signal);
+      expect(outcome.status).toBe("succeeded");
+      const reply = readProtocolLog(logPath).filter(entry => typeof entry.id === "number" && entry.id >= 1000 && !entry.method).at(-1);
+      expect(reply?.error).toBeUndefined();
+      expect(reply?.result).toEqual({ success: true, contentItems: [{ type: "inputText", text: "assistant-result" }] });
+      expect(dispatch).toHaveBeenLastCalledWith(tool, expect.any(Object), { workspaceId: base.execution.workspaceId, rootPath: base.execution.cwd, runId });
+    };
+    await execute(await driver.createSession({ ...base, goal: `dynamic tool ${tool}` }), tool, base.runId);
+    await execute(await driver.resumeSession!({ ...base, message: `dynamic tool ${tool}` }), tool, base.runId);
+    await execute(await driver.forkSession!({ ...base, runId: "assistant-tools-fork", sourceRunId: base.runId, message: `dynamic tool ${tool}` }), tool, "assistant-tools-fork");
+    const started = readProtocolLog(logPath).find(entry => entry.method === "thread/start");
+    expect(started?.params).toMatchObject({ dynamicTools: expect.arrayContaining([
+      expect.objectContaining({ name: "ListAssistants" }), expect.objectContaining({ name: "ListAssistantTasks" }), expect.objectContaining({ name: "RecallAssistantMemory" }),
+      expect.objectContaining({ name: "ReportAssistantTask" }),
+      expect.objectContaining({ name: "CreateAssistantRoutine" }), expect.objectContaining({ name: "ListAssistantRoutines" }),
+    ]) });
+    expect(dispatch).toHaveBeenCalledTimes(3);
   });
 
   it("starts fresh voice on an empty thread without a synthetic text turn or goal", async () => {
@@ -591,6 +669,7 @@ describe("codex.driver / app-server protocol", () => {
       configSnapshot: { sandboxMode: "read-only", modelReasoningEffort: "ultra", serviceTier: "fast" },
       extraInstructions: "Stay within this conversation's permissions.",
       voiceTools, voiceInstructions: "Delegate lengthy work to separate chats with mains_voice tools.",
+      voiceInitialInstructions: "You are Kitchen Mate. Use metric measurements.",
     }, (event) => { events.push(event as unknown as Record<string, unknown>); }, {
       onTurnStarted, onCompleted,
       onEvent: async (event) => { events.push(event as unknown as Record<string, unknown>); },
@@ -615,7 +694,7 @@ describe("codex.driver / app-server protocol", () => {
     expect(log.find((message) => message.method === "thread/realtime/start")?.params).toMatchObject({
       voice: "maple",
       realtimeStartInstructions: "Delegate lengthy work to separate chats with mains_voice tools.",
-      initialItems: [{ role: "developer" }],
+      initialItems: [{ role: "developer" }, { role: "developer", text: "You are Kitchen Mate. Use metric measurements." }],
     });
     const bridgeScript = (log.find((message) => message.method === "thread/resume")!.params as any).config["mcp_servers.mains_voice"].args[0];
     expect(fs.existsSync(bridgeScript)).toBe(true);

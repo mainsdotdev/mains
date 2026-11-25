@@ -9,12 +9,15 @@ struct ContextPickerRequest: Equatable, Sendable {
     let trigger: String?
     let query: String
     let pluginsOnly: Bool
+    let offersMates: Bool
+    let offersWorkspaceFiles: Bool
     let pickSkill: @MainActor @Sendable (ContextSkill) -> Void
     let pickCommand: @MainActor @Sendable (ContextCommand) -> Void
     let close: @MainActor @Sendable () -> Void
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.frame == rhs.frame && lhs.scope == rhs.scope && lhs.owner == rhs.owner
-            && lhs.trigger == rhs.trigger && lhs.query == rhs.query && lhs.pluginsOnly == rhs.pluginsOnly
+            && lhs.trigger == rhs.trigger && lhs.query == rhs.query && lhs.pluginsOnly == rhs.pluginsOnly && lhs.offersMates == rhs.offersMates
+            && lhs.offersWorkspaceFiles == rhs.offersWorkspaceFiles
     }
 }
 
@@ -33,6 +36,9 @@ extension View {
 }
 
 private struct ContextPickerHost: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let enabled: Bool
     @State private var presented: ContextPickerRequest?
     func body(content: Content) -> some View {
@@ -60,9 +66,14 @@ private struct ContextPickerHost: ViewModifier {
 }
 
 private struct ContextPickerPanel: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let request: ContextPickerRequest
     let maxHeight: CGFloat
     @State private var catalogue = ContextCatalogue()
+    @State private var mates: [Mate] = []
+    @State private var fileSearch: FileSearchResult?
     @State private var loading = true
     @State private var retry = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -74,14 +85,40 @@ private struct ContextPickerPanel: View {
         let connected: Bool
         let retry: Int
     }
+    private struct FileSearchKey: Equatable {
+        let scope: ContextScope
+        let query: String
+        let owner: Int
+        let retry: Int
+    }
+    private struct FileSearchResult {
+        let key: FileSearchKey
+        var files: [WorkspaceFileMatch] = []
+        var failed = false
+    }
+    private var fileSearchKey: FileSearchKey? {
+        guard request.offersWorkspaceFiles, request.trigger == "@", !request.pluginsOnly,
+              request.session.supportsWorkspaceFileSearch, request.session.isConnected, !request.query.isEmpty else { return nil }
+        return FileSearchKey(scope: request.scope, query: request.query, owner: request.owner, retry: retry)
+    }
+    private var currentFileSearch: FileSearchResult? { fileSearch?.key == fileSearchKey ? fileSearch : nil }
+    private var searchingFiles: Bool { fileSearchKey != nil && currentFileSearch == nil }
     private var loadKey: LoadKey {
         LoadKey(scope: request.scope, owner: request.owner, revision: request.session.contextRevisions[request.scope.providerID] ?? 0,
                 connected: request.session.isConnected, retry: retry)
     }
-    private var skills: [ContextSkill] { catalogue.matchingSkills(request.query, pluginsOnly: request.pluginsOnly) }
+    private var showMates: Bool { request.offersMates && request.trigger == "@" && !request.pluginsOnly && request.session.supportsMates && !request.session.isDemo }
+    private var skills: [ContextSkill] {
+        let choices = showMates ? mates.filter { mate in
+            mate.ready && (request.query.isEmpty || mate.name.localizedCaseInsensitiveContains(request.query) || mate.description.localizedCaseInsensitiveContains(request.query))
+        }.map { ContextSkill.mate(id: $0.id, name: $0.name, description: $0.description, providerID: $0.providerId, avatar: $0.avatar) } : []
+        return choices + catalogue.matchingSkills(request.query, pluginsOnly: request.pluginsOnly)
+            + (currentFileSearch?.files.map(ContextSkill.workspaceFile) ?? [])
+    }
     private var commands: [ContextCommand] { catalogue.matchingCommands(request.query, trigger: request.trigger, pluginsOnly: request.pluginsOnly) }
     private var height: CGFloat {
         let groups = Set(skills.map(\.group)).count + (commands.isEmpty ? 0 : 1)
+            + (searchingFiles || currentFileSearch?.failed == true ? 1 : 0)
         let rows = skills.count + commands.count
         return min(maxHeight, 54 + max(78, CGFloat(rows) * 76 + CGFloat(groups) * 30) + (catalogue.error == nil ? 0 : 90))
     }
@@ -91,20 +128,22 @@ private struct ContextPickerPanel: View {
                 Text(request.pluginsOnly ? "Plugins" : request.query.isEmpty ? "Add context" : "Matching “\(request.query)”")
                     .font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
-                if loading { ProgressView().controlSize(.small).accessibilityLabel("Loading context") }
                 Button(action: request.close) { Image(systemName: "xmark").frame(width: 40, height: 44) }
                     .accessibilityLabel("Close context picker").accessibilityIdentifier("closeContextPicker")
             }.padding(.leading, 16).padding(.trailing, 4)
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    if loading && skills.isEmpty && commands.isEmpty {
+                        ContentSkeleton(label: "Loading context…", count: 1)
+                    }
                     if let error = catalogue.error {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(error).font(.footnote).foregroundStyle(Color(uiColor: .secondaryLabel)).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("contextError")
                             Button("Try again") { retry += 1 }.font(.footnote.weight(.semibold))
                         }.padding(14)
                     }
-                    ForEach(["Plugins", "Mac apps", "Skills"], id: \.self) { group in
+                    ForEach(["Mates", "Plugins", "Mac apps", "Skills", "Files"], id: \.self) { group in
                         let items = skills.filter { $0.group == group }
                         if !items.isEmpty {
                             section(group)
@@ -114,7 +153,7 @@ private struct ContextPickerPanel: View {
                                         ContextSkillIcon(skill: skill).frame(width: 30, height: 30).accessibilityHidden(true)
                                         VStack(alignment: .leading, spacing: 3) {
                                             HStack(spacing: 6) {
-                                                Text(skill.title).font(.subheadline.weight(.medium)).foregroundStyle(Color(uiColor: .label)).lineLimit(1)
+                                                Text(skill.mentionTitle).font(.subheadline.weight(.medium)).foregroundStyle(Color(uiColor: .label)).lineLimit(1)
                                                 Spacer(minLength: 6)
                                                 ContextTypeBadge(title: skill.badge).accessibilityIdentifier("contextSkillBadge-\(skill.name)")
                                             }
@@ -125,6 +164,16 @@ private struct ContextPickerPanel: View {
                                 }.accessibilityIdentifier("context-skill-\(skill.name)")
                             }
                         }
+                    }
+                    if searchingFiles || currentFileSearch?.failed == true {
+                        section("Files")
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(searchingFiles ? "Searching files…" : "Couldn’t search workspace files.")
+                                .font(.footnote).foregroundStyle(Color(uiColor: .secondaryLabel))
+                            if currentFileSearch?.failed == true {
+                                Button("Try again") { retry += 1 }.font(.footnote.weight(.semibold))
+                            }
+                        }.padding(.horizontal, 16).padding(.vertical, 8)
                     }
                     if !commands.isEmpty {
                         section("Commands")
@@ -145,7 +194,7 @@ private struct ContextPickerPanel: View {
                             }.accessibilityIdentifier("context-command-\(command.name)")
                         }
                     }
-                    if !loading && skills.isEmpty && commands.isEmpty && catalogue.error == nil {
+                    if !loading && !searchingFiles && currentFileSearch?.failed != true && skills.isEmpty && commands.isEmpty && catalogue.error == nil {
                         Text(request.query.isEmpty ? (request.pluginsOnly ? "No plugins available for this provider and workspace." : "No skills or commands available for this provider and workspace.") : "No matches found.")
                             .font(.subheadline).foregroundStyle(Color(uiColor: .secondaryLabel)).padding(20)
                     }
@@ -173,15 +222,37 @@ private struct ContextPickerPanel: View {
                 catalogue.error = error.localizedDescription; loading = false
             }
         }
+        .task(id: "\(showMates):\(request.owner):\(request.session.matesRevision):\(request.session.isConnected)") {
+            guard showMates, request.session.isConnected else { mates = []; return }
+            let result = try? await request.session.loadMates()
+            guard !Task.isCancelled, request.owner == request.session.ownership else { return }
+            mates = result?.mates ?? []
+        }
+        .task(id: fileSearchKey) {
+            fileSearch = nil
+            guard let key = fileSearchKey else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(320))
+                let files = try await request.session.searchWorkspaceFiles(key.query, scope: key.scope)
+                try Task.checkCancellation()
+                fileSearch = FileSearchResult(key: key, files: files)
+            } catch {
+                guard !Task.isCancelled, key.owner == request.session.ownership else { return }
+                fileSearch = FileSearchResult(key: key, failed: true)
+            }
+        }
         .accessibilityElement(children: .contain).accessibilityLabel("Context picker")
     }
     private func section(_ title: String) -> some View {
-        Text(title).font(.caption.weight(.semibold)).foregroundStyle(Color(uiColor: .secondaryLabel)).padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
+        Text(title).font(.caption.weight(.semibold).width(.expanded)).foregroundStyle(Color(uiColor: .secondaryLabel)).padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
             .accessibilityAddTraits(.isHeader).accessibilityIdentifier("contextSection-\(title)")
     }
 }
 
 private struct ContextTypeBadge: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let title: String
     var body: some View {
         Text(title).font(.caption2).foregroundStyle(Color(uiColor: .secondaryLabel))
@@ -191,6 +262,9 @@ private struct ContextTypeBadge: View {
 }
 
 private struct ContextDefaultIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     var tint = Color(uiColor: .secondaryLabel)
     var command = false
     var skill = false
@@ -202,6 +276,9 @@ private struct ContextDefaultIcon: View {
 }
 
 struct ContextSkillIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let skill: ContextSkill
     private var tint: Color {
         guard let hex = skill.brandColor?.trimmingCharacters(in: CharacterSet(charactersIn: "#")), hex.count == 6,
@@ -215,8 +292,13 @@ struct ContextSkillIcon: View {
     }
     var body: some View {
         Group {
-            // Absolute paths belong to the computer; never treat them as phone files or URLs.
-            if let source = skill.iconSmall ?? skill.iconLarge, source.hasPrefix("data:image/"), source.utf8.count <= 350_000,
+            if let id = skill.mateID {
+                MateRobotThumbnail(preset: MateRobotAssets.catalogue?.preset(for: skill.mateAvatar, mateID: id))
+            } else if skill.workspaceFile != nil {
+                Image(uiImage: ContextArtwork.icon(nil, skill: skill, size: 20, tint: .secondaryLabel))
+                    .renderingMode(.original)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let source = skill.iconSmall ?? skill.iconLarge, source.hasPrefix("data:image/"), source.utf8.count <= 350_000,
                let comma = source.firstIndex(of: ","), let bytes = Data(base64Encoded: String(source[source.index(after: comma)...])),
                let image = UIImage(data: bytes) {
                 Image(uiImage: image).resizable().scaledToFit()

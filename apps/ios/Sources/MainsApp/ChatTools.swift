@@ -1,50 +1,195 @@
 import SwiftUI
 
+private struct ToolPluginIconRequest: Equatable {
+    let runID: String
+    let owner: Int
+    let revision: Int?
+    let vendors: [String]
+}
+
+extension View {
+    func loadToolPluginIcons(session: BackendSession, runID: String, providerID: String, calls: [ToolCall],
+                             enabled: Bool) -> some View {
+        let request = enabled && providerID == "codex" && session.isConnected && session.supportsPluginIcons
+            ? ToolPluginIconRequest(runID: runID, owner: session.ownership, revision: session.contextRevisions["codex"],
+                                    vendors: ToolPresentation.pluginVendorIDs(in: calls).prefix(64).sorted())
+            : nil
+        return task(id: request) {
+            guard let request, !request.vendors.isEmpty, request.owner == session.ownership else { return }
+            await session.loadToolPluginIcons(request.vendors, runID: request.runID)
+        }
+    }
+}
+
+struct ChatPlanCard: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let runID: String
+    let plan: PlanProposal
+    let providerID: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expanded: Bool?
+    @State private var fullPlan = false
+    @State private var consent: ConsentContext?
+    @State private var consentOwner: Int?
+    @State private var error: String?
+    private var status: PlanProposal.Status { session.planStatus(plan, runID: runID) }
+    private var open: Bool { expanded ?? (status == .pending) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded = !open }
+            } label: {
+                HStack(spacing: 8) {
+                    RegistryIcon(token: "tool-enter-plan", size: 16)
+                    Text("Plan").fontWeight(.medium)
+                    if status != .pending {
+                        Text(status.rawValue.capitalized).font(.caption)
+                            .foregroundStyle(status == .failed ? Color.red : Color.secondary)
+                            .accessibilityIdentifier("planStatus-\(plan.id)")
+                    }
+                    Spacer()
+                    toolChevron(open).accessibilityHidden(true)
+                }.font(.subheadline).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16).frame(minHeight: 44).contentShape(.rect)
+            }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("planDisclosure-\(plan.id)")
+                .accessibilityValue(open ? "Expanded" : "Collapsed")
+            if open {
+                if !plan.text.isEmpty {
+                    ViewThatFits(in: .vertical) {
+                        ChatMessageBody(text: plan.text).fixedSize(horizontal: false, vertical: true)
+                        ScrollView { ChatMessageBody(text: plan.text) }
+                    }.frame(maxWidth: .infinity, maxHeight: 360, alignment: .leading)
+                        .padding(.horizontal, 16).padding(.bottom, 14)
+                }
+                if plan.fullContentSource != nil {
+                    Button("Read full plan", systemImage: "text.alignleft") { fullPlan = true }
+                        .font(.footnote.weight(.medium)).padding(.horizontal, 16).padding(.bottom, 12)
+                        .disabled(!session.isConnected).accessibilityIdentifier("readFullPlan-\(plan.id)")
+                }
+                if let error {
+                    Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal, 16).padding(.bottom, 10)
+                }
+                if session.offersPlanDecision(plan, runID: runID) {
+                    Divider()
+                    HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+                        Button("Apply Plan") { beginApply() }.buttonStyle(.borderedProminent)
+                            .tint(Provider.accent(providerID)).accessibilityIdentifier("applyPlan-\(plan.id)")
+                        Button("Dismiss") { decide(.dismiss) }.buttonStyle(.bordered)
+                            .accessibilityIdentifier("dismissPlan-\(plan.id)")
+                    }.controlSize(.regular).padding(.horizontal, 12).padding(.vertical, 8)
+                        .disabled(!session.canDecidePlan(plan, runID: runID))
+                }
+            }
+        }
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(.primary.opacity(0.09)) }
+        .accessibilityElement(children: .contain).accessibilityIdentifier("planCard-\(plan.id)")
+        .onChange(of: status) { _, status in if status != .pending { expanded = false; error = nil } }
+        .sheet(isPresented: $fullPlan) {
+            if let source = plan.fullContentSource {
+                NavigationStack { FullMessageView(session: session, artifactID: plan.id, source: source, expectedRunID: runID) }
+            }
+        }
+        .sheet(item: $consent) { context in
+            ConsentView(context: context) {
+                guard consentOwner == session.ownership, session.viewingRunID == runID,
+                      session.pairing?.descriptor.backendId == context.backendID else { return }
+                session.grantConsent(providerID: context.providerID, backendID: context.backendID)
+                decide(.apply)
+            }
+        }
+    }
+
+    private func beginApply() {
+        if session.hasConsent(providerID: providerID) { decide(.apply) }
+        else if let backendID = session.pairing?.descriptor.backendId {
+            consentOwner = session.ownership
+            consent = ConsentContext(backendID: backendID, providerID: providerID, isDemo: session.isDemo)
+        }
+    }
+
+    private func decide(_ decision: PlanProposal.Decision) {
+        let owner = session.ownership
+        error = nil
+        Task {
+            guard session.ownership == owner, session.viewingRunID == runID else { return }
+            do { try await session.decidePlan(plan, runID: runID, decision: decision) }
+            catch {
+                if session.ownership == owner, session.viewingRunID == runID, session.pendingPlanDecision?.uncertain != true {
+                    self.error = error.localizedDescription
+                }
+            }
+        }
+    }
+}
+
 struct ChatToolBlock: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let rows: [TranscriptRow]
     var live = false
+    var isMate = false
     @State private var disclosure = TranscriptDisclosure()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var calls: [ToolCall] { rows.compactMap(\.tool) }
-    private var providerID: String { session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? "" }
-    private var animate: Bool { session.isConnected && session.conversations.first { $0.id == session.viewingRunID }?.isActive == true }
-    private var running: Bool { calls.contains { ["running", "queued"].contains($0.status) } }
+    private var running: Bool { rows.contains { $0.tool != nil && $0.live } }
     private var active: Bool { running || live }
     private var expanded: Bool { disclosure.isExpanded(active: active) }
-    private var summary: String {
-        if let active = calls.first(where: { ["running", "queued"].contains($0.status) }) { return ToolPresentation(active).verb }
-        if let first = calls.map({ $0.startedAt ?? $0.createdAt }).min(), let last = calls.compactMap(\.endedAt).max(), last.timeIntervalSince(first) >= 1 {
-            let seconds = Int(last.timeIntervalSince(first))
-            return seconds < 60 ? "Worked for \(seconds)s" : "Worked for \(seconds / 60)m \(seconds % 60)s"
-        }
-        return "\(calls.count) tool calls"
-    }
-    private var names: String {
-        var names: [String] = []
-        for call in calls { let name = ToolPresentation(call).name; if !names.contains(name) { names.append(name) } }
-        return names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " +\(names.count - 3)" : "")
-    }
     var body: some View {
-        if !calls.isEmpty {
+        let providerID = session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? ""
+        if isMate {
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(rows) { row in
+                    if let call = row.tool {
+                        if call.isMateQuestion {
+                            let entries = MateQuestion.read(call)
+                            if !entries.isEmpty {
+                                MateQuestionBubble(entries: entries, providerID: providerID)
+                                    .accessibilityIdentifier("mateQuestion-\(call.id)")
+                            }
+                        } else {
+                            ChatToolRow(session: session, providerID: providerID, call: call, displayStatus: row.toolDisplayStatus)
+                        }
+                    }
+                }
+            }
+        } else if !calls.isEmpty {
+            let group = ToolGroupPresentation(calls)
             VStack(alignment: .leading, spacing: 6) {
                 if calls.count > 1 {
                     Button {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { disclosure.toggle(active: active) }
                     } label: {
-                        HStack(spacing: 9) {
-                            if running { AgentAsciiSpinner(providerID: providerID, animated: animate).frame(width: 17) }
-                            else { Image(systemName: "wrench.and.screwdriver").frame(width: 17) }
-                            Text(summary).fontWeight(.semibold).fixedSize().activityShimmer(running && animate)
-                            Text(names).font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                            Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2)
-                        }.font(.footnote).foregroundStyle(.secondary).frame(minHeight: 32).contentShape(.rect)
+                        HStack(spacing: 4) {
+                            if !expanded {
+                                HStack(spacing: 4) {
+                                    ForEach(group.icons) { icon in
+                                        ChatToolIcon(asset: icon.asset, plugin: providerID == "codex" ? session.toolPluginIcon(icon.vendorID) : nil)
+                                    }
+                                }
+                            }
+                            Text(group.summary).lineLimit(1)
+                            toolChevron(expanded)
+                        }
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: TranscriptRowMetrics.summaryHeight, alignment: .leading).contentShape(.rect)
                     }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("toolBlock-\(calls[0].id)")
                         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
                 }
                 if calls.count == 1 || expanded {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(calls) { call in ChatToolRow(session: session, call: call) }
+                        ForEach(rows) { row in
+                            if let call = row.tool {
+                                ChatToolRow(session: session, providerID: providerID, call: call, displayStatus: row.toolDisplayStatus)
+                            }
+                        }
                     }
                 }
             }
@@ -53,65 +198,108 @@ struct ChatToolBlock: View {
     }
 }
 
+private struct ChatToolIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let asset: String
+    let plugin: ToolPluginIcon?
+    var tint: Color = .secondary
+
+    var body: some View {
+        Group {
+            if let data = plugin?.image, data.count <= 32 * 1024, let image = UIImage(data: data) {
+                Image(uiImage: image).renderingMode(.original).resizable().scaledToFit()
+                    .clipShape(.rect(cornerRadius: 3))
+            } else if let plugin, let hex = plugin.brandColor?.trimmingCharacters(in: CharacterSet(charactersIn: "#")),
+                      hex.count == 6, let value = UInt32(hex, radix: 16) {
+                Text(plugin.label.prefix(1).uppercased()).font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(red: Double((value >> 16) & 255) / 255,
+                                      green: Double((value >> 8) & 255) / 255,
+                                      blue: Double(value & 255) / 255), in: .rect(cornerRadius: 3))
+            } else {
+                RegistryIcon(token: asset, size: 16, tint: tint)
+            }
+        }.frame(width: 16, height: 16).accessibilityHidden(true)
+    }
+}
+
+@MainActor func toolChevron(_ expanded: Bool) -> some View {
+    RegistryIcon(token: "tool-arrow-up", size: 16)
+        .rotationEffect(.degrees(expanded ? 180 : 90))
+}
+
 private struct ToolContentSelection: Identifiable {
     let id: String
     let source: String
 }
 
 private struct ChatToolRow: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
+    let providerID: String
     let call: ToolCall
+    var displayStatus: String? = nil
     @State private var expanded = false
     @State private var fullContent: ToolContentSelection?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var view: ToolPresentation { ToolPresentation(call) }
-    private var hasDetails: Bool { view.hasDetails }
-    private var tint: Color { view.running ? .primary : .secondary }
-    private var providerID: String { session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? "" }
-    private var animate: Bool { session.isConnected && session.conversations.first { $0.id == session.viewingRunID }?.isActive == true }
     var body: some View {
+        let view = ToolPresentation(call, status: displayStatus)
+        let statFirst = view.kind == .glob || view.kind == .view
+        let tint: Color = view.running ? .primary : .secondary
         VStack(alignment: .leading, spacing: 7) {
             Button {
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
             } label: {
-                HStack(spacing: 9) {
+                HStack(spacing: 6) {
                     Group {
-                        if view.running { AgentAsciiSpinner(providerID: providerID, animated: animate) }
-                        else { Image(systemName: view.symbol) }
-                    }.frame(width: 17).foregroundStyle(tint)
-                    Text(view.verb).fontWeight(.semibold).foregroundStyle(tint).lineLimit(1).layoutPriority(1).activityShimmer(view.running && animate)
-                    Text(view.detail).foregroundStyle(.tertiary).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).activityShimmer(view.running && animate)
-                    if view.added > 0 || view.removed > 0 {
+                        if view.running {
+                            let run = session.conversations.first { $0.id == session.viewingRunID }
+                            AgentAsciiSpinner(providerID: providerID, animated: session.isConnected && run?.isActive == true)
+                        } else {
+                            ChatToolIcon(asset: view.icon, plugin: providerID == "codex" ? session.toolPluginIcon(view.vendorID) : nil, tint: tint)
+                        }
+                    }.frame(width: 16)
+                    Text(view.verb).fontWeight(.medium).foregroundStyle(tint).lineLimit(1).layoutPriority(1)
+                    if statFirst { stat(view.stat) }
+                    if !view.detail.isEmpty {
+                        HStack(spacing: 4) {
+                            if view.showsFile { fileIcon(view.detail) }
+                            Text(view.detail)
+                                .font(view.kind == .glob ? .system(.caption, design: .monospaced) : .footnote)
+                                .lineLimit(1)
+                        }.foregroundStyle(.secondary)
+                    }
+                    if !statFirst { stat(view.stat) }
+                    if view.hasDetails { toolChevron(expanded) }
+                    if view.diff && (view.added > 0 || view.removed > 0) {
                         HStack(spacing: 5) {
                             if view.added > 0 { Text("+\(view.added)").foregroundStyle(.green) }
-                            if view.removed > 0 { Text("−\(view.removed)").foregroundStyle(.red) }
-                        }.font(.caption).fixedSize()
-                    } else if !view.stat.isEmpty { Text(view.stat).font(.caption).foregroundStyle(.tertiary).lineLimit(1).fixedSize() }
-                    if hasDetails { Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2).foregroundStyle(.tertiary) }
-                }.font(.footnote).frame(minHeight: 30).contentShape(.rect)
-            }.buttonStyle(ChatPressStyle()).disabled(!hasDetails)
-                .accessibilityIdentifier("toolCall-\(call.id)").accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                            if view.removed > 0 { Text("-\(view.removed)").foregroundStyle(.red) }
+                        }.font(.caption).monospacedDigit().fixedSize()
+                    }
+                }
+                .font(.footnote).frame(maxWidth: .infinity, minHeight: 30, alignment: .leading).contentShape(.rect)
+            }.buttonStyle(ChatPressStyle()).disabled(!view.hasDetails)
+                .accessibilityIdentifier("toolCall-\(call.id)").accessibilityValue(view.hasDetails ? (expanded ? "Expanded" : "Collapsed") : "")
                 .background(GeometryReader { geometry in
                     Color.clear.preference(key: ActiveToolFramesKey.self, value: view.running ? [call.id: geometry.frame(in: .global)] : [:])
                 })
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
-                    if !view.body.isEmpty {
-                        // Match desktop: no extra lifecycle-error banner. Its
-                        // generic fallback colours only the expanded error output.
-                        ToolBody(text: view.body, diff: view.diff, error: view.failed && view.showsInput)
+                    if !view.body.isEmpty || (view.showsInput && !view.input.isEmpty) {
+                        ToolBody(text: view.body, diff: view.diff, command: view.kind == .command,
+                                 input: view.showsInput ? view.input : nil, error: view.failed && view.showsInput)
                     }
                     if view.deferredOutput {
                         Button("Read full output", systemImage: "text.alignleft") { fullContent = .init(id: "output", source: "tool-output") }
                             .accessibilityIdentifier("toolFullOutput-\(call.id)")
                     }
-                    if view.showsInput {
-                        if view.body.isEmpty && !view.input.isEmpty { ToolBody(text: view.input, diff: false) }
-                        if view.deferredInput {
-                            Button("Read full input", systemImage: "text.alignleft") { fullContent = .init(id: "input", source: "tool-input") }
-                        } else if !view.input.isEmpty && !view.body.isEmpty {
-                            DisclosureGroup("Input") { ToolBody(text: view.input, diff: false).padding(.top, 6) }.tint(.secondary)
-                        }
+                    if view.showsInput && view.deferredInput {
+                        Button("Read full input", systemImage: "text.alignleft") { fullContent = .init(id: "input", source: "tool-input") }
                     }
                 }.font(.footnote)
             }
@@ -120,25 +308,78 @@ private struct ChatToolRow: View {
             NavigationStack { FullMessageView(session: session, artifactID: call.id, source: selection.source) }
         }
     }
+
+    @ViewBuilder private func stat(_ text: String) -> some View {
+        if !text.isEmpty {
+            Text(text).foregroundStyle(.secondary).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    @ViewBuilder private func fileIcon(_ detail: String) -> some View {
+        let file = TranscriptMedia.fileName(detail)
+        let name = switch (file as NSString).pathExtension.lowercased() {
+        case "swift": "swift"
+        case "ts", "mts", "cts": "typescript"
+        case "js", "mjs", "cjs": "javascript"
+        case "tsx", "jsx": "react"
+        case "json", "json5", "jsonc": "json"
+        case "py", "pyi", "pyw": "python"
+        default: ""
+        }
+        if name.isEmpty { RegistryIcon(token: "tool-file", size: 14) }
+        else {
+            Image(decorative: "registry-tool-file-" + name)
+                .resizable().scaledToFit().frame(width: 14, height: 14)
+                .accessibilityHidden(true)
+        }
+    }
 }
 
 private struct ToolBody: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let text: String
     let diff: Bool
+    let command: Bool
+    let input: String?
     var error = false
-    private var lines: [String] { text.components(separatedBy: "\n") }
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ScrollView(.horizontal) {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(Array(lines.prefix(40).enumerated()), id: \.offset) { _, line in
-                        Text(line.isEmpty ? " " : String(line.prefix(2000)))
-                            .foregroundStyle(diff && line.hasPrefix("+") ? Color.green : diff && line.hasPrefix("-") || error ? .red : .primary)
-                    }
-                }.font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                    .fixedSize(horizontal: true, vertical: false).padding(12)
+        VStack(alignment: .leading, spacing: 8) {
+            if let input, !input.isEmpty {
+                Text("Input").font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                preview(input)
             }
-            if lines.count > 40 { Text("+\(lines.count - 40) more lines").font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.bottom, 10) }
-        }.background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 12))
+            if !text.isEmpty {
+                if input != nil { Text(error ? "Error" : "Output").font(.caption2.weight(.medium)).foregroundStyle(.secondary) }
+                preview(text, diff: diff, command: command, error: error)
+            }
+        }
+        .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+        .background(.primary.opacity(0.05), in: .rect(cornerRadius: 6))
+        .overlay {
+            if diff { RoundedRectangle(cornerRadius: 6).strokeBorder(.primary.opacity(0.1)) }
+        }
+    }
+
+    private func preview(_ text: String, diff: Bool = false, command: Bool = false, error: Bool = false) -> some View {
+        let lines = text.components(separatedBy: "\n")
+        let visible = lines.prefix(40).map { String($0.prefix(2000)) }
+        return VStack(alignment: .leading, spacing: 6) {
+            if diff {
+                ScrollView(.horizontal) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(visible.enumerated()), id: \.offset) { _, line in
+                            Text(verbatim: line.isEmpty ? " " : line)
+                                .foregroundStyle(line.hasPrefix("+") ? Color.green : line.hasPrefix("-") ? .red : .primary)
+                        }
+                    }.fixedSize(horizontal: true, vertical: false)
+                }
+            } else {
+                Text(verbatim: visible.joined(separator: "\n")).lineLimit(40)
+                    .foregroundStyle(error ? Color.red : .primary).fixedSize(horizontal: false, vertical: true)
+            }
+            if lines.count > 40 { Text("+\(lines.count - 40) more lines").font(.caption2).foregroundStyle(.secondary) }
+        }.font(command ? .footnote : .system(.caption, design: .monospaced)).textSelection(.enabled)
     }
 }

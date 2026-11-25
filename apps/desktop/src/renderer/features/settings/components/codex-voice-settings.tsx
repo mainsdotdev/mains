@@ -43,7 +43,7 @@ export function CodexVoiceSettings({ config, catalog, loading, error, updating, 
         </Text>
         <div className="flex flex-col items-center gap-2">
           <Button
-            className="flex gap-2 text-xs px-2.5 py-2 rounded-2xl glass-card text-primary-800 dark:text-primary-200 min-w-32"
+            className="flex gap-2 text-xs px-2.5 py-2 rounded-2xl button-neutral text-primary-800 dark:text-primary-200 min-w-32"
             disabled={!preview.playingVoice && (!supported || !voicePreviewUrl(voice))}
             aria-label={preview.playingVoice ? "Stop voice preview" : `Preview ${voiceLabel(voice)} voice`}
             onClick={() => { if (preview.playingVoice) preview.stop(); else preview.play(voice); }}

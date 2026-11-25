@@ -254,7 +254,7 @@ function DeviceRow({
  * own section, below "This machine": pairing rides on that exposure — a
  * device needs a LAN or Tailscale address to reach.
  */
-export function DevicePairing({ canPair }: { canPair: boolean }) {
+export function DevicePairing({ canPair, remoteAccess }: { canPair: boolean; remoteAccess: boolean }) {
   const [code, setCode] = useState<PairingCode | null>(null);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [busy, setBusy] = useState<"code" | string | null>(null);
@@ -380,8 +380,11 @@ export function DevicePairing({ canPair }: { canPair: boolean }) {
 
         {!canPair && (
           <Caption tone="warning" className="mt-2 block">
-            Turn on Network access (LAN) or Tailscale HTTPS first — a device
-            cannot reach a loopback-only host.
+            To pair over LAN,{" "}
+            {!remoteAccess && <>turn on <strong>Allow remote access</strong>, then </>}
+            turn on <strong>Network access (LAN)</strong> and select{" "}
+            <strong>Show pairing code</strong>. <strong>Tailscale HTTPS</strong>{" "}
+            also enables pairing.
           </Caption>
         )}
 

@@ -22,6 +22,20 @@ const flightApp = {
 };
 
 describe("McpDisplay", () => {
+  it("keeps an assistant's app usable as a card without the tool header or JSON details", () => {
+    const openTool = vi.fn();
+    const app = { ...flightApp, appName: "Flights" };
+    const output = { structuredContent: { itineraries: [] } };
+    render(createElement(McpAppToolOpenerProvider, { openTool }, createElement(McpDisplay, {
+      displayName: "search_flights", params: { origin: "IST", destination: "TYO" }, output,
+      runId: "run-1", mcpApp: app, presentation: "card",
+    })));
+    expect(screen.queryByText("search_flights")).toBeNull();
+    expect(document.querySelector("pre")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open Flights in app panel" }));
+    expect(openTool).toHaveBeenCalledWith(expect.objectContaining({ app, output, input: { origin: "IST", destination: "TYO" } }));
+  });
+
   it("keeps a background task's placeholder out of its MCP App even after task completion", () => {
     render(createElement(McpDisplay, { displayName: "Export", params: {}, runId: "run-1", mcpApp: flightApp,
       backgroundTask: true, status: "done", output: [{ type: "text", text: "Running in background" }] }));

@@ -1,14 +1,15 @@
 import { getLocalBackendId } from "../../db/backend-identity";
 import { ownedHere, ownershipOf } from "../bridge";
 import { randomUUID } from "crypto";
-import { eq, desc, and, sql, asc, gt, gte, inArray, getTableColumns } from "drizzle-orm";
+import { eq, desc, and, sql, asc, gt, gte, inArray, isNull, getTableColumns } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { safeJsonParse } from "../../db/utils";
 import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload, RunHistoryContentPage, RunHistoryCursor } from "@mains/contracts/runs";
 import { historyEndAfter } from "@mains/contracts/run-history";
 import { historyEntryTurn } from "@mains/contracts/run-progress";
 import { readAsyncQuestions, type AsyncQuestionAnswer } from "@mains/contracts/async-questions";
-import { historyWindow, compareHistoryCursors as compareCursor } from "./run-history";
+import { PLAN_TOOL_NAMES } from "@mains/contracts/plan-decision";
+import { historyWindow, compareHistoryCursors as compareCursor, mobileHistoryLimits } from "./run-history";
 import type { SQLWrapper, SQL } from "drizzle-orm";
 import {
   runs,
@@ -92,6 +93,14 @@ export const runsRepo = {
         text: sql<string>`substr(${runTurnChanges.diffText}, ${offset + 1}, 8192)`,
         totalChars: sql<number>`length(${runTurnChanges.diffText})`,
       }).from(runTurnChanges).where(and(eq(runTurnChanges.runId, request.runId), eq(runTurnChanges.turnId, request.id))).get();
+      return row ? { ...row, offset, nextOffset: offset + 8192 < row.totalChars ? offset + 8192 : null } : null;
+    }
+    if (request.source === "plan") {
+      const row = getDb().select({
+        text: sql<string>`substr(${planBody}, ${offset + 1}, 8192)`,
+        totalChars: sql<number>`length(${planBody})`,
+      }).from(toolCalls).where(and(eq(toolCalls.runId, request.runId), eq(toolCalls.id, request.id),
+        planTool, sql`${planBody} IS NOT NULL`)).get();
       return row ? { ...row, offset, nextOffset: offset + 8192 < row.totalChars ? offset + 8192 : null } : null;
     }
     const column = request.source === "artifact" ? runArtifacts.content
@@ -223,6 +232,7 @@ export const runsRepo = {
           eq(runs.accountId, options.accountId),
           eq(runs.mode, options.mode),
           eq(runs.isArchived, false),
+          sql`${runs.assistantId} IS NULL`,
           options.spaceId ? eq(runs.spaceId, options.spaceId) : undefined,
           options.atlasPageId
             ? sql`json_extract(${runs.configSnapshot}, '$.atlasPageId') = ${options.atlasPageId}`
@@ -285,7 +295,8 @@ export const runsRepo = {
     options: WorkspaceRunListOptions & { includeArchived?: boolean } = {},
   ): Promise<RunResponse[]> {
     const db = getDb();
-    const conditions = [eq(runs.workspaceId, workspaceId)];
+    // Assistant execution may use this repo, while its conversation stays in the assistant surface.
+    const conditions = [eq(runs.workspaceId, workspaceId), isNull(runs.assistantId)];
     if (!options.includeArchived) conditions.push(eq(runs.isArchived, false));
     if (options.providerId) conditions.push(eq(runs.providerId, options.providerId));
     if (options.mode) conditions.push(eq(runs.mode, options.mode));
@@ -304,6 +315,12 @@ export const runsRepo = {
       .from(runs)
       .where(and(ownedHere(runs.ownerBackendId), eq(runs.workspaceId, workspaceId)));
     return rows.map((row) => row.id);
+  },
+
+  async findRunIdsByAssistant(accountId: string, assistantId: string): Promise<string[]> {
+    const rows = await getDb().select({ id: runs.id }).from(runs)
+      .where(and(eq(runs.accountId, accountId), eq(runs.assistantId, assistantId), ownedHere(runs.ownerBackendId)));
+    return rows.map(row => row.id);
   },
 
   async findRunsByStatus(
@@ -337,6 +354,7 @@ export const runsRepo = {
     await db.insert(runs).values({
       ownerBackendId: getLocalBackendId(db),
       id: payload.id,
+      assistantId: payload.assistantId,
       accountId: payload.accountId,
       workspaceId: payload.workspaceId,
       collectionId: payload.collectionId,
@@ -524,6 +542,9 @@ export const runsRepo = {
     return rows[0] ? mapArtifactRowToResponse(rows[0]) : null;
   },
 
+  async findAssistantTaskArtifact(runId: string, assignmentId: string) {
+    return getDb().select({ id: runArtifacts.id }).from(runArtifacts).where(and(eq(runArtifacts.runId, runId), sql`json_extract(${runArtifacts.metadata}, '$.source') = 'assistant_assignment'`, sql`json_extract(${runArtifacts.metadata}, '$.assignmentId') = ${assignmentId}`)).limit(1).get();
+  },
   async findInputArtifact(runId: string, clientUserMessageId: string): Promise<RunArtifactResponse | null> {
     const rows = await getDb().select().from(runArtifacts).where(and(
       eq(runArtifacts.runId, runId),
@@ -915,8 +936,11 @@ const artifactHistoryTime = sql`CASE WHEN json_valid(${runArtifacts.metadata})
   THEN CAST(json_extract(${runArtifacts.metadata}, '$.voiceStartedAt') AS INTEGER)
   ELSE ${runArtifacts.createdAt} * 1000 END`;
 
-const MOBILE_HISTORY_ROWS = 200;
-const MOBILE_HISTORY_BYTES = 1024 * 1024 - 16 * 1024;
+const planTool = inArray(sql`lower(replace(replace(replace(${toolCalls.toolName}, ' ', ''), '_', ''), '-', ''))`, PLAN_TOOL_NAMES);
+const planBody = sql`CASE WHEN json_valid(${toolCalls.input}) THEN
+  CASE WHEN json_type(${toolCalls.input}, '$.plan') = 'text' THEN json_extract(${toolCalls.input}, '$.plan') END END`;
+const mobileToolInput = sql<string | null>`CASE WHEN ${planTool} AND length(${toolCalls.input}) > 16384 AND ${planBody} IS NOT NULL
+  THEN json_object('type', 'mains/deferred-plan', 'preview', substr(${planBody}, 1, 4096)) ELSE ${mobileJson(toolCalls.input)} END`;
 
 /** Bound bodies in SQL, before SQLite materializes them or JSON is parsed. */
 function mobileJson(column: SQLWrapper): SQL<string | null> {
@@ -925,14 +949,27 @@ function mobileJson(column: SQLWrapper): SQL<string | null> {
     ELSE ${column} END`;
 }
 
-function mobileMetadata(column: SQLWrapper): SQL<string | null> {
+function mobileMetadata(column: SQLWrapper, kind?: SQLWrapper): SQL<string | null> {
+  const fileMentions = kind ? sql`'files', CASE WHEN ${kind} = 'user-prompt'
+    AND json_type(${column}, '$.files') = 'array' AND length(json_extract(${column}, '$.files')) <= 8192
+    THEN json_extract(${column}, '$.files') ELSE NULL END,` : sql``;
   return sql`CASE WHEN length(${column}) <= 16384 THEN ${column}
     WHEN json_valid(${column}) THEN json_object(
       'source', substr(json_extract(${column}, '$.source'), 1, 512),
+      'kind', substr(json_extract(${column}, '$.kind'), 1, 512),
+      'streamId', substr(json_extract(${column}, '$.streamId'), 1, 512),
+      'agentId', substr(json_extract(${column}, '$.agentId'), 1, 512),
       'isFromSubagent', json(CASE WHEN json_extract(${column}, '$.isFromSubagent') = 1 THEN 'true' ELSE 'false' END),
+      'parentToolCallId', substr(json_extract(${column}, '$.parentToolCallId'), 1, 512),
       'parentToolUseId', substr(json_extract(${column}, '$.parentToolUseId'), 1, 512),
       'turnId', CASE WHEN json_type(${column}, '$.turnId') = 'integer' THEN json_extract(${column}, '$.turnId') ELSE NULL END,
+      'planStatus', substr(json_extract(${column}, '$.planStatus'), 1, 16),
       'voice', json(CASE WHEN json_extract(${column}, '$.voice') = 1 THEN 'true' ELSE 'false' END),
+      'inputSource', substr(json_extract(${column}, '$.inputSource'), 1, 16),
+      'realtimeSessionId', substr(json_extract(${column}, '$.realtimeSessionId'), 1, 512),
+      'providerTurnId', substr(json_extract(${column}, '$.providerTurnId'), 1, 512),
+      'providerRootTurnId', substr(json_extract(${column}, '$.providerRootTurnId'), 1, 512),
+      ${fileMentions}
       'voiceStartedAt', CASE WHEN json_type(${column}, '$.voiceStartedAt') IN ('integer', 'real')
         THEN json_extract(${column}, '$.voiceStartedAt') ELSE NULL END)
     ELSE NULL END`;
@@ -940,28 +977,23 @@ function mobileMetadata(column: SQLWrapper): SQL<string | null> {
 
 /** A prompt can contain unbounded tools: phone navigation uses chronological rows. */
 function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHistoryPayload): RunHistoryPage {
-  const timeline = sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id FROM run_artifacts WHERE run_id = ${request.runId}
+  const limits = mobileHistoryLimits(request);
+  const allKeys = sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id FROM run_artifacts WHERE run_id = ${request.runId}
     UNION ALL SELECT created_at * 1000 AS timestamp, 'tool' AS source, id FROM tool_calls WHERE run_id = ${request.runId}`;
+  const timeline = request.range ? sql`SELECT * FROM (${allKeys}) WHERE ${mobileKeyCut(request.range.start, false)} AND ${mobileKeyCut(request.range.end, true)}` : allKeys;
   const first = db.get<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) ORDER BY timestamp, source, id LIMIT 1`);
   const last = db.get<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) ORDER BY timestamp DESC, source DESC, id DESC LIMIT 1`);
   const newer = request.direction === "newer";
   const lower = newer || request.direction === "refresh" ? request.cursor : undefined;
-  const upper = request.direction === "older" ? request.cursor : request.direction === "refresh" ? request.end : undefined;
-  const time = sql`timestamp`, id = sql`id`;
-  const keyCut = (cursor: RunHistoryCursor, before: boolean) => {
-    const rank = Number(cursor.source === "tool");
-    const currentRank = sql`CASE source WHEN 'tool' THEN 1 ELSE 0 END`;
-    return before
-      ? sql`(${time} < ${cursor.timestamp} OR (${time} = ${cursor.timestamp} AND (${currentRank} < ${rank} OR (${currentRank} = ${rank} AND ${id} < ${cursor.id}))))`
-      : sql`(${time} > ${cursor.timestamp} OR (${time} = ${cursor.timestamp} AND (${currentRank} > ${rank} OR (${currentRank} = ${rank} AND ${id} >= ${cursor.id}))))`;
-  };
+  const upper = request.direction === "older" ? request.cursor : request.direction === "refresh" || newer ? request.end : undefined;
   const order = newer ? sql`timestamp, source, id` : sql`timestamp DESC, source DESC, id DESC`;
-  const keys = db.all<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) WHERE ${and(
-    lower ? keyCut(lower, false) : undefined, upper ? keyCut(upper, true) : undefined,
-  ) ?? sql`1 = 1`} ORDER BY ${order} LIMIT ${MOBILE_HISTORY_ROWS}`);
+  const conversation = request.conversationWindow ? mobileConversationKeys(db, request, limits.rows, first, last) : undefined;
+  const keys = conversation?.keys ?? db.all<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) WHERE ${and(
+    lower ? mobileKeyCut(lower, false) : undefined, upper ? mobileKeyCut(upper, true) : undefined,
+  ) ?? sql`1 = 1`} ORDER BY ${order} LIMIT ${limits.rows}`);
   const artifactIds = keys.filter((key) => key.source === "artifact").map((key) => key.id);
   const toolIds = keys.filter((key) => key.source === "tool").map((key) => key.id);
-  const metadata = mobileMetadata(runArtifacts.metadata);
+  const metadata = mobileMetadata(runArtifacts.metadata, runArtifacts.kind);
   const artifacts = artifactIds.length ? db.select({ ...getTableColumns(runArtifacts),
     blobData: sql<Buffer | null>`NULL`, path: sql<string | null>`substr(${runArtifacts.path}, 1, 8192)`,
     content: sql<string | null>`substr(${runArtifacts.content}, 1, 8192)`,
@@ -969,7 +1001,7 @@ function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHis
       THEN json_set(CASE WHEN json_valid(${metadata}) THEN ${metadata} ELSE '{}' END,
         '$.mobileContentDeferred', json_object('chars', length(${runArtifacts.content}))) ELSE ${metadata} END`,
   }).from(runArtifacts).where(and(eq(runArtifacts.runId, request.runId), inArray(runArtifacts.id, artifactIds))).all().map(mapArtifactRowToResponse) : [];
-  const calls = toolIds.length ? db.select({ ...getTableColumns(toolCalls), input: mobileJson(toolCalls.input),
+  const calls = toolIds.length ? db.select({ ...getTableColumns(toolCalls), input: mobileToolInput,
     output: mobileJson(toolCalls.output), metadata: mobileMetadata(toolCalls.metadata),
     error: sql<string | null>`substr(${toolCalls.error}, 1, 8192)`,
     toolName: sql<string>`substr(${toolCalls.toolName}, 1, 512)`,
@@ -984,6 +1016,7 @@ function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHis
     first: Math.min(...keys.map((key) => key.timestamp)),
     last: Math.max(...keys.map((key) => key.timestamp)),
     ids: explicitTurnIds,
+    limit: limits.rows + 1,
   }) : [];
   if (latestTurn && !turns.some((turn) => turn.id === latestTurn.id)) turns.push(latestTurn);
   const retainedTurns = new Map<number, RunTurnResponse>(latestTurn ? [[latestTurn.id, latestTurn]] : []);
@@ -992,37 +1025,133 @@ function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHis
   let bytes = latestTurn ? Buffer.byteLength(JSON.stringify(latestTurn)) : 0;
   const kept: RunHistoryCursor[] = [];
   for (const key of keys) {
-    const row = byKey.get(`${key.source}:${key.id}`)!;
+    const row = byKey.get(`${key.source}:${key.id}`);
+    if (!row) continue;
     const turn = historyEntryTurn(turns, key.timestamp,
       typeof row.metadata?.turnId === "number" ? row.metadata.turnId : undefined);
     const turnBytes = turn && !retainedTurns.has(turn.id) ? Buffer.byteLength(JSON.stringify(turn)) : 0;
     const size = Buffer.byteLength(JSON.stringify(row)) + turnBytes;
-    if (bytes + size > MOBILE_HISTORY_BYTES) break;
+    if (bytes + size > limits.bytes - 16 * 1024) { if (conversation) continue; break; }
     bytes += size;
     if (turn) retainedTurns.set(turn.id, turn);
     kept.push(key);
   }
-  if (newer) kept.sort(compareCursor);
+  if (newer || conversation) kept.sort(compareCursor);
   else kept.reverse();
   const keep = new Set(kept.map((key) => `${key.source}:${key.id}`));
-  const start = kept[0] ?? null;
-  const end = newer && kept.length && last && compareCursor(kept.at(-1)!, last) < 0
-    ? historyEndAfter(kept.at(-1)!) : upper ?? null;
-  return { artifacts: artifacts.filter((row) => keep.has(`artifact:${row.id}`)),
-    toolCalls: calls.filter((row) => keep.has(`tool:${row.id}`)), turns: [...retainedTurns.values()].sort((a, b) => a.turnIndex - b.turnIndex), start, end, last: last ?? null,
+  const keyByID = new Map(keys.map(key => [`${key.source}:${key.id}`, key]));
+  const chronological = (source: "artifact" | "tool") => (a: { id: number }, b: { id: number }) =>
+    compareCursor(keyByID.get(`${source}:${a.id}`)!, keyByID.get(`${source}:${b.id}`)!);
+  const retainedArtifacts = artifacts.filter(row => keep.has(`artifact:${row.id}`)).sort(chronological("artifact"));
+  const retainedCalls = calls.filter(row => keep.has(`tool:${row.id}`)).sort(chronological("tool"));
+  const omittedCount = conversation ? Math.max(0, conversation.total - retainedCalls.length - retainedArtifacts.filter(mobileActivityArtifact).length) : 0;
+  const start = conversation?.start ?? kept[0] ?? null;
+  const end = conversation ? conversation.end : newer && kept.length && last && compareCursor(kept.at(-1)!, last) < 0
+    ? historyEndAfter(kept.at(-1)!) : upper ?? request.range?.end ?? null;
+  return { artifacts: retainedArtifacts,
+    toolCalls: retainedCalls, turns: [...retainedTurns.values()].sort((a, b) => a.turnIndex - b.turnIndex), start, end, last: last ?? null,
     hasOlder: !!(first && start && compareCursor(first, start) < 0),
-    hasNewer: !!(last && end && compareCursor(last, end) >= 0) };
+    hasNewer: !!(last && end && compareCursor(last, end) >= 0),
+    ...(omittedCount > 0 && start && last ? { activity: {
+      start, end: end ?? historyEndAfter(last), omittedCount,
+    } } : {}),
+  };
+}
+
+function mobileKeyCut(cursor: RunHistoryCursor, before: boolean): SQL {
+  const rank = Number(cursor.source === "tool"), currentRank = sql`CASE source WHEN 'tool' THEN 1 ELSE 0 END`;
+  return before
+    ? sql`(timestamp < ${cursor.timestamp} OR (timestamp = ${cursor.timestamp} AND (${currentRank} < ${rank} OR (${currentRank} = ${rank} AND id < ${cursor.id}))))`
+    : sql`(timestamp > ${cursor.timestamp} OR (timestamp = ${cursor.timestamp} AND (${currentRank} > ${rank} OR (${currentRank} = ${rank} AND id >= ${cursor.id}))))`;
+}
+
+function mobileActivityArtifact(row: RunArtifactResponse): boolean {
+  const meta = row.metadata ?? {};
+  return String(row.kind) !== "thinking" && meta.kind !== "thinking"
+    && !["agent_thinking_streaming", "assistant.reasoning_delta"].includes(String(meta.source))
+    && (["user-prompt", "report", "result", "command_result", "file", "document", "image", "visualization", "async_questions"].includes(row.kind)
+      || row.kind === "log" && meta.level === "error");
+}
+
+/** Select keys first: hidden child activity can never evict the conversation's prompts/replies. */
+function mobileConversationKeys(db: ReturnType<typeof getDb>, request: ReadRunHistoryPayload, rowLimit: number, first?: RunHistoryCursor, last?: RunHistoryCursor) {
+  const metadata = sql`CASE WHEN json_valid(${runArtifacts.metadata}) THEN ${runArtifacts.metadata} ELSE '{}' END`;
+  const foreground = sql`coalesce(json_extract(${metadata}, '$.isFromSubagent'), 0) <> 1
+    AND json_extract(${metadata}, '$.agentId') IS NULL
+    AND json_extract(${metadata}, '$.parentToolCallId') IS NULL AND json_extract(${metadata}, '$.parentToolUseId') IS NULL`;
+  const detail = sql`kind <> 'thinking'
+    AND coalesce(json_extract(${metadata}, '$.kind'), '') <> 'thinking'
+    AND coalesce(json_extract(${metadata}, '$.source'), '') NOT IN ('agent_thinking_streaming', 'assistant.reasoning_delta')
+    AND (kind IN ('user-prompt', 'report', 'result', 'command_result', 'file', 'document', 'image', 'visualization', 'async_questions')
+      OR (kind = 'log' AND json_extract(${metadata}, '$.level') = 'error'))`;
+  const visible = sql`${foreground} AND ${detail}`;
+  const anchors = db.all<RunHistoryCursor>(sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id
+    FROM run_artifacts WHERE run_id = ${request.runId} AND kind = 'user-prompt' AND ${foreground} ORDER BY timestamp, id`);
+  if (first && (!anchors[0] || compareCursor(first, anchors[0]) < 0)) anchors.unshift(first);
+  const range = historyWindow(anchors, request);
+  if (!range.start || !last) return { ...range, keys: [], total: 0 };
+  const start = range.start;
+  const artifactKeys = (from: RunHistoryCursor, to: RunHistoryCursor | null, extra: SQL, limit: number) => db.all<RunHistoryCursor>(sql`
+    SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id FROM run_artifacts
+    WHERE run_id = ${request.runId} AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, from, false)}
+      ${to ? sql`AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, to, true)}` : sql``} AND ${extra}
+    ORDER BY timestamp DESC, id DESC LIMIT ${limit}`);
+  const dialogue = sql`kind IN ('user-prompt', 'report', 'result', 'command_result')`;
+  const latestPrompt = artifactKeys(start, range.end, sql`kind = 'user-prompt' AND ${foreground}`, 1);
+  const messages = artifactKeys(start, range.end, sql`${visible} AND ${dialogue}`, rowLimit);
+  const otherVisible = artifactKeys(start, range.end, sql`${visible} AND NOT ${dialogue}`, rowLimit);
+  const toolsInWindow = sql`SELECT created_at * 1000 AS timestamp, 'tool' AS source, id FROM tool_calls
+    WHERE run_id = ${request.runId} AND ${historyCut(sql`created_at * 1000`, "tool", toolCalls.id, start, false)}
+    ${range.end ? sql`AND ${historyCut(sql`created_at * 1000`, "tool", toolCalls.id, range.end, true)}` : sql``}`;
+  const plans = db.all<RunHistoryCursor>(sql`${toolsInWindow} AND ${planTool} AND parent_tool_call_id IS NULL
+    AND coalesce(json_extract(CASE WHEN json_valid(${toolCalls.metadata}) THEN ${toolCalls.metadata} ELSE '{}' END, '$.isFromSubagent'), 0) <> 1
+    ORDER BY timestamp DESC, id DESC LIMIT 20`);
+  const calls = db.all<RunHistoryCursor>(sql`${toolsInWindow}
+    ORDER BY CASE WHEN parent_tool_call_id IS NULL THEN 0 ELSE 1 END, timestamp DESC, id DESC LIMIT ${rowLimit}`);
+  const other = artifactKeys(start, range.end, sql`1 = 1`, 4);
+  const questions = artifactKeys(start, range.end, sql`${foreground} AND json_extract(${metadata}, '$.source') = 'codex_async_questions'`, 1);
+  const thinking = artifactKeys(start, range.end, sql`${foreground} AND (kind = 'thinking' OR json_extract(${metadata}, '$.kind') = 'thinking'
+    OR json_extract(${metadata}, '$.source') IN ('agent_thinking_streaming', 'assistant.reasoning_delta'))`, 1);
+  const cursor = request.cursor;
+  // A search result can be deleted before it opens; never inject a foreign or nonexistent row key.
+  const focus = cursor && compareCursor(cursor, start) >= 0 && (!range.end || compareCursor(cursor, range.end) < 0)
+    ? cursor.source === "artifact"
+      ? db.get<RunHistoryCursor>(sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id FROM run_artifacts
+          WHERE run_id = ${request.runId} AND id = ${cursor.id} AND ${artifactHistoryTime} = ${cursor.timestamp}`)
+      : db.get<RunHistoryCursor>(sql`SELECT created_at * 1000 AS timestamp, 'tool' AS source, id FROM tool_calls
+          WHERE run_id = ${request.runId} AND id = ${cursor.id} AND created_at * 1000 = ${cursor.timestamp}`)
+    : undefined;
+  const ordered: RunHistoryCursor[] = focus ? [focus] : [];
+  // Keep the newest prompt with its dialogue. Budget messages newest-first, then
+  // sort the retained rows chronologically for display.
+  ordered.push(...questions, ...latestPrompt, ...thinking, ...messages, ...plans, ...otherVisible, ...calls, ...other);
+  const unique = new Map<string, RunHistoryCursor>();
+  for (const key of ordered) {
+    if (unique.size === rowLimit) break;
+    unique.set(`${key.source}:${key.id}`, key);
+  }
+  const counts = db.get<{ total: number }>(sql`SELECT (
+    SELECT count(*) FROM run_artifacts WHERE run_id = ${request.runId} AND ${detail} AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, start, false)}
+      ${range.end ? sql`AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, range.end, true)}` : sql``}) + (
+    SELECT count(*) FROM tool_calls WHERE run_id = ${request.runId} AND ${historyCut(sql`created_at * 1000`, "tool", toolCalls.id, start, false)}
+      ${range.end ? sql`AND ${historyCut(sql`created_at * 1000`, "tool", toolCalls.id, range.end, true)}` : sql``}) AS total`);
+  return { ...range, keys: [...unique.values()], total: counts?.total ?? 0 };
 }
 
 /** Only compact progress and file summaries enter a phone page; patches stay in SQLite. */
-function selectMobileTurns(runId: string, range?: { first: number; last: number; ids: number[] }, latest = false): RunTurnResponse[] {
+function selectMobileTurns(runId: string, range?: { first: number; last: number; ids: number[]; limit: number }, latest = false): RunTurnResponse[] {
   const time = sql`coalesce(${runTurns.startedAt}, ${runTurns.createdAt}) * 1000`;
   const rows = getDb().select({
     turn: { ...getTableColumns(runTurns),
       promptContent: sql<string | null>`NULL`, responseContent: sql<string | null>`NULL`, modelUsage: sql<string | null>`NULL`,
-      metadata: sql<string | null>`CASE WHEN json_valid(${runTurns.metadata})
-        AND length(json_extract(${runTurns.metadata}, '$.codexPlan')) <= 16384
-        THEN json_object('codexPlan', json_extract(${runTurns.metadata}, '$.codexPlan')) ELSE NULL END`,
+      metadata: sql<string | null>`CASE WHEN json_valid(${runTurns.metadata}) THEN
+        json_patch(CASE WHEN length(json_extract(${runTurns.metadata}, '$.codexPlan')) <= 16384
+          THEN json_object('codexPlan', json_extract(${runTurns.metadata}, '$.codexPlan')) ELSE '{}' END,
+        CASE WHEN json_extract(${runTurns.metadata}, '$.inputSource') IN ('voice', 'text') THEN json_object(
+          'inputSource', json_extract(${runTurns.metadata}, '$.inputSource'),
+          'providerTurnId', substr(json_extract(${runTurns.metadata}, '$.providerTurnId'), 1, 512),
+          'realtimeSessionId', substr(json_extract(${runTurns.metadata}, '$.realtimeSessionId'), 1, 512)) ELSE '{}' END)
+        ELSE NULL END`,
     },
     changes: { id: runTurnChanges.id,
       filesJson: sql<string>`CASE WHEN length(${runTurnChanges.filesJson}) <= 8192 THEN ${runTurnChanges.filesJson} ELSE '[]' END`,
@@ -1038,7 +1167,7 @@ function selectMobileTurns(runId: string, range?: { first: number; last: number;
       ${range.ids.length ? sql`OR ${inArray(runTurns.id, range.ids)}` : sql``}
     )` : undefined))
     .orderBy(latest ? desc(runTurns.turnIndex) : asc(runTurns.turnIndex))
-    .limit(latest ? 1 : MOBILE_HISTORY_ROWS + 1).all();
+    .limit(range?.limit ?? 1).all();
   return rows.map((row) => mapTurnRowToResponse(row.turn, row.changes?.id
     ? { ...mapTurnChangesSummary(row.changes), fileCount: row.fileCount } : null));
 }
@@ -1069,6 +1198,7 @@ function mapRunRowToResponse(row: typeof runs.$inferSelect): RunResponse {
   return {
     ...ownershipOf(row.ownerBackendId),
     id: row.id,
+    assistantId: row.assistantId,
     accountId: row.accountId,
     workspaceId: row.workspaceId,
     collectionId: row.collectionId,

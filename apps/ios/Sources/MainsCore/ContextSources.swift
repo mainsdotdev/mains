@@ -1,5 +1,40 @@
 import Foundation
 
+public struct WorkspaceFileMatch: Codable, Hashable, Identifiable, Sendable {
+    public enum Kind: String, Codable, Sendable { case file, directory }
+
+    public let path: String
+    public let kind: Kind
+    public var id: String { path }
+    public var name: String { path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? path }
+
+    public init?(path: String, kind: Kind = .file) {
+        guard Self.validTokenPath(path), !path.contains("\\"),
+              path.range(of: #"^[A-Za-z]:"#, options: .regularExpression) == nil,
+              path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { return nil }
+        self.init(tokenPath: path, kind: kind)
+    }
+
+    private init(tokenPath: String, kind: Kind) { path = tokenPath; self.kind = kind }
+
+    private static func validTokenPath(_ path: String) -> Bool {
+        !path.isEmpty && path.utf16.count <= 4096 && path.range(of: #"[\p{Cc}\u2063\u2064\uFFFC]"#, options: .regularExpression) == nil
+    }
+
+    static func read(_ value: JSONValue, history: Bool = false) -> Self? {
+        guard let path = value["path"].string else { return nil }
+        let type = value["type"]
+        guard let kind = type == .null ? .file : Kind(rawValue: type.string ?? "") else { return nil }
+        if let relative = Self(path: path, kind: kind) { return relative }
+        // Desktop prompts may store absolute paths. Only use them to match the saved text.
+        guard history, validTokenPath(path),
+              path.range(of: #"^(?:/|[A-Za-z]:[/\\]|\\\\).+"#, options: .regularExpression) != nil else { return nil }
+        return Self(tokenPath: path, kind: kind)
+    }
+
+    var wire: JSONValue { .object(["path": .string(path), "type": .string(kind.rawValue)]) }
+}
+
 /// Device-safe catalogue metadata. Paths refer to the computer and are never opened by the phone.
 public struct ContextSkill: Codable, Hashable, Identifiable, Sendable {
     public let name: String
@@ -13,16 +48,26 @@ public struct ContextSkill: Codable, Hashable, Identifiable, Sendable {
     public var iconLarge: String?
     public var brandColor: String?
     public var scope: String?
+    public private(set) var mateID: String?
+    public private(set) var mateProviderID: String?
+    public private(set) var mateAvatar: MateAvatar?
+    public private(set) var workspaceFile: WorkspaceFileMatch?
     public var id: String { name }
     public var title: String { displayName.flatMap { $0.isEmpty ? nil : $0 } ?? name }
+    public var mentionTitle: String { mateID != nil && title.hasPrefix("@") ? String(title.dropFirst()) : title }
     public var detail: String? {
-        [shortDescription, description].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
+        if let path = workspaceFile?.path { return path == title ? nil : path }
+        return [shortDescription, description].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
     }
     public var group: String {
-        switch scope?.lowercased() { case "plugin": "Plugins"; case "mac", "mac_app", "computer": "Mac apps"; default: "Skills" }
+        if mateID != nil { return "Mates" }
+        if workspaceFile != nil { return "Files" }
+        return switch scope?.lowercased() { case "plugin": "Plugins"; case "mac", "mac_app", "computer": "Mac apps"; default: "Skills" }
     }
     public var badge: String {
-        switch scope?.lowercased() {
+        if mateID != nil { return "Mate" }
+        if let workspaceFile { return workspaceFile.kind == .directory ? "Folder" : "File" }
+        return switch scope?.lowercased() {
         case "user": "User"
         case "project", "repo": "Project"
         case "system": "System"
@@ -33,6 +78,29 @@ public struct ContextSkill: Codable, Hashable, Identifiable, Sendable {
     }
     public init(name: String, displayName: String? = nil, description: String? = nil, scope: String? = nil, path: String? = nil) {
         self.name = name; self.displayName = displayName; self.description = description; self.scope = scope; self.path = path
+    }
+    public static func mate(id: String, name: String, description: String? = nil, providerID: String? = nil, avatar: MateAvatar? = nil) -> Self {
+        var selection = Self(name: "assistant-" + id, displayName: "@" + name, description: description)
+        selection.mateID = id
+        selection.mateProviderID = providerID
+        selection.mateAvatar = avatar
+        return selection
+    }
+    public static func workspaceFile(_ file: WorkspaceFileMatch) -> Self {
+        var selection = Self(name: "workspace-file:" + file.path, displayName: file.name)
+        selection.workspaceFile = file
+        return selection
+    }
+    var wireToken: String {
+        if let workspaceFile { return "@" + workspaceFile.path }
+        return (mateID == nil ? "$" : "@") + name
+    }
+    var mateContext: JSONValue? {
+        guard let mateID else { return nil }
+        return .object(["kind": .string("note"), "metadata": .object([
+            "source": .string("assistant_mention"), "assistantId": .string(mateID), "requestId": .string(mateID),
+            "token": .string(wireToken), "name": .string(mentionTitle),
+        ])])
     }
     public init(from decoder: Decoder) throws {
         let v = try JSONValue(from: decoder)
@@ -127,17 +195,28 @@ public struct ContextTriggerMatch: Equatable, Sendable {
 
 public enum ContextMentions {
     public static let marker = "\u{2063}"
+    private static let fileMarker = "\u{2064}"
+
+    public static func strippingMarkers(_ text: String) -> String {
+        text.replacingOccurrences(of: marker, with: "").replacingOccurrences(of: fileMarker, with: "")
+    }
+
     public static func detect(_ text: String) -> ContextTriggerMatch? {
         guard let range = text.range(of: #"(?:^|\s)[/@$]\S*$"#, options: .regularExpression) else { return nil }
         let token = text[range].drop(while: { $0.isWhitespace })
-        guard let start = token.startIndex.samePosition(in: text), let first = token.first else { return nil }
+        guard !token.contains(marker), !token.contains(fileMarker),
+              let start = token.startIndex.samePosition(in: text), let first = token.first else { return nil }
         return ContextTriggerMatch(trigger: String(first), filter: String(token.dropFirst()), range: start..<text.endIndex)
     }
     public static func replacingTrigger(in text: String, with replacement: String) -> String {
         if let match = detect(text) { return String(text[..<match.range.lowerBound]) + (replacement.isEmpty ? "" : replacement + " ") }
         return text + (text.isEmpty || text.last?.isWhitespace == true ? "" : " ") + replacement + " "
     }
-    public static func mention(_ skill: ContextSkill) -> String { skill.title + marker }
+    public static func mention(_ skill: ContextSkill) -> String {
+        if let file = skill.workspaceFile { return fileMarker + file.path + fileMarker }
+        if let id = skill.mateID { return skill.title + marker + id + marker }
+        return skill.title + marker
+    }
     public static func attached(in text: String, skills: [ContextSkill]) -> [ContextSkill] {
         skills.filter { text.contains(mention($0)) }
     }
@@ -146,17 +225,18 @@ public enum ContextMentions {
     }
     public static func goal(_ text: String, skills: [ContextSkill]) -> String {
         var result = text
-        for skill in skills { result = result.replacingOccurrences(of: mention(skill), with: "$" + skill.name) }
-        return result.replacingOccurrences(of: marker, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        for skill in skills { result = result.replacingOccurrences(of: mention(skill), with: skill.wireToken) }
+        return strippingMarkers(result).trimmingCharacters(in: .whitespacesAndNewlines)
     }
     public static func display(_ text: String, skills: [ContextSkill]) -> String {
         var result = text
         for skill in skills.sorted(by: { $0.name.count > $1.name.count }) {
-            let pattern = #"\$"# + NSRegularExpression.escapedPattern(for: skill.name) + #"(?![\w/-])"#
+            if skill.workspaceFile != nil { result = result.replacingOccurrences(of: mention(skill), with: skill.title) }
+            let pattern = NSRegularExpression.escapedPattern(for: skill.wireToken) + #"(?![\w/-])"#
             if let expression = try? NSRegularExpression(pattern: pattern) {
                 result = expression.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: NSRegularExpression.escapedTemplate(for: skill.title))
             }
         }
-        return result.replacingOccurrences(of: marker, with: "")
+        return strippingMarkers(result)
     }
 }

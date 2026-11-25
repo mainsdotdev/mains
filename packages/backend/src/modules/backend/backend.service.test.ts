@@ -119,6 +119,14 @@ describe("backendService", () => {
       expect(descriptor.capabilities).toEqual([]);
     });
 
+    it("advertises the mobile goal summary when the reader is registered", async () => {
+      registerHandler("providers:getMobileGoalSummary", async () => ok(null));
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).toContain("mobileGoalSummary");
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).not.toContain("mobileGoalControls");
+      registerHandler("providers:changeMobileGoal", async () => ok({ applied: true }));
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).toContain("mobileGoalControls");
+    });
+
     it("shows a paired device only the namespaces it may reach", async () => {
       registerHandler("runs:getAll", async () => ok([]));
       registerHandler("runs:execute", async () => ok(null));
@@ -134,6 +142,13 @@ describe("backendService", () => {
         (await backendService.describe({ pairedDevice: true })).capabilities,
       ).toEqual(["runs"]);
     });
+
+    it("advertises only the narrow workspace file search to paired devices", async () => {
+      registerHandler("fileExplorer:searchFiles", async () => ok([]));
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).toEqual([]);
+      registerHandler("search:workspaceFiles", async () => ok([]));
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).toEqual(["search", "workspaceFileSearch"]);
+    });
   });
 
   describe("PAIRED_DEVICE_CHANNELS", () => {
@@ -147,7 +162,21 @@ describe("backendService", () => {
         );
       }
       expect(PAIRED_DEVICE_CHANNELS.has("backend:describe")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("atlas:readMobileBookmark")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("atlas:mobileTrash")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("atlas:mobileTags")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("atlas:readMobileTags")).toBe(true);
+      for (const channel of ["atlas:mobileLibrary", "atlas:readMobilePage", "atlas:readMobilePageCover", "atlas:readMobilePageImage", "atlas:describeMobileFile", "atlas:readMobileSaveStatus", "atlas:readMobileFile", "atlas:readMobileImage"]) expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(true);
+      for (const channel of ["atlas:library", "atlas:get", "atlas:resolveFile", "atlas:update", "atlas:savePage", "atlas:remove", "atlas:setTags", "atlas:listTags", "atlas:renameTag", "atlas:removeTag"]) expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(false);
+      expect(PAIRED_DEVICE_CHANNELS.has("search:conversations")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("search:query")).toBe(false);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:getAll")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("providers:getMobileGoalSummary")).toBe(true);
+      for (const channel of ["providers:getGoal", "providers:setGoal", "providers:clearGoal"]) {
+        expect(PAIRED_DEVICE_CHANNELS.has(channel) || PAIRED_DEVICE_COMMANDS.has(channel)).toBe(false);
+      }
+      expect(PAIRED_DEVICE_CHANNELS.has("runs:getQueue")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("runs:publishQueue")).toBe(false);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:readTextFile")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("runArtifacts:readAttachmentFile")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("runArtifacts:describeAttachmentFile")).toBe(true);
@@ -158,14 +187,37 @@ describe("backendService", () => {
   describe("PAIRED_DEVICE_COMMANDS", () => {
     it("is exactly the control loop's verbs plus the picker writes, disjoint from the read list", () => {
       expect([...PAIRED_DEVICE_COMMANDS].sort()).toEqual([
+        "assistants:create",
+        "assistants:createTeam",
+        "assistants:mobileManage",
+        "assistants:prepareWelcome",
+        "assistants:respondWelcome",
+        "assistants:send",
+        "assistants:setupProfile",
+        "atlas:deleteMobileTrash",
+        "atlas:editMobileBookmark",
+        "atlas:saveMobileBookmark",
+        "atlas:saveMobileFile",
+        "atlas:setMobileTags",
+        "atlas:setMobileTrash",
+        "atlas:updateMobileItem",
+        "providers:changeMobileGoal",
         "providers:updateRunSettings",
         "runs:abort",
         "runs:answerAsyncQuestions",
+        "runs:archive",
         "runs:continue",
+        "runs:createRealtimeConversation",
+        "runs:decidePlan",
+        "runs:delete",
         "runs:dismissAsyncQuestions",
         "runs:execute",
         "runs:fork",
+        "runs:inputStatus",
+        "runs:moveToCollection",
+        "runs:startRealtime",
         "runs:steer",
+        "runs:stopRealtime",
         "runs:toolApprovalResponse",
         "runs:updateConversationSettings",
         "space:update",
@@ -174,6 +226,8 @@ describe("backendService", () => {
         expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(false);
       }
       expect(PAIRED_DEVICE_COMMANDS.has("runs:update")).toBe(false);
+      expect(PAIRED_DEVICE_COMMANDS.has("runs:publishQueue")).toBe(false);
+      expect(PAIRED_DEVICE_COMMANDS.has("atlas:remove")).toBe(false);
     });
 
     it("counts toward a paired device's capabilities", async () => {
@@ -182,6 +236,8 @@ describe("backendService", () => {
       expect(
         (await backendService.describe({ pairedDevice: true })).capabilities,
       ).toEqual(["runs"]);
+      registerHandler("runs:decidePlan", async () => ok({ status: "dismissed" }));
+      expect((await backendService.describe({ pairedDevice: true })).capabilities).toEqual(["mobilePlanDecision", "runs"]);
     });
   });
 
@@ -455,11 +511,16 @@ describe("backendService", () => {
 describe("PAIRED_DEVICE_EVENTS", () => {
   it("is exactly the pushes the phone subscribes to", () => {
     expect([...PAIRED_DEVICE_EVENTS].sort()).toEqual([
+      "assistants:changed",
+      "atlas:changed",
+      "providers:mobileGoalChanged",
       "providers:modelsUpdated",
       "providers:skillsUpdated",
       "runs:diffUpdated",
       "runs:ephemeralEvent",
       "runs:eventPersisted",
+      "runs:queueChanged",
+      "runs:realtimeEvent",
       "runs:statusChanged",
       "runs:toolApprovalRequest",
       "runs:toolApprovalResolved",

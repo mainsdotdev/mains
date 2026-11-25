@@ -18,13 +18,7 @@ import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
 import { DIFF_TYPOGRAPHY_STYLE, patchDiffOptions } from "@/lib/diff-style";
 import { useDiffHighlighterReady } from "@/lib/diff-highlighter";
 import { Button, Text } from "@/components/ui";
-import type { FindingSeverity } from "@/lib/redux/api";
-import {
-  asFindingSeverity,
-  SEVERITY_HEX_LIGHT,
-  SEVERITY_HEX_DARK,
-  type SeverityHex,
-} from "../lib/severity";
+import { FindingSeverityBadge } from "./finding-severity-badge";
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
 
@@ -102,7 +96,6 @@ interface DiffViewerProps {
 // ── FindingAnnotation (module-scope) ─────────────────────
 
 interface FindingAnnotationOptions {
-  colors: Record<FindingSeverity, SeverityHex>;
   textColor: string;
   mutedColor: string;
   suggestionColor: string;
@@ -110,62 +103,52 @@ interface FindingAnnotationOptions {
   onFix: (finding: Finding) => void;
 }
 
-function makeFindingAnnotation({ colors, textColor, mutedColor, suggestionColor, onApprove, onFix }: FindingAnnotationOptions) {
+function makeFindingAnnotation({ textColor, mutedColor, suggestionColor, onApprove, onFix }: FindingAnnotationOptions) {
   return function FindingAnnotation({ metadata }: DiffLineAnnotation<FindingMeta>) {
     const { findings } = metadata!;
 
     return (
       <div className="finding-annotation" style={findings.length === 0 ? { display: "none" } : undefined}>
-        {findings.map((f) => {
-          const sev = asFindingSeverity(f.severity);
-          const c = colors[sev];
-          return (
-            <div
-              key={`${sev}-${f.lineStart}-${f.message}`}
-              className="finding-card py-2 my-2 mx-2 border-b last:border-b-0 dark:border-primary/10 border-primary/20"
-              style={{ backgroundColor: c.line }}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1 min-w-0">
-                  <span
-                    className="px-1 py-0.5 text-xxs rounded-sm capitalize mr-2"
-                    style={{ backgroundColor: c.pillBg, color: c.pill }}
-                  >
-                    {sev}
-                  </span>
-                  <span className="finding-message" style={{ color: textColor }}>
-                    {f.message}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <Button
-                    onClick={() => onApprove(f.id)}
-                    className="px-2 cursor-pointer py-0.5 text-xxs rounded-sm font-medium transition-colors bg-success/10 text-success"
-                  >
-                    ✓ Approve
-                  </Button>
-                  <Button
-                    onClick={() => onFix(f)}
-                    className="px-2 cursor-pointer py-0.5 text-xxs rounded-sm font-medium transition-colors bg-accent/10 text-accent"
-                  >
-                    Fix
-                  </Button>
-                </div>
+        {findings.map((f) => (
+          <div
+            key={f.id}
+            className="finding-card mx-2 my-2 border-b border-primary/20 bg-primary-100 py-2 last:border-b-0 dark:border-primary/10 dark:bg-primary/5"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex-1 min-w-0">
+                <span className="mr-2 inline-block"><FindingSeverityBadge severity={f.severity} /></span>
+                <span className="finding-message" style={{ color: textColor }}>
+                  {f.message}
+                </span>
               </div>
-              {f.reason && (
-                <p className="finding-reason" style={{ color: mutedColor }}>
-                  {f.reason}
-                </p>
-              )}
-              {f.suggestion && (
-                <p className="mt-2" style={{ color: suggestionColor }}>
-                  <span className="">Suggestion: </span>
-                  {f.suggestion}
-                </p>
-              )}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <Button
+                  onClick={() => onApprove(f.id)}
+                  className="px-2 cursor-pointer py-0.5 text-xxs rounded-sm font-medium transition-colors bg-success/10 text-success"
+                >
+                  ✓ Approve
+                </Button>
+                <Button
+                  onClick={() => onFix(f)}
+                  className="px-2 cursor-pointer py-0.5 text-xxs rounded-sm font-medium transition-colors bg-accent/10 text-accent"
+                >
+                  Fix
+                </Button>
+              </div>
             </div>
-          );
-        })}
+            {f.reason && (
+              <p className="finding-reason" style={{ color: mutedColor }}>
+                {f.reason}
+              </p>
+            )}
+            {f.suggestion && (
+              <p className="mt-2" style={{ color: suggestionColor }}>
+                <span className="">Suggestion: </span>
+                {f.suggestion}
+              </p>
+            )}
+          </div>
+        ))}
       </div>
     );
   };
@@ -193,7 +176,7 @@ export function DiffViewer({
     { skip: !workspaceId },
   );
 
-  const { data: workspace } = useGetWorkspaceQuery(workspaceId!, { skip: !workspaceId });
+  const { currentData: workspace } = useGetWorkspaceQuery(workspaceId!, { skip: !workspaceId });
 
   const fileFindings = useMemo(() => {
     if (!allFindings || !filePath) return [];
@@ -270,7 +253,6 @@ export function DiffViewer({
     return annotations;
   }, [fileFindings]);
 
-  const colors = isDarkMode ? SEVERITY_HEX_DARK : SEVERITY_HEX_LIGHT;
   const textColor = isDarkMode ? "#fff" : "#1c1917";
   const mutedColor = isDarkMode ? "#dad8ce" : "#78716c";
   const suggestionColor = isDarkMode ? "#86efac" : "#16a34a";
@@ -301,8 +283,8 @@ export function DiffViewer({
   );
 
   const renderAnnotation = useMemo(
-    () => makeFindingAnnotation({ colors, textColor, mutedColor, suggestionColor, onApprove: handleApprove, onFix: handleFix }),
-    [colors, textColor, mutedColor, suggestionColor, handleApprove, handleFix],
+    () => makeFindingAnnotation({ textColor, mutedColor, suggestionColor, onApprove: handleApprove, onFix: handleFix }),
+    [textColor, mutedColor, suggestionColor, handleApprove, handleFix],
   );
 
   if (isImagePath(filePath) && workspace?.rootPath && filePath) {
@@ -310,7 +292,7 @@ export function DiffViewer({
     const absPath = `${workspace.rootPath.replace(/\/$/, "")}/${filePath}`;
     return (
       <div className={`h-full overflow-auto ${className}`}>
-        <ImageDiffView absPath={absPath} fileName={fileName} />
+        <ImageDiffView key={absPath} absPath={absPath} fileName={fileName} />
       </div>
     );
   }

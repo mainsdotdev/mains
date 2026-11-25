@@ -31,6 +31,8 @@ function method<F extends AsyncFn>(channel: string): F {
 
 export const appApi = {
   bridge: {
+    storageOverview: method<typeof window.api.bridge.storageOverview>(CHANNELS.bridge.storageOverview),
+    deleteStorageRun: method<typeof window.api.bridge.deleteStorageRun>(CHANNELS.bridge.deleteStorageRun),
     signIn: method<typeof window.api.bridge.signIn>(CHANNELS.bridge.signIn),
     signOut: method<typeof window.api.bridge.signOut>(CHANNELS.bridge.signOut),
     setProjectLocalOnly: method<typeof window.api.bridge.setProjectLocalOnly>(CHANNELS.bridge.setProjectLocalOnly),

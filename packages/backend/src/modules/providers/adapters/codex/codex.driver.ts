@@ -85,9 +85,11 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.167.0";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.172.0";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.153.0";
+const CODEX_ANSWER_MODERATION_VERSION = "0.169.0";
+const CODEX_REALTIME_HISTORY_VERSION = "0.171.0";
 
 function compareCodexVersions(left: string, right: string): number | null {
   const parse = (value: string): [number, number, number] | null => {
@@ -337,6 +339,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   let codexVersionPromise: Promise<string | null> | null = null;
   let codexCompatibilityPromise: Promise<void> | null = null;
   const mcpThreadResumePromises = new Map<string, Promise<void>>();
+  const serversWithRealtimeHistory = new WeakSet<CodexAppServer>();
   // One-shot generation model (titles, commit messages, PR bodies): Codex's
   // "fast and affordable agentic coding model" tier, at medium effort.
   const titleGenerationModel = "gpt-6-luna";
@@ -349,7 +352,10 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     ensureServer: () => ensureServer(), getRunningServer,
     resolveThread: async (runId) => runCoordinator.getSessionThread(runId) ?? (await runsRepo.findRunById(runId))?.sessionId ?? undefined,
     findRunId: (threadId) => runCoordinator.findRunIdForThread(threadId),
-    publish: (runId, goal) => emit(CHANNELS.providers.goalUpdated, { providerId: PROVIDER_IDS.codex, runId, goal }, { runId }),
+    publish: (runId, goal) => {
+      emit(CHANNELS.providers.goalUpdated, { providerId: PROVIDER_IDS.codex, runId, goal }, { runId });
+      emit(CHANNELS.providers.mobileGoalChanged, { runId }, { runId });
+    },
     warn: logWarn, error: logError, unavailable: isCodexUnavailableThreadError,
   });
   const sessionAcquisition = createCodexSessionAcquisition({
@@ -373,6 +379,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   });
   const realtime = createCodexRealtime({
     sessions: sessionAcquisition, runs: runCoordinator,
+    supportsHistory: (server) => serversWithRealtimeHistory.has(server),
     getTimeout: () => config.timeout ?? 3_600_000,
     getVoice: () => config.realtimeVoice,
   });
@@ -637,7 +644,6 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     await server.start(binaryPath, spawnCwd, env);
     scope.assertActive();
     appServer = server;
-    runCoordinator.installDispatcher(server);
 
     // Handshake: initialize → initialized (required before any other RPC)
     const cliVersion = await getCodexVersion();
@@ -668,6 +674,14 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       throw new Error(
         `Codex app-server initialize response is incompatible with protocol ${CODEX_APP_SERVER_PROTOCOL_VERSION}`,
       );
+    }
+    // Use the running process's version when available; the CLI file can be
+    // updated between the version probe and app-server startup.
+    const serverVersion = initializeResponse.userAgent.match(/^[^/\s]+\/(\d+\.\d+\.\d+)/)?.[1] ?? cliVersion;
+    const moderationComparison = serverVersion ? compareCodexVersions(serverVersion, CODEX_ANSWER_MODERATION_VERSION) : null;
+    runCoordinator.installDispatcher(server, (moderationComparison ?? 0) >= 0);
+    if (serverVersion && (compareCodexVersions(serverVersion, CODEX_REALTIME_HISTORY_VERSION) ?? -1) >= 0) {
+      serversWithRealtimeHistory.add(server);
     }
     server.sendNotification("initialized");
 
@@ -1161,8 +1175,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
 
     async generateText(
       prompt: string,
-      opts?: { system?: string; model?: string },
+      opts?: { system?: string; model?: string; effort?: string; signal?: AbortSignal; isolated?: boolean },
     ): Promise<string> {
+      if (opts?.signal?.aborted) throw new Error("Text generation canceled");
       const binaryPath = findCodexBinary();
       const fullPrompt = opts?.system
         ? `${opts.system}\n\n${prompt}`
@@ -1207,12 +1222,17 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
           "--model", opts?.model ?? titleGenerationModel,
           // Same overrides as title generation — see comment there.
           "--ignore-user-config",
-          "-c", "model_reasoning_effort=medium",
+          "-c", `model_reasoning_effort=${JSON.stringify(opts?.effort || "medium")}`,
+          ...(opts?.isolated ? [
+            "-c", 'web_search="disabled"', "-c", "include_apply_patch_tool=false",
+            "-c", "project_doc_max_bytes=0", "-c", "mcp_servers={}",
+            ...["shell_tool", "unified_exec", "apps", "plugins", "multi_agent", "multi_agent_v2", "image_generation", "computer_use", "browser_use", "browser_use_external", "in_app_browser", "code_mode", "code_mode_host", "goals", "memories", "hooks", "skill_search", "tool_suggest", "workspace_dependencies", "view_image"].flatMap(feature => ["-c", `features.${feature}=false`]),
+          ] : []),
           "-",
         ];
 
         const child = spawn(binaryPath, args, {
-          cwd: os.homedir(),
+          cwd: opts?.isolated ? tmpDir : os.homedir(),
           env,
           stdio: ["pipe", "pipe", "pipe"],
         });
@@ -1229,9 +1249,16 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
+          opts?.signal?.removeEventListener("abort", cancel);
           fn();
         }
 
+        function cancel() {
+          try { killProviderProcess(child); } catch { /* already exited */ }
+          finish(() => { cleanup(); reject(new Error("Text generation canceled")); });
+        }
+        opts?.signal?.addEventListener("abort", cancel, { once: true });
+        if (opts?.signal?.aborted) cancel();
         child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
         child.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
         child.on("error", (err) => {

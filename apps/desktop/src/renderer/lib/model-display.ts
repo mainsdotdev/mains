@@ -125,6 +125,15 @@ export function formatModelDisplayName(model: string, variant?: ProviderVariant)
   return removeGptNameSeparators(formatted);
 }
 
+/** Compact composer text only; picker keys and full labels retain the provider. */
+export function formatComposerModelName(model: string, variant?: ProviderVariant): string {
+  if (variant === "opencode") {
+    const parts = openCodeModelParts(model);
+    if (parts) return parts.name;
+  }
+  return formatModelDisplayName(model, variant);
+}
+
 export function getModelPrettyName(
   model: { displayName: string; description?: string },
   variant?: ProviderVariant,

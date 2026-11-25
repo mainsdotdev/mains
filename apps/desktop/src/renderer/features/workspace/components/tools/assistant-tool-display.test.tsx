@@ -1,0 +1,106 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
+import { mapToolCallToEvent } from "../../lib/run-event-mappers";
+import { resolveTool } from "../../lib/resolve-tool";
+import { ASSISTANT_TOOL_LABELS } from "../../lib/assistant-tool-content";
+import { ToolCallItem } from "./tool-call-item";
+
+vi.mock("../../hooks", () => ({ usePluginLogoMap: () => new Map(), renderPluginIcon: () => null, normalizeSlug: (name: string) => name }));
+afterEach(cleanup);
+
+it.each([
+  { status: "answered", answer: "İstanbul → Tokyo, 1 week" },
+  { status: "canceled", message: "No answer was received; the destination is still missing." },
+])("shows a blocking question and its $status outcome without JSON", result => {
+  const question = "Where would you like to travel?";
+  const event = mapToolCallToEvent({ id: 5, runId: "r", toolName: "AskAssistantQuestion", status: "done",
+    input: JSON.stringify({ question }), output: JSON.stringify([{ type: "inputText", text: JSON.stringify({ ...result, question }) }]) })!;
+  const { container } = render(<ToolCallItem event={event} isCompact={false} />);
+  fireEvent.click(screen.getByRole("button", { name: `Asked ${question}` }));
+  expect(screen.getAllByText(question).length).toBeGreaterThan(0);
+  expect(screen.getByText(result.status)).toBeTruthy();
+  expect(screen.getByText(result.answer ?? result.message!)).toBeTruthy();
+  expect(container.querySelector("pre")).toBeNull();
+});
+
+it.each(Object.keys(ASSISTANT_TOOL_LABELS))("keeps %s separate from native Task for both providers", name => {
+  for (const wire of [name, `mcp__mains__${name}`]) {
+    expect(resolveTool(wire)).toMatchObject({ category: "Assistants", groupKey: name.toLowerCase(), displayName: name });
+  }
+  expect(resolveTool("Task").groupKey).toBe("task");
+});
+
+it.each(["inputText", "text"])("shows assignment result and evidence from %s envelopes without JSON", type => {
+  const data = { id: "task-1", title: "TestFlight check", status: "blocked",
+    prompt: "Check beta prerequisites", result: "Ruby is missing", evidence: ["beta:check exited 1"] };
+  const event = mapToolCallToEvent({ id: 1, runId: "r", toolName: "ReadAssistantTask", status: "done",
+    input: JSON.stringify({ assignmentId: "task-1" }), output: JSON.stringify([{ type, text: JSON.stringify(data) }]) })!;
+  const { container } = render(<ToolCallItem event={event} isCompact={false} />);
+  const row = screen.getByRole("button", { name: "Read TestFlight check" });
+  expect(within(row).getByText("Read")).toBeTruthy();
+  expect(screen.queryByText("Ruby is missing")).toBeNull();
+  fireEvent.click(row);
+  const details = within(screen.getByRole("region", { name: "Output" }));
+  expect(details.getByText("TestFlight check")).toBeTruthy();
+  expect(details.getByText("Ruby is missing")).toBeTruthy();
+  expect(details.getByText("beta:check exited 1")).toBeTruthy();
+  expect(details.getByText("Blocked").className).toContain("rounded-full");
+  expect(details.getByText("task-1")).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Input" })).toBeNull();
+  expect(container.querySelector("pre")).toBeNull();
+  expect(container.textContent).not.toContain('"assignmentId"');
+});
+
+it("renders assistant roster roles", () => {
+  const event = mapToolCallToEvent({ id: 2, runId: "r", toolName: "ListAssistants", status: "done",
+    input: "{}", output: JSON.stringify({ content: [{ type: "text", text: JSON.stringify([{ name: "Testflight", role: "Check builds", providerId: "codex" }]) }] }) })!;
+  render(<ToolCallItem event={event} isCompact={false} />);
+  fireEvent.click(screen.getByRole("button", { name: "Listed mates (1)" }));
+  expect(screen.getByText("Testflight")).toBeTruthy();
+  expect(screen.getByText("Check builds")).toBeTruthy();
+  expect(screen.getByText("codex")).toBeTruthy();
+});
+
+it("keeps pending assistant tools visible without arguments or output", () => {
+  render(<ToolCallItem event={{ id: "pending", type: "tool_call", content: "ListAssistantTasks", timestamp: new Date(),
+    metadata: { toolName: "ListAssistantTasks", status: "running" } }} />);
+  expect(screen.getByRole("button", { name: "Listing mate assignments" })).toBeTruthy();
+});
+
+it("shows an empty list without raw JSON", () => {
+  const event = mapToolCallToEvent({ id: 3, runId: "r", toolName: "ListAssistantTasks", status: "done", input: "{}", output: "[]" })!;
+  render(<ToolCallItem event={event} isCompact={false} />);
+  fireEvent.click(screen.getByRole("button", { name: "Listed mate assignments (0)" }));
+  expect(screen.getByText("No mate assignments")).toBeTruthy();
+});
+
+it("lists assignments with readable names and skips empty evidence", () => {
+  const event = mapToolCallToEvent({ id: 6, runId: "r", toolName: "mcp__mains__ListAssistantTasks", status: "done", input: "{}",
+    output: JSON.stringify([{ title: "Assistant request", taskKey: "mention:prompt:1", prompt: "Check beta readiness",
+      status: "queued", evidence: [], execution: { mode: "work" } }]) })!;
+  render(<ToolCallItem event={event} isCompact={false} />);
+  fireEvent.click(screen.getByRole("button", { name: "Listed mate assignments (1)" }));
+  const entry = within(screen.getByRole("listitem"));
+  expect(entry.getByText("Mate request")).toBeTruthy();
+  expect(entry.getByText("Queued")).toBeTruthy();
+  expect(entry.getByText("Check beta readiness")).toBeTruthy();
+  expect(entry.getByText("Work")).toBeTruthy();
+  expect(entry.queryByText("Evidence")).toBeNull();
+});
+
+it("shows a routine's schedule, timezone and state through the existing tool display", () => {
+  const result = { defaultTimezone: "Europe/Istanbul", defaultExecution: { mode: "work" },
+    routines: [{ id: "routine-1", title: "Check TestFlight", prompt: "Check beta readiness",
+      frequency: "daily", dayOfWeek: null, hour: 9, minute: 30, timezone: "Europe/Istanbul", isActive: false }] };
+  const event = mapToolCallToEvent({ id: 4, runId: "r", toolName: "ListAssistantRoutines", status: "done",
+    input: "{}", output: JSON.stringify([{ type: "inputText", text: JSON.stringify(result) }]) })!;
+  const { container } = render(<ToolCallItem event={event} isCompact={false} />);
+  fireEvent.click(screen.getByRole("button", { name: "Listed mate routines (1)" }));
+  expect(screen.getByText("Check TestFlight")).toBeTruthy();
+  expect(screen.getByText("Daily at 9:30 AM")).toBeTruthy();
+  expect(screen.getAllByText("Europe/Istanbul")).toHaveLength(2);
+  expect(screen.getByText("Enabled")).toBeTruthy();
+  expect(screen.getByText("No")).toBeTruthy();
+  expect(container.querySelector("pre")).toBeNull();
+});

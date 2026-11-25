@@ -45,6 +45,7 @@ export interface CodexRunSession {
 
 export type CodexActiveRunState = CodexEventRunState & {
   mode: ModeId;
+  assistantId: string | null;
   subscribedThreadIds: Set<string>;
   aborted: boolean;
   timeoutError?: string;
@@ -65,6 +66,7 @@ interface CodexRunCoordinatorOptions {
 interface RegisterRunParams {
   runId: string;
   mode?: ModeId;
+  assistantId?: string | null;
   threadId: string | null;
   mainsCtx: MainsToolContext;
   subAgents?: CodexSubAgentRunMeta[];
@@ -76,6 +78,8 @@ interface TurnCompletion {
 }
 
 interface CodexRunSink {
+  /** Native parent turn owned by this execution, retained through finalization. */
+  turnId?: string;
   onEvent: WorkRunEventHandler;
   inputs: Map<string, TrackedInput>;
   handleNotification: (
@@ -108,6 +112,7 @@ export function createCodexRunCoordinator(
   const runSinks = new Map<string, CodexRunSink>();
   const serverRequestOwners = new Map<string, string>();
   const turnOwners = new Map<string, string>();
+  const serversWithAnswerModeration = new WeakSet<CodexAppServer>();
   const closingStatusWrites = new Set<Promise<void>>();
   const realtimeOwners = new Map<string, {
     model: string | undefined;
@@ -236,6 +241,7 @@ export function createCodexRunCoordinator(
     activeRuns.set(runId, {
       ...state,
       mode: params.mode ?? DEFAULT_MODE_ID,
+      assistantId: params.assistantId ?? null,
       subscribedThreadIds: new Set(
         threadId ? [threadId] : [],
       ),
@@ -254,7 +260,12 @@ export function createCodexRunCoordinator(
     state.subscribedThreadIds.add(threadId);
     state.threadId = threadId;
     sessionSubAgents.set(threadId, state.subAgents);
-    if (turnId !== undefined) state.turnId = turnId;
+    const sink = runSinks.get(runId);
+    if (turnId && sink && !sink.turnId) {
+      sink.turnId = turnId;
+      state.turnId = turnId;
+      turnOwners.set(turnId, runId);
+    }
   }
 
   function ensureSubAgent(
@@ -396,7 +407,8 @@ export function createCodexRunCoordinator(
     return undefined;
   }
 
-  function installDispatcher(server: CodexAppServer): void {
+  function installDispatcher(server: CodexAppServer, hasAnswerModeration = false): void {
+    if (hasAnswerModeration) serversWithAnswerModeration.add(server);
     server.setNotificationHandler((method, params) => {
       if (method === "serverRequest/resolved") {
         const requestId = (
@@ -510,36 +522,41 @@ export function createCodexRunCoordinator(
         }
       }
 
+      const sink = runSinks.get(runId);
       const turnId = requestTurnId(params);
+      const threadId = requestThreadId(params);
+      const parentEvent = !threadId || !state?.threadId || threadId === state.threadId;
       if (method === "turn/started" && turnId) {
+        if (parentEvent && sink?.turnId && sink.turnId !== turnId) return;
         // Several current notifications (notably turn/plan/updated) carry a
         // turnId but no threadId. Capture ownership synchronously, before the
         // per-run async notification queue processes turn/started.
         turnOwners.set(turnId, runId);
-        const threadId = requestThreadId(params);
-        if (state && threadId) {
-          if (!state.threadId || threadId === state.threadId) {
+        if (state) {
+          if (parentEvent) {
+            if (sink) sink.turnId = turnId;
             state.turnId = turnId;
             state.runtimeStatusesClosed = false;
             // Initial turn/start input has no native id at admission. Bind it
             // before asynchronous handlers or a later completion change state.
-            for (const input of runSinks.get(runId)?.inputs.values() ?? []) input.expectedTurnId ??= turnId;
-          } else {
+            for (const input of sink?.inputs.values() ?? []) input.expectedTurnId ??= turnId;
+          } else if (threadId) {
             ensureSubAgent(state, threadId).activeTurnId = turnId;
           }
         }
-      } else if (method === "turn/completed" && turnId && state) {
-        const threadId = requestThreadId(params);
-        if (threadId === state.threadId && state.turnId === turnId) {
+      } else if (turnId && (method === "turn/completed" || method === "error")) {
+        // Reject stale parent terminals before they can flush the next turn's
+        // output or release its approvals. Thread identity survives Continue.
+        if (parentEvent && sink?.turnId !== turnId) return;
+        if (method === "turn/completed" && parentEvent && state?.turnId === turnId) {
           state.turnId = null;
-        } else if (threadId) {
-          const meta = state.subAgents.get(threadId);
+        } else if (method === "turn/completed" && threadId) {
+          const meta = state?.subAgents.get(threadId);
           if (meta?.activeTurnId === turnId) {
             meta.activeTurnId = undefined;
           }
         }
       }
-      const sink = runSinks.get(runId);
       if (!sink) return;
 
       const fileChange = eventMapper.captureFileChanges(method, params, runId);
@@ -630,6 +647,8 @@ export function createCodexRunCoordinator(
     onEvent: WorkRunEventHandler,
     timeout: number,
   ): Promise<TurnCompletion> {
+    const state = activeRuns.get(runId);
+    if (state) state.requireCompletedAgentMessages = serversWithAnswerModeration.has(server);
     return new Promise((resolve) => {
       let resolved = false;
 
@@ -684,6 +703,7 @@ export function createCodexRunCoordinator(
         method: string,
         params: unknown,
       ) => {
+        if (resolved || runSinks.get(runId) !== sink) return;
         const state = activeRuns.get(runId);
 
         if (method === "item/started" || method === "item/completed") {
@@ -794,17 +814,26 @@ export function createCodexRunCoordinator(
         id: number | string,
         method: string,
         params: unknown,
-      ) =>
-        requestBroker.handleRequest({
+      ) => {
+        const state = activeRuns.get(runId);
+        const threadId = requestThreadId(params);
+        const turnId = requestTurnId(params);
+        const recordUserInput = method === "item/tool/requestUserInput" && state?.assistantId &&
+          (!threadId || threadId === state.threadId) && (!turnId || !state.turnId || turnId === state.turnId);
+        return requestBroker.handleRequest({
           server,
           id,
           method,
           params,
           runId,
-          runIsDead:
-            resolved ||
-            activeRuns.get(runId)?.aborted === true,
+          runIsDead: resolved || state?.aborted === true,
+          onUserInputEvent: recordUserInput ? (event) => {
+            const liveState = activeRuns.get(runId);
+            if (resolved || liveState !== state || liveState?.aborted || (turnId && liveState?.turnId && liveState.turnId !== turnId)) return;
+            return onEvent(event);
+          } : undefined,
         });
+      };
 
       const sink: CodexRunSink = {
         onEvent,
@@ -837,7 +866,10 @@ export function createCodexRunCoordinator(
       return { status: "canceled" };
     }
 
+    let ownedSink: CodexRunSink | undefined;
     const onAbort = () => {
+      const sink = ownedSink;
+      if (!sink || runSinks.get(session.runId) !== sink) return;
       const state = activeRuns.get(session.runId);
       if (state) state.aborted = true;
       const interruption = server
@@ -848,10 +880,8 @@ export function createCodexRunCoordinator(
           )
         : Promise.resolve();
       void interruption.finally(async () => {
-        const sink = runSinks.get(session.runId);
-        if (!sink) return;
         await sink.notificationQueue;
-        sink.finalize({ status: "canceled" });
+        if (runSinks.get(session.runId) === sink) sink.finalize({ status: "canceled" });
       });
     };
     signal.addEventListener("abort", onAbort, { once: true });
@@ -873,18 +903,19 @@ export function createCodexRunCoordinator(
         onEvent,
         session.timeout,
       );
+      ownedSink = runSinks.get(session.runId);
       try {
         await session.startTurn();
       } catch (error) {
         const state = activeRuns.get(session.runId);
         try {
-          if (!signal.aborted && runSinks.has(session.runId)) {
+          if (!signal.aborted && ownedSink && runSinks.get(session.runId) === ownedSink) {
             for (const event of eventMapper.mapNotification("error", {
               threadId: state?.threadId, turnId: state?.turnId, error, willRetry: false,
             }, session.runId, session.model)) await onEvent(event);
           }
         } finally {
-          runSinks.get(session.runId)?.finalize({
+          ownedSink?.finalize({
             status: "failed",
             error: formatCodexError(error, String(error)),
           });

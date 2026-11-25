@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { workspaceService } from "../../workspace";
-import { guardsService } from "../../guards/guards.service";
 import type { MainsToolContext } from "./mains-tools.core";
 import {
   MAINS_TOOLS,
@@ -26,7 +25,7 @@ const CTX: MainsToolContext = {
 
 /** Tools the registry marks available to a given provider. */
 function expectedFor(provider: string): string[] {
-  return MAINS_TOOLS.filter((t) => !t.scope && (!t.modes || t.modes.includes("developer")) && t.providers.includes(provider as any))
+  return MAINS_TOOLS.filter((t) => !t.scope && !t.assistantOnly && (!t.modes || t.modes.includes("developer")) && t.providers.includes(provider as any))
     .map((t) => t.name)
     .sort();
 }
@@ -70,11 +69,12 @@ describe("mains tool registry — availability matrix", () => {
     const start = async () => { throw new Error("should not dispatch invalid input"); };
     await expect(dispatchMainsTool("StartVoiceTask", { taskKey: "../bad", title: "", prompt: "" }, { ...CTX, voiceTools: { start } as never })).rejects.toThrow();
   });
-  it("CheckPackage is exposed to Codex, Cursor, and OpenCode", () => {
-    const checkPackage = MAINS_TOOLS.find((t) => t.name === "CheckPackage")!;
-    expect([...checkPackage.providers].sort()).toEqual(
-      [PROVIDER_IDS.codex, PROVIDER_IDS.cursor, PROVIDER_IDS.opencode].sort(),
-    );
+  it("does not expose or dispatch the retired CheckPackage tool", async () => {
+    expect(MAINS_TOOLS.some((tool) => tool.name === "CheckPackage")).toBe(false);
+    await expect(dispatchMainsTool("CheckPackage", { packages: [{ name: "react" }] }, CTX)).resolves.toMatchObject({
+      isError: true,
+      content: [{ text: "Unknown tool: CheckPackage" }],
+    });
   });
 
   it("review-flow tools are not exposed to Codex", () => {
@@ -162,56 +162,6 @@ describe("mains tool registry — argument validation", () => {
   });
 });
 
-describe("mains tool registry — CheckPackage", () => {
-  afterEach(() => vi.restoreAllMocks());
-  const check = (packages: unknown) => dispatchMainsTool("CheckPackage", { packages }, CTX);
-  const parse = (result: { content: Array<{ text: string }> }) => JSON.parse(result.content[0].text);
-
-  it("reports each package as JSON on one 0–100 scale and warns when one is blocked", async () => {
-    vi.spyOn(guardsService, "checkPackages").mockResolvedValue([
-      {
-        allowed: true, alerts: [], package: { name: "zod", version: "4.0.0", ecosystem: "npm" },
-        score: {
-          package: { name: "zod", version: "4.0.0", ecosystem: "npm" }, overallScore: 0.92, riskLevel: "low",
-          categories: { quality: 0.9, vulnerability: 1 }, alerts: [],
-        },
-      },
-      {
-        allowed: false, package: { name: "evil", ecosystem: "pypi" }, reason: "Blocked by policy",
-        alerts: [{ type: "malware", severity: "critical", title: "Known malware" }],
-      },
-    ]);
-    const output = parse(await check([{ name: "zod", version: "4.0.0" }, { name: "evil", ecosystem: "pypi" }]));
-    expect(output.blocked).toBe(true);
-    expect(output.warning).toContain("Do NOT install");
-    expect(output.results).toEqual([
-      {
-        name: "zod", version: "4.0.0", ecosystem: "npm", allowed: true, alerts: [], reason: null,
-        score: { overall: 92, riskLevel: "low", categories: { quality: 90, vulnerability: 100 } },
-      },
-      {
-        name: "evil", version: null, ecosystem: "pypi", allowed: false, score: null, reason: "Blocked by policy",
-        alerts: [{ severity: "critical", title: "Known malware" }],
-      },
-    ]);
-  });
-
-  it("defaults the ecosystem to npm and stays quiet when nothing is blocked", async () => {
-    const checkPackages = vi.spyOn(guardsService, "checkPackages")
-      .mockResolvedValue([{ allowed: true, alerts: [], package: { name: "axios", ecosystem: "npm" } }]);
-    const output = parse(await check([{ name: "axios" }]));
-    expect(checkPackages).toHaveBeenCalledWith([{ name: "axios", version: undefined, ecosystem: "npm" }]);
-    expect(output).toMatchObject({ blocked: false });
-    expect(output).not.toHaveProperty("warning");
-  });
-
-  it("fails by throwing, for an unavailable guard or an empty list", async () => {
-    vi.spyOn(guardsService, "checkPackages").mockRejectedValue(new Error("No guard service is connected"));
-    await expect(check([{ name: "axios" }])).rejects.toThrow("Guard check failed: No guard service is connected");
-    await expect(check([])).rejects.toThrow("Invalid arguments for CheckPackage");
-  });
-});
-
 describe("mains tool registry — Copilot results", () => {
   afterEach(() => vi.restoreAllMocks());
   const saveReview = () => {
@@ -261,5 +211,39 @@ describe("mains tool registry — mode dimension", () => {
         expect(["developer", "work", "chat"]).toContain(mode);
       }
     }
+  });
+});
+
+
+describe("assistant tool scope", () => {
+  it("exposes blocking questions only in Work/Developer assistant conversations", () => {
+    for (const mode of ["developer", "work", "chat"] as const) {
+      for (const assistant of [false, true]) {
+        const expected = assistant && mode !== "chat";
+        expect(toCodexDynamicTools(mode, assistant).some(tool => tool.name === "AskAssistantQuestion")).toBe(expected);
+        expect(toClaudeTools(CTX, mode, assistant).some(tool => tool.name === "AskAssistantQuestion")).toBe(expected);
+      }
+    }
+  });
+  it("exposes routine management to Work/Developer assistants on both supported providers", () => {
+    const names = ["ListAssistantRoutines", "ReadAssistantRoutine", "CreateAssistantRoutine", "UpdateAssistantRoutine", "DeleteAssistantRoutine"];
+    for (const mode of ["developer", "work"] as const) {
+      expect(toCodexDynamicTools(mode, true).map(tool => tool.name)).toEqual(expect.arrayContaining(names));
+      expect(toClaudeTools(CTX, mode, true).map(tool => tool.name)).toEqual(expect.arrayContaining(names));
+      for (const name of names) {
+        expect(toCodexDynamicTools(mode).map(tool => tool.name)).not.toContain(name);
+        expect(toClaudeTools(CTX, mode).map(tool => tool.name)).not.toContain(name);
+      }
+    }
+    for (const name of names) expect(toCodexDynamicTools("chat", true).map(tool => tool.name)).not.toContain(name);
+  });
+  it("exposes task tools in ordinary Code and keeps private tools in assistant conversations", () => {
+    for (const mode of ["developer", "work"] as const) {
+      expect(toCodexDynamicTools(mode, true).some(t => "name" in t && t.name === "AssignAssistantTask")).toBe(true);
+      expect(toClaudeTools(CTX, mode, true).some(t => t.name === "SaveAssistantMemory")).toBe(true);
+      expect(toCodexDynamicTools(mode).some(t => "name" in t && t.name === "AssignAssistantTask")).toBe(mode === "developer");
+      expect(toClaudeTools(CTX, mode).some(t => t.name === "SaveAssistantMemory")).toBe(false);
+    }
+    expect(toCodexDynamicTools("chat", true).some(t => "name" in t && t.name === "AssignAssistantTask")).toBe(false);
   });
 });

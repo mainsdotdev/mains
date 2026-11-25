@@ -94,7 +94,8 @@ import {
 import { createClaudeTurnInput, isClaudeUserInput } from "./claude-turn-input";
 import type { MainsToolContext } from "../mains-tools.core";
 import { toClaudeTools } from "../mains-tools.registry";
-import { guardsService } from "../../../guards/guards.service";
+
+const CLAUDE_FABLE_CONTEXT_WINDOW = 1_000_000;
 
 // ─────────────────────────────────────────────────────────────
 // SDK type sketches (the SDK is loaded via dynamic import to keep the
@@ -166,6 +167,7 @@ interface SDKOptions {
   executable?: "node" | "bun" | "deno";
   executableArgs?: string[];
   env?: Record<string, string | undefined>;
+  tools?: string[];
   allowedTools?: string[];
   disallowedTools?: string[];
   permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
@@ -513,7 +515,7 @@ interface SDKResultError extends SDKResultBase {
 
 type SDKResultMessage = SDKResultSuccess | SDKResultError;
 
-function describeClaudeResultError(result: SDKResultError): string {
+function describeClaudeResultError(result: SDKResultError, fallback = "Claude could not complete this request."): string {
   const reasons: Record<string, string> = {
     config_file_invalid: "Claude could not start because a configuration file contains invalid JSON. Fix the file named below and try again.",
     initialize_not_first: "Claude could not initialize its session. Restart the Claude runtime and try again.",
@@ -521,7 +523,7 @@ function describeClaudeResultError(result: SDKResultError): string {
   };
   const reason = result.startup_failure_reason;
   return [reason ? reasons[reason] ?? `Claude could not start (${reason}).` : undefined,
-    ...result.errors].filter(Boolean).join(" ") || "Claude could not complete this request.";
+    ...result.errors].filter(Boolean).join(" ") || fallback;
 }
 
 interface ClaudeTurnModelMessage {
@@ -784,6 +786,7 @@ type SDKMessage =
 
 interface SDKModelInfo {
   value: string;
+  resolvedModel?: string;
   displayName: string;
   description: string;
   supportsFastMode?: boolean;
@@ -2915,6 +2918,29 @@ export function mapSDKMessage(
 
 export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDriver {
   const queryLifecycle = createClaudeQueryLifecycle<typeof import("@anthropic-ai/claude-agent-sdk")>();
+  let catalogRevision = 0;
+  let discoveryScope = new AbortController();
+
+  // Follow catalog refreshes while keeping each caller bound to its runtime generation.
+  async function readCurrentDiscovery<T>(read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const scope = discoveryScope.signal;
+    for (;;) {
+      scope.throwIfAborted();
+      signal?.throwIfAborted();
+      const revision = catalogRevision;
+      try {
+        const result = await read();
+        scope.throwIfAborted();
+        signal?.throwIfAborted();
+        if (revision === catalogRevision) return result;
+      } catch (error) {
+        scope.throwIfAborted();
+        signal?.throwIfAborted();
+        if (revision === catalogRevision) throw error;
+      }
+    }
+  }
+
   // SDK loader state
   let sdkLoaded = false;
   let queryFn:
@@ -2956,13 +2982,14 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // A plugin change adds/removes commands, skills, and agents — so installing or
   // uninstalling one must invalidate those caches too, not just the plugin list.
   function invalidatePluginCaches(): void {
+    catalogRevision++;
     pluginCatalogRead.invalidate();
     commandsCache.invalidate();
     skillsCache.invalidate();
   }
 
   async function loadModels(context: ResourceReadContext): Promise<ModelInfo[]> {
-    const sdkModels = await withControlQuery((query) => query.supportedModels());
+    const sdkModels = await withControlQuery((query) => query.supportedModels(), undefined, context.signal);
     context.assertCurrent();
     if (!sdkModels || sdkModels.length === 0) throw new Error("SDK returned no models");
 
@@ -2981,10 +3008,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     );
 
     const models: ModelInfo[] = selectableSdkModels.map((sdkModel) => {
-      // SDK's .d.ts declares supportsFastMode but the runtime payload doesn't include it.
-      // Fast mode is currently meaningful only on opus; this fallback lights it up
-      // automatically when the SDK starts surfacing the field.
       const id = sdkModel.value;
+      const isFable = id === "fable" || (sdkModel.resolvedModel ?? id).startsWith("claude-fable-");
+      const defaultContextWindow = id.includes("haiku") ? 128_000 : 200_000;
+      // Older CLIs may omit supportsFastMode from the model catalogue.
       const fallbackFastMode = id === "opus[1m]";
       return {
         id,
@@ -2997,7 +3024,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           functionCalling: true,
           reasoning: sdkModel.value.includes("opus"),
         },
-        contextWindow: sdkModel.value.includes("haiku") ? 128000 : 200000,
+        contextWindow: isFable ? CLAUDE_FABLE_CONTEXT_WINDOW : defaultContextWindow,
         supportsFastMode: sdkModel.supportsFastMode ?? fallbackFastMode,
         supportsEffort: sdkModel.supportsEffort,
         supportedEffortLevels: sdkModel.supportedEffortLevels,
@@ -3011,6 +3038,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     const initResult = await withControlQuery(
       (query) => query.initializationResult(),
       workspacePath,
+      context.signal,
     );
     context.assertCurrent();
     if (!initResult?.commands || initResult.commands.length === 0) {
@@ -3019,7 +3047,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     // initializationResult().commands mixes built-in /commands with disk-backed skills.
     // Exclude only skills we discover the same way as the $ menu.
-    const diskSkills = await fetchDiskSkills(workspacePath);
+    const diskSkills = await fetchDiskSkills(workspacePath, context.signal);
     context.assertCurrent();
     const diskSkillNames = new Set(diskSkills.map((s) => s.name));
 
@@ -3060,9 +3088,6 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     const bridge = createClaudePermissionBridge({ runId, permissionMode,
       allowedTools: new Set(resolveEffectiveAllowedTools(toolPolicy)), restrictedToolset: !!toolPolicy?.allowedTools });
     const hooks = config.hooks ? convertHooksConfig(config.hooks) : {};
-    const guard = await guardsService.buildClaudeGuardHook();
-    assert();
-    if (guard) hooks.PreToolUse = [...(hooks.PreToolUse ?? []), guard];
     return { permissionMode, options: {
       ...buildClaudePermissionModeOptions(permissionMode.current, bridge.canUseTool, toolPolicy),
       hooks, onElicitation: createClaudeElicitationHandler({ runId }),
@@ -3282,18 +3307,22 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     rootPath: string | null,
     runId: string | null,
     mode?: ModeId,
+    assistant = false,
   ): any {
     const ctx: MainsToolContext = { workspaceId, rootPath, runId };
 
-    const tools = toClaudeTools(ctx, mode);
+    const tools = toClaudeTools(ctx, mode, assistant);
     if (tools.length === 0) return null;
-    return createSdkMcpServerFn!({
+    const server = createSdkMcpServerFn!({
       name: "mains",
       version: "1.0.0",
       tools: tools.map((t) =>
         toolFn!(t.name, t.description, t.shape, t.handler),
       ),
     });
+    // The question broker may wait five minutes for the user. Keep the
+    // assistant's MCP call alive long enough to receive that answer/outcome.
+    return assistant ? { ...server, timeout: 6 * 60_000 } : server;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -3320,6 +3349,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     // uses CLI login session rather than API billing.
     const cleanEnv: Record<string, string | undefined> = {
       ...process.env,
+      DISABLE_TELEMETRY: process.env.DISABLE_TELEMETRY || "1",
+      DISABLE_ERROR_REPORTING: process.env.DISABLE_ERROR_REPORTING || "1",
       // Advertise the host's MCP Apps support when the CLI connects to servers.
       CLAUDE_CODE_MCP_APPS_HOST: "1",
       CLAUDE_CODE_STARTUP_FAILURE_RESULTS: "1",
@@ -3349,9 +3380,16 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   async function withControlQuery<T>(
     read: (query: SDKQuery) => Promise<T>,
     cwd?: string,
+    signal?: AbortSignal,
   ): Promise<T> {
+    signal?.throwIfAborted();
     const controller = new AbortController();
     const owner = queryLifecycle.open({ cancel: () => controller.abort() });
+    const cancel = () => {
+      // The finally block awaits the same query release.
+      void owner.cancel(signal?.reason).catch(() => {});
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
     try {
       await owner.run(ensureSDK);
       const options = buildProcessOptions();
@@ -3360,11 +3398,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const query = owner.acquire(() => queryFn!({ prompt: "", options }));
       return await owner.run(() => read(query));
     } finally {
+      signal?.removeEventListener("abort", cancel);
       await owner.close();
     }
   }
 
-  async function buildOptions(args: {
+  function buildOptions(args: {
     model: string;
     workspacePath?: string;
     abortController?: AbortController;
@@ -3393,8 +3432,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     toolPolicy?: WorkRunToolPolicy | null;
     additionalDirectories?: string[];
     configSnapshot?: Record<string, unknown> | null;
-  }): Promise<SDKOptions> {
-    const assert = queryLifecycle.checkpoint();
+  }): SDKOptions {
     const {
       model,
       workspacePath,
@@ -3445,7 +3483,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     const mcpServers = readMcpServersFromSettings(settingSources, workspacePath);
     if (!mcpServers["mains"] && createSdkMcpServerFn && toolFn) {
-      const mainsServer = buildMainsMcpServer(workspaceId ?? null, workspacePath ?? null, runId ?? null, mode);
+      const mainsServer = buildMainsMcpServer(workspaceId ?? null, workspacePath ?? null, runId ?? null, mode, !!args.configSnapshot?.assistantId);
       if (mainsServer) {
         mcpServers["mains"] = mainsServer;
         logInfo("Injected mains MCP server (in-process)");
@@ -3557,16 +3595,6 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       options.onElicitation = createClaudeElicitationHandler({ runId });
     }
 
-    {
-      const guardHook = await guardsService.buildClaudeGuardHook();
-      assert();
-      if (guardHook) {
-        if (!options.hooks) options.hooks = {};
-        if (!options.hooks.PreToolUse) options.hooks.PreToolUse = [];
-        options.hooks.PreToolUse.push(guardHook);
-      }
-    }
-
     if (runId && onEvent) {
       if (!options.hooks) options.hooks = {};
       if (!options.hooks.PostToolUse) options.hooks.PostToolUse = [];
@@ -3651,9 +3679,14 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // Disk skills discovery (shared between listSkills and listCommands filtering)
   // ─────────────────────────────────────────────────────────────
 
-  async function fetchDiskSkills(workspacePath?: string): Promise<SkillInfo[]> {
-    try { return (await skillsCache.read(workspacePath ?? "")).value; }
-    catch (error) { logError("Failed to discover skills:", error); return []; }
+  async function fetchDiskSkills(workspacePath?: string, signal?: AbortSignal): Promise<SkillInfo[]> {
+    try {
+      return (await readCurrentDiscovery(() => skillsCache.read(workspacePath ?? "", { signal }), signal)).value;
+    } catch (error) {
+      signal?.throwIfAborted();
+      logError("Failed to discover skills:", error);
+      return [];
+    }
   }
 
   async function loadDiskSkills(workspacePath: string | undefined, context: ResourceReadContext): Promise<SkillInfo[]> {
@@ -4006,40 +4039,74 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
    */
   async function generateOneShotText(
     prompt: string,
-    opts?: { system?: string; model?: string },
+    opts?: { system?: string; model?: string; effort?: string; signal?: AbortSignal; isolated?: boolean },
   ): Promise<string> {
     const controller = new AbortController();
     const owner = queryLifecycle.open({ cancel: () => controller.abort() });
-    let text = "";
+    const cancel = () => controller.abort();
+    opts?.signal?.addEventListener("abort", cancel, { once: true });
+    if (opts?.signal?.aborted) cancel();
     try {
       await owner.run(ensureSDK);
-      const options = await owner.run(() => buildOptions({
+      owner.assertActive();
+      const options = buildOptions({
         model: opts?.model ?? "claude-haiku-4-5-20251001", abortController: controller,
-      }));
+      });
+      if (opts?.signal?.aborted) throw new Error("Text generation canceled");
       options.maxTurns = 6;
+      if (opts?.effort) {
+        options.thinking = { type: "adaptive" };
+        options.effort = opts.effort as NonNullable<typeof options.effort>;
+      }
+      if (opts?.isolated) {
+        options.tools = [];
+        options.permissionMode = "dontAsk";
+        options.allowDangerouslySkipPermissions = false;
+        options.settings = { ultracode: false };
+        options.settingSources = [];
+        options.hooks = {};
+        options.plugins = [];
+      }
       options.allowedTools = [];
       options.disallowedTools = ["*"];
       options.mcpServers = {};
       options.systemPrompt = opts?.system ??
         "You are a helpful assistant. Follow the user's instructions exactly and output only what is requested.";
       const query = owner.acquire(() => queryFn!({ prompt, options }));
-      try {
-        await owner.run(async () => {
-          for await (const msg of query) {
-            owner.assertActive();
-            if (msg.type !== "assistant") continue;
-            const assistantMsg = msg as { message?: { content?: Array<{ type: string; text?: string }> } };
-            for (const block of assistantMsg.message?.content ?? []) {
-              if (block.type === "text" && block.text) text += block.text;
+      const text = await owner.run(async () => {
+        let output = "";
+        let assistantError: string | undefined;
+        for await (const msg of query) {
+          owner.assertActive();
+          if (msg.type === "assistant") {
+            const { message, error } = msg as SDKAssistantMessage;
+            let content = "";
+            for (const block of message?.content ?? []) {
+              if (block.type === "text" && block.text) content += block.text;
+            }
+            if (error) {
+              // The SDK can put the provider error in a synthetic assistant message.
+              const details = content.trim();
+              if (details) throw new Error(details);
+              assistantError = `Claude: ${describeAssistantError(error)?.text ?? error}`;
+            } else {
+              output += content;
+            }
+          } else if (msg.type === "result") {
+            const result = msg as SDKResultMessage;
+            if (result.subtype !== "success") throw new Error(describeClaudeResultError(result, assistantError));
+            if (result.is_error) {
+              throw new Error(result.result?.trim() || assistantError || "Claude could not complete this request.");
             }
           }
-        });
-      } catch (error) {
-        // Retain text from SDK error results; cancellation cannot become success.
-        if (!owner.active || !text.trim()) throw error;
-      }
-      return text.trim();
+        }
+        if (assistantError) throw new Error(assistantError);
+        return output.trim();
+      });
+      if (opts?.signal?.aborted) throw new Error("Text generation canceled");
+      return text;
     } finally {
+      opts?.signal?.removeEventListener("abort", cancel);
       await owner.close();
     }
   }
@@ -4060,7 +4127,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const overridePermissionMode = request.configSnapshot?.permissionMode;
       const sessionId = randomUUID();
       const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
-      const options = await buildOptions({
+      const options = buildOptions({
         model: getModel(request.model),
         workspacePath: request.execution.cwd,
         abortController,
@@ -4099,6 +4166,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
       const sessionId = await lookupSessionId(request.runId);
+      assert();
       if (!sessionId) {
         throw new Error(
           `Session not found for run ${request.runId}. The session may have expired or was never created.`,
@@ -4108,7 +4176,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const abortController = new AbortController();
       const resumePermissionMode = request.configSnapshot?.permissionMode;
       const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
-      const options = await buildOptions({
+      const options = buildOptions({
         model: getModel(request.model ?? config.defaultModel),
         workspacePath: request.execution.cwd,
         abortController,
@@ -4215,6 +4283,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
       const sourceSessionId = await lookupSessionId(request.sourceRunId);
+      assert();
       if (!sourceSessionId) {
         throw new Error(
           `Session not found for source run ${request.sourceRunId}. Cannot fork.`,
@@ -4227,7 +4296,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const sessionId = randomUUID();
       const forkPermissionMode = request.configSnapshot?.permissionMode;
       const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
-      const options = await buildOptions({
+      const options = buildOptions({
         model: getModel(request.model ?? config.defaultModel),
         workspacePath: request.execution.cwd,
         abortController,
@@ -4708,6 +4777,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     async shutdown(): Promise<void> {
       const closing = queryLifecycle.shutdown();
+      const scope = discoveryScope;
+      scope.abort();
       sessionIdMemo.clear();
       liveSessions.clear();
       runCwdMemo.clear();
@@ -4718,18 +4789,17 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       getSessionMessagesFn = null;
       deleteSdkSessionFn = null;
       modelsCache.invalidate();
-      pluginCatalogRead.invalidate();
-      commandsCache.invalidate();
-      skillsCache.invalidate();
+      invalidatePluginCaches();
       createSdkMcpServerFn = null;
       toolFn = null;
       await closing;
+      if (discoveryScope === scope) discoveryScope = new AbortController();
       logInfo("Shutdown complete");
     },
 
     async listModels(): Promise<ModelInfo[]> {
       try {
-        return (await modelsCache.read()).value;
+        return (await readCurrentDiscovery(() => modelsCache.read())).value;
       } catch (error) {
         logError("Failed to fetch models from SDK:", error);
         return getDefaultModels(config.defaultModel);
@@ -4738,7 +4808,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     async listCommands(workspacePath?: string): Promise<CommandInfo[]> {
       try {
-        return (await commandsCache.read(workspacePath ?? "")).value ?? [];
+        return (await readCurrentDiscovery(() => commandsCache.read(workspacePath ?? ""))).value ?? [];
       } catch (error) {
         logError("Failed to fetch commands from SDK:", error);
         return [];
@@ -4750,8 +4820,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async listPlugins(signal?: AbortSignal): Promise<PluginListResponse> {
-      signal?.throwIfAborted();
-      return (await pluginCatalogRead.read("", { signal })).value.response;
+      return (await readCurrentDiscovery(() => pluginCatalogRead.read("", { signal }), signal)).value.response;
     },
 
     async readPlugin(pluginName: string, marketplacePath: string): Promise<PluginDetail> {
@@ -4950,7 +5019,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     async generateText(
       prompt: string,
-      opts?: { system?: string; model?: string },
+      opts?: { system?: string; model?: string; effort?: string; signal?: AbortSignal; isolated?: boolean },
     ): Promise<string> {
       return generateOneShotText(prompt, opts);
     },
@@ -5307,7 +5376,7 @@ function getDefaultModels(defaultModel?: string): ModelInfo[] {
       id: "fable",
       displayName: "Claude Fable",
       capabilities: { streaming: true, vision: true, functionCalling: true, reasoning: true },
-      contextWindow: 200000,
+      contextWindow: CLAUDE_FABLE_CONTEXT_WINDOW,
       supportsFastMode: false,
       supportsEffort: true,
       supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],

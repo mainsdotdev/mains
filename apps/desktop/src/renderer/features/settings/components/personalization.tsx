@@ -224,7 +224,7 @@ function PersonalizationForm({ initialValues, lastSavedAt, saving, loading, onSu
                 type="submit"
                 disabled={!isDirty || saving}
                 isLoading={saving}
-                variant="submit"
+                variant="primary"
               >
                 Save
               </Button>

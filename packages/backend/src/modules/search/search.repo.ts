@@ -1,4 +1,11 @@
 import { getSqlite } from "../../db/client";
+import type { ConversationSearchCursor } from "@mains/contracts/search";
+
+export interface ConversationMatchRow {
+  id: string; title: string | null; goal: string | null; providerId: string; mode: string;
+  context: string | null; updatedAt: number; createdAt: number; rank: number;
+  artifactId: number | null; messageTime: number | null; matchSnippet: string | null;
+}
 
 interface SearchRepoOptions {
   accountId: string;
@@ -81,6 +88,49 @@ function bindings({ accountId, query, limit }: SearchRepoOptions) {
  * return only the fields the command menu needs to rank and navigate.
  */
 export const searchRepo = {
+  findConversations(options: SearchRepoOptions & { cursor?: ConversationSearchCursor }): ConversationMatchRow[] {
+    const cursor = options.cursor;
+    const ftsQuery = buildFtsQuery(options.query);
+    const metadata = "CASE WHEN json_valid(a.metadata) THEN a.metadata ELSE '{}' END";
+    return getSqlite().prepare(`
+      WITH raw_matches AS MATERIALIZED (
+        SELECT a.run_id AS runId, a.id AS artifactId,
+          a.created_at * 1000 AS messageTime,
+          substr(snippet(run_artifacts_fts, 0, '', '', '…', 28), 1, 400) AS matchSnippet,
+          bm25(run_artifacts_fts) AS relevance
+        FROM run_artifacts_fts JOIN run_artifacts a ON a.id = run_artifacts_fts.rowid
+        JOIN runs r ON r.id = a.run_id
+        WHERE run_artifacts_fts MATCH @ftsQuery AND @hasFts = 1 AND r.account_id = @accountId AND r.is_archived = 0
+          AND a.kind IN ('user-prompt', 'report', 'result')
+          AND coalesce(json_extract(${metadata}, '$.kind'), '') <> 'thinking'
+          AND coalesce(json_extract(${metadata}, '$.source'), '') NOT IN ('agent_thinking_streaming', 'assistant.reasoning_delta')
+          AND coalesce(json_extract(${metadata}, '$.voice'), 0) <> 1
+          AND coalesce(json_extract(${metadata}, '$.isFromSubagent'), 0) <> 1
+          AND json_extract(${metadata}, '$.agentId') IS NULL
+          AND json_extract(${metadata}, '$.parentToolCallId') IS NULL
+          AND json_extract(${metadata}, '$.parentToolUseId') IS NULL
+      ), ranked_messages AS (
+        SELECT *, row_number() OVER (PARTITION BY runId ORDER BY relevance, artifactId DESC) AS messageRank FROM raw_matches
+      ), candidates AS (
+        SELECT r.id, substr(r.title, 1, 160) AS title, substr(r.goal, 1, 200) AS goal,
+          r.provider_id AS providerId, r.mode, substr(coalesce(w.name, c.name), 1, 160) AS context,
+          r.updated_at * 1000 AS updatedAt, r.created_at * 1000 AS createdAt,
+          m.artifactId, m.messageTime, m.matchSnippet,
+          CASE WHEN lower(coalesce(r.title, '')) = lower(@exact) THEN 0
+            WHEN r.title LIKE @prefix ESCAPE '!' THEN 1
+            WHEN r.title LIKE @contains ESCAPE '!' THEN 2
+            WHEN r.goal LIKE @contains ESCAPE '!' THEN 3 ELSE 4 END AS rank
+        FROM runs r LEFT JOIN ranked_messages m ON m.runId = r.id AND m.messageRank = 1
+        LEFT JOIN workspaces w ON w.id = r.workspace_id LEFT JOIN collections c ON c.id = r.collection_id
+        WHERE r.account_id = @accountId AND r.is_archived = 0
+          AND (r.title LIKE @contains ESCAPE '!' OR r.goal LIKE @contains ESCAPE '!' OR m.artifactId IS NOT NULL)
+      ) SELECT * FROM candidates
+      WHERE @hasCursor = 0 OR rank > @rank
+        OR (rank = @rank AND (createdAt < @createdAt OR (createdAt = @createdAt AND id > @runId)))
+      ORDER BY rank, createdAt DESC, id LIMIT @limit
+    `).all({ ...bindings(options), ftsQuery: ftsQuery ?? '"__mains_empty_query__"', hasFts: Number(!!ftsQuery),
+      hasCursor: Number(!!cursor), rank: cursor?.rank ?? 0, createdAt: cursor?.createdAt ?? 0, runId: cursor?.runId ?? "" }) as ConversationMatchRow[];
+  },
   findWorkspaces(options: SearchRepoOptions): WorkspaceSearchRow[] {
     return getSqlite()
       .prepare(

@@ -58,6 +58,7 @@ export function useSubmittedPrompts({ ownerKey, viewKey, activeRunId, events, ru
         kind: "user-prompt", source: "user", clientPromptId: id,
         issues: payload.contextIssues, signals: payload.contextSignals,
         files: payload.contextFiles, skills: payload.contextSkills,
+        assistantMentions: context.flatMap(item => item.kind === "assistant" ? [{ id: item.assistantId, name: item.name, token: item.token }] : []),
         attachments: [
           ...attachments,
           ...(payload.attachments ?? []).map(({ name, type, mimeType, sourcePath }) => ({ name, type, mimeType, sourcePath })),

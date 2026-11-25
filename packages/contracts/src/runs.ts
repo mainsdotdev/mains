@@ -54,11 +54,15 @@ export interface ReadRunHistoryPayload {
   deferToolOutput?: boolean;
   /** Bounded row/byte pages and deferred large bodies for phones. */
   profile?: "mobile";
+  /** Native conversation layout: complete prompt boundaries with bounded previews. */
+  conversationWindow?: boolean;
+  /** Bounded detail navigation within a previously returned activity window. */
+  range?: { start: RunHistoryCursor; end: RunHistoryCursor };
 }
 
 export interface ReadRunHistoryContentPayload {
   runId: string;
-  source: "artifact" | "tool-input" | "tool-output" | "turn-diff";
+  source: "artifact" | "tool-input" | "tool-output" | "turn-diff" | "plan";
   id: number;
   /** SQLite character offset, returned by the previous page. */
   offset?: number;
@@ -91,6 +95,8 @@ export interface RunHistoryPage<A = RunArtifactResponse, C = ToolCallResponse, T
   last: RunHistoryCursor | null;
   hasOlder: boolean;
   hasNewer: boolean;
+  /** Omitted rows remain available through ordinary mobile pages in this range. */
+  activity?: { start: RunHistoryCursor; end: RunHistoryCursor; omittedCount: number };
 }
 
 /** Explicit input for an active turn. Settings stay owned by that turn. */
@@ -344,7 +350,7 @@ export interface SpaceModePayload {
 
 /**
  * `providers:getEnabled` row (subset). `config` is the provider's settings
- * blob; the phone reads only the reasoning keys out of it (see `lib/models`).
+ * blob; paired devices receive only safe run preferences and the Codex voice.
  */
 export interface ProviderSummary {
   id: string;
@@ -385,6 +391,8 @@ export interface UpdateRunSettingsPayload {
   fastMode?: boolean;
   goalMode?: boolean;
   planMode?: boolean;
+  /** Codex voice preference; applies to the next realtime session. */
+  realtimeVoice?: string;
 }
 
 /** `collections:list` row (subset). */

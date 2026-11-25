@@ -1,10 +1,12 @@
 import type { pulses } from "../../db/schema";
 import type { ModeId } from "@mains/contracts/modes";
 
-export type Pulse = typeof pulses.$inferSelect;
+export type Pulse = typeof pulses.$inferSelect & { lastAssignmentStatus?: string | null };
 export type PulseFrequency = Pulse["frequency"];
 
 export type CreatePulseInput = {
+  /** Bind this schedule to the assistant's frozen profile and durable task queue. */
+  assistantId?: string | null;
   /** Required for developer pulses; work/chat pulses run workspace-less. */
   workspaceId?: string | null;
   /** Optional collection target for work/chat pulses (sources travel with it). */
@@ -44,3 +46,5 @@ export type UpdatePulseInput = Partial<
     | "isActive"
   >
 >;
+
+export type CreateAssistantRoutineInput = Omit<CreatePulseInput, "assistantId" | "providerId" | "model" | "collectionId" | "thinkingMode" | "effortLevel">;

@@ -2,6 +2,44 @@ import SwiftUI
 import UIKit
 import ImageIO
 
+extension EnvironmentValues {
+    @Entry var mateMentionAvatars: [String: MateAvatar] = [:]
+}
+
+@MainActor
+enum WorkspaceFileArtwork {
+    static func image(for file: WorkspaceFileMatch, tint: UIColor) -> UIImage {
+        if file.kind == .directory {
+            return (UIImage(named: "registry-workspace-folder") ?? UIImage(systemName: "folder.fill")!)
+                .withTintColor(.systemOrange, renderingMode: .alwaysOriginal)
+        }
+        if let asset = fileTypeAssetName(for: file.name), let image = UIImage(named: asset) {
+            return image.withRenderingMode(.alwaysOriginal)
+        }
+        return (UIImage(named: "registry-tool-file") ?? UIImage(systemName: "doc.fill")!)
+            .withTintColor(tint, renderingMode: .alwaysOriginal)
+    }
+
+    static func fileTypeAssetName(for name: String) -> String? {
+        let asset: String? = switch (name as NSString).pathExtension.lowercased() {
+        case "swift": "tool-file-swift"
+        case "ts", "mts", "cts": "tool-file-typescript"
+        case "js", "mjs", "cjs": "tool-file-javascript"
+        case "jsx", "tsx": "tool-file-react"
+        case "json", "jsonc", "json5": "tool-file-json"
+        case "py", "pyi", "pyw": "tool-file-python"
+        case "md", "mdx": "atlas-document-md"
+        case "txt", "text", "log", "rtf": "atlas-document-txt"
+        case "doc", "docx": "atlas-document-docx"
+        case "xls", "xlsx": "atlas-document-xlsx"
+        case "ppt", "pptx": "atlas-document-pptx"
+        case "pdf": "atlas-document-pdf"
+        default: nil
+        }
+        return asset.map { "registry-" + $0 }
+    }
+}
+
 /// Artwork stays scoped to visible mentions. Only bounded data/HTTPS images are
 /// accepted; absolute catalogue paths always use the bundled fallback.
 @MainActor @Observable
@@ -45,11 +83,25 @@ final class ContextArtwork {
         guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return .link }
         return UIColor(red: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
     }
-    static func icon(_ image: UIImage?, skill: ContextSkill, size: CGFloat, tint: UIColor) -> UIImage {
-        UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in
-            let isSkill = skill.group == "Skills"
-            let source = image ?? UIImage(named: isSkill ? "registry-sparkles" : "registry-box")?.withTintColor(tint, renderingMode: .alwaysOriginal) ?? UIImage(systemName: isSkill ? "sparkles" : "cube")!.withTintColor(tint, renderingMode: .alwaysOriginal)
-            let scale = min(size / max(1, source.size.width), size / max(1, source.size.height))
+    static func matePreset(_ skill: ContextSkill, avatars: [String: MateAvatar] = [:]) -> MateRobotCatalogue.Preset? {
+        guard let id = skill.mateID, let avatar = skill.mateAvatar ?? avatars[id] else { return nil }
+        return MateRobotAssets.catalogue?.preset(for: avatar, mateID: id)
+    }
+    static func icon(_ image: UIImage?, skill: ContextSkill, size: CGFloat, tint: UIColor, onPrompt: Bool = false) -> UIImage {
+        let file = skill.workspaceFile
+        let isSkill = skill.group == "Skills"
+        let asset = skill.mateID != nil ? "registry-assistant-steps" : isSkill ? "registry-sparkles" : "registry-box"
+        let usesBackdrop = onPrompt && file != nil
+        let source = file.map { WorkspaceFileArtwork.image(for: $0, tint: usesBackdrop ? .darkGray : tint) }
+            ?? image ?? UIImage(named: asset)?.withTintColor(tint, renderingMode: .alwaysOriginal)
+            ?? UIImage(systemName: isSkill ? "sparkles" : "cube")!.withTintColor(tint, renderingMode: .alwaysOriginal)
+        return UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in
+            if usesBackdrop {
+                UIColor(white: 1, alpha: 0.9).setFill()
+                UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: size, height: size), cornerRadius: size * 0.2).fill()
+            }
+            let artworkSize = usesBackdrop ? size * 0.8 : size
+            let scale = min(artworkSize / max(1, source.size.width), artworkSize / max(1, source.size.height))
             let rect = CGRect(x: (size - source.size.width * scale) / 2, y: (size - source.size.height * scale) / 2, width: source.size.width * scale, height: source.size.height * scale)
             source.draw(in: rect)
         }
@@ -58,24 +110,36 @@ final class ContextArtwork {
 
 /// Same metadata-based token positions as the composer, rendered inside sent prompts.
 struct InlineContextText: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let text: String
     let skills: [ContextSkill]
+    let ink: Color
     @State private var artwork = ContextArtwork()
+    @Environment(\.mateMentionAvatars) private var mateAvatars
+    @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 17
     var body: some View {
         let projection = ContextText(text, skills: skills, canonical: true)
-        rendered(projection).accessibilityLabel(projection.readable)
+        rendered(projection).foregroundStyle(ink).accessibilityLabel(projection.readable)
             .task(id: skills) { await artwork.load(skills) }
     }
     private func rendered(_ projection: ContextText) -> Text {
         let display = projection.display as NSString
         var result = Text(""), cursor = 0
         for mention in projection.mentions {
-            result = result + Text(display.substring(with: NSRange(location: cursor, length: mention.displayRange.location - cursor)))
-            let icon = ContextArtwork.icon(artwork.images[mention.skill.name], skill: mention.skill, size: 17, tint: .white)
-            result = result + Text(Image(uiImage: icon)).baselineOffset(-2) + Text(" " + mention.skill.title).fontWeight(.semibold)
+            let prefix = Text(display.substring(with: NSRange(location: cursor, length: mention.displayRange.location - cursor)))
+            let skill = mention.skill
+            let avatar = ContextArtwork.matePreset(skill, avatars: mateAvatars).flatMap { MateRobotAssets.image(for: $0) }
+            let size = skill.mateID == nil ? iconSize : iconSize * 1.18
+            let icon = ContextArtwork.icon(avatar ?? artwork.images[skill.name], skill: skill, size: size, tint: UIColor(ink), onPrompt: true)
+            let symbol = Text(Image(uiImage: icon).renderingMode(.original)).baselineOffset(-iconSize * 0.14 - (size - iconSize) / 2)
+            let title = Text((skill.mateID == nil ? " " : "\u{00a0}") + skill.mentionTitle).fontWeight(.semibold)
+            result = Text("\(result)\(prefix)\(symbol)\(title)")
             cursor = NSMaxRange(mention.displayRange)
         }
-        return result + Text(display.substring(from: cursor).replacingOccurrences(of: ContextMentions.marker, with: ""))
+        let suffix = Text(ContextMentions.strippingMarkers(display.substring(from: cursor)))
+        return Text("\(result)\(suffix)")
     }
 }
 
@@ -85,14 +149,20 @@ private final class ContextAttachment: NSTextAttachment {
     @MainActor init(skill: ContextSkill, scope: ContextScope, font: UIFont, image: UIImage?, maxWidth: CGFloat) {
         self.skill = skill; self.scope = scope
         super.init(data: nil, ofType: nil)
-        let color = ContextArtwork.color(skill), iconSize = font.pointSize
+        let preset = ContextArtwork.matePreset(skill)
+        let avatar = preset.flatMap { MateRobotAssets.image(for: $0) }
+        let color = preset.map { UIColor(MateRobotAssets.chatTint(for: $0.avatar)) } ?? ContextArtwork.color(skill)
+        let title = skill.mentionTitle as NSString
+        let iconSize = skill.mateID == nil ? font.pointSize : font.pointSize * 1.18
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
-        let width = min(maxWidth, max(iconSize + 12, (skill.title as NSString).size(withAttributes: attributes).width + iconSize + 6))
+        let width = min(maxWidth, max(iconSize + 12, title.size(withAttributes: attributes).width + iconSize + 6))
         let height = ceil(font.lineHeight)
+        let textTop = (height - font.lineHeight) / 2
+        let iconTop = skill.mateID == nil ? (height - iconSize) / 2 : textTop + font.ascender - (font.capHeight + iconSize) / 2
         self.image = UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { _ in
-            ContextArtwork.icon(image, skill: skill, size: iconSize, tint: color).draw(at: CGPoint(x: 0, y: (height - iconSize) / 2))
+            ContextArtwork.icon(avatar ?? image, skill: skill, size: iconSize, tint: color).draw(at: CGPoint(x: 0, y: iconTop))
             let paragraph = NSMutableParagraphStyle(); paragraph.lineBreakMode = .byTruncatingTail
-            (skill.title as NSString).draw(in: CGRect(x: iconSize + 6, y: (height - font.lineHeight) / 2, width: max(1, width - iconSize - 6), height: height), withAttributes: attributes.merging([.paragraphStyle: paragraph]) { _, new in new })
+            title.draw(in: CGRect(x: iconSize + 6, y: textTop, width: max(1, width - iconSize - 6), height: height), withAttributes: attributes.merging([.paragraphStyle: paragraph]) { _, new in new })
         }
         bounds = CGRect(x: 0, y: font.descender, width: width, height: height)
     }
@@ -100,23 +170,34 @@ private final class ContextAttachment: NSTextAttachment {
 }
 
 struct ContextTextEditor: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @Binding var text: String
     @Binding var skills: [ContextSkill]
     let scope: ContextScope
     @Binding var focused: Bool
     let placeholder: String
     let identifier: String
+    var fillsHeight = false
+    var reservedTrailingWidth: CGFloat = 0
+    var onOverflowChange: ((Bool) -> Void)? = nil
     @State private var artwork = ContextArtwork()
     @State private var measuredWidth: CGFloat = 320
     var body: some View {
         ContextTextInput(text: $text, skills: $skills, scope: scope, focused: $focused, placeholder: placeholder, identifier: identifier,
-                         images: artwork.images, artworkRevision: artwork.revision, measuredWidth: measuredWidth)
+                         images: artwork.images, artworkRevision: artwork.revision, measuredWidth: measuredWidth,
+                         fillsHeight: fillsHeight, reservedTrailingWidth: reservedTrailingWidth, onOverflowChange: onOverflowChange)
             .task(id: skills) { await artwork.load(skills) }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth = $0 }
+            .padding(.trailing, reservedTrailingWidth)
     }
 }
 
 private struct ContextTextInput: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @Binding var text: String
     @Binding var skills: [ContextSkill]
     let scope: ContextScope
@@ -126,8 +207,12 @@ private struct ContextTextInput: UIViewRepresentable {
     let images: [String: UIImage]
     let artworkRevision: Int
     let measuredWidth: CGFloat
+    let fillsHeight: Bool
+    let reservedTrailingWidth: CGFloat
+    let onOverflowChange: ((Bool) -> Void)?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.mainPaneCovered) private var mainPaneCovered
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> ComposerTextView {
@@ -141,6 +226,11 @@ private struct ContextTextInput: UIViewRepresentable {
     }
     func updateUIView(_ view: ComposerTextView, context: Context) {
         let coordinator = context.coordinator; coordinator.parent = self
+        view.onOverflowChange = onOverflowChange
+        view.reservedTrailingWidth = reservedTrailingWidth
+        view.isUserInteractionEnabled = !mainPaneCovered
+        view.isAccessibilityElement = !mainPaneCovered
+        view.accessibilityElementsHidden = mainPaneCovered
         if coordinator.scope != scope {
             view.undoManager?.removeAllActions(); coordinator.scope = scope
         }
@@ -170,27 +260,35 @@ private struct ContextTextInput: UIViewRepresentable {
             }
             view.selectedRange = selection
             coordinator.projection = projection; coordinator.skills = skills; coordinator.signature = signature
+            view.invalidateTextMeasurement()
         }
         view.accessibilityValue = projection.readable
         view.onCopy = { [weak view, weak coordinator] in
             guard let view, let coordinator else { return }
             let range = view.selectedRange
             let selected = view.attributedText.attributedSubstring(from: range)
-            UIPasteboard.general.string = coordinator.source(selected).replacingOccurrences(of: ContextMentions.marker, with: "")
+            UIPasteboard.general.string = ContextMentions.strippingMarkers(coordinator.source(selected))
         }
-        view.wantsFocus = focused
-        if focused, !view.isFirstResponder { view.requestFocus() }
-        else if !focused, view.isFirstResponder { view.resignFirstResponder() }
+        let wantsFocus = focused && !mainPaneCovered && !coordinator.isEndingEditing
+        view.wantsFocus = wantsFocus
+        if wantsFocus, !view.isFirstResponder { view.requestFocus() }
+        else if !wantsFocus, view.isFirstResponder { view.resignFirstResponder() }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ComposerTextView, context: Context) -> CGSize? {
         guard let width = proposal.width else { return nil }
         let font = uiView.font ?? .preferredFont(forTextStyle: .body)
+        let minimum = ceil(font.lineHeight)
+        if fillsHeight, let height = proposal.height, height.isFinite {
+            return CGSize(width: width, height: max(minimum, height))
+        }
         let fitted = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        let limit = ceil(font.lineHeight * 6)
-        uiView.isScrollEnabled = fitted.height > limit
-        return CGSize(width: width, height: max(ceil(font.lineHeight), min(limit, fitted.height)))
+        return CGSize(width: width, height: max(minimum, min(uiView.compactHeightLimit, fitted.height)))
     }
-    static func dismantleUIView(_ uiView: ComposerTextView, coordinator: Coordinator) { uiView.wantsFocus = false; uiView.delegate = nil }
+    static func dismantleUIView(_ uiView: ComposerTextView, coordinator: Coordinator) {
+        uiView.wantsFocus = false
+        uiView.onOverflowChange = nil
+        uiView.delegate = nil
+    }
 
     @MainActor final class Coordinator: NSObject, UITextViewDelegate {
         var parent: ContextTextInput
@@ -198,6 +296,7 @@ private struct ContextTextInput: UIViewRepresentable {
         var skills: [ContextSkill] = []
         var scope: ContextScope?
         var signature = ""
+        private(set) var isEndingEditing = false
         init(_ parent: ContextTextInput) { self.parent = parent }
         func source(_ value: NSAttributedString) -> String {
             var result = ""
@@ -220,14 +319,28 @@ private struct ContextTextInput: UIViewRepresentable {
             projection = ContextText(value, skills: selected)
             parent.text = value
             view.accessibilityValue = projection.readable
-            (view as? ComposerTextView)?.placeholder.isHidden = !value.isEmpty
-            view.invalidateIntrinsicContentSize()
+            if let editor = view as? ComposerTextView {
+                editor.placeholder.isHidden = !value.isEmpty
+                editor.invalidateTextMeasurement()
+            }
         }
         func textViewDidChangeSelection(_ view: UITextView) {
             view.typingAttributes = [.font: UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor.label]
         }
-        func textViewDidBeginEditing(_ view: UITextView) { if !parent.focused { parent.focused = true } }
-        func textViewDidEndEditing(_ view: UITextView) { if parent.focused { parent.focused = false } }
+        func textViewDidBeginEditing(_ view: UITextView) {
+            isEndingEditing = false
+            if !parent.focused { parent.focused = true }
+        }
+        func textViewDidEndEditing(_ view: UITextView) {
+            // Cancel queued focus before the keyboard resize can update this view.
+            isEndingEditing = true
+            (view as? ComposerTextView)?.wantsFocus = false
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self, let view, view.delegate === self, self.isEndingEditing else { return }
+                if !view.isFirstResponder, self.parent.focused { self.parent.focused = false }
+                self.isEndingEditing = false
+            }
+        }
     }
 }
 
@@ -235,13 +348,55 @@ final class ComposerTextView: UITextView {
     let placeholder = UILabel()
     var wantsFocus = false
     var onCopy: (() -> Void)?
+    var onOverflowChange: ((Bool) -> Void)?
+    var reservedTrailingWidth: CGFloat = 0 {
+        didSet {
+            if reservedTrailingWidth != oldValue {
+                needsTextMeasurement = true
+                setNeedsLayout()
+            }
+        }
+    }
+    var compactHeightLimit: CGFloat { ceil((font ?? .preferredFont(forTextStyle: .body)).lineHeight * 6) }
+    private var measuredViewport = CGSize.zero
+    private var needsTextMeasurement = true
+    private var overflows: Bool?
     init() {
         super.init(frame: .zero, textContainer: nil)
         placeholder.textColor = .placeholderText; placeholder.isUserInteractionEnabled = false
         addSubview(placeholder)
     }
     required init?(coder: NSCoder) { nil }
-    override func layoutSubviews() { super.layoutSubviews(); placeholder.frame = CGRect(x: 0, y: 0, width: bounds.width, height: font?.lineHeight ?? 22) }
+    func invalidateTextMeasurement() {
+        needsTextMeasurement = true
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        placeholder.frame = CGRect(x: 0, y: 0, width: bounds.width, height: font?.lineHeight ?? 22)
+        let resized = measuredViewport != bounds.size
+        guard bounds.width > 0, bounds.height > 0, resized || needsTextMeasurement else { return }
+        measuredViewport = bounds.size
+        needsTextMeasurement = false
+        let fitted = sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude))
+        let needsScrolling = fitted.height > bounds.height + 0.5
+        if needsScrolling != isScrollEnabled { isScrollEnabled = needsScrolling }
+        if resized, isFirstResponder, needsScrolling { scrollRangeToVisible(selectedRange) }
+        guard onOverflowChange != nil else { return }
+        // Check the original width so the space for the button cannot keep it visible.
+        let fullHeight = reservedTrailingWidth > 0
+            ? sizeThatFits(CGSize(width: bounds.width + reservedTrailingWidth, height: .greatestFiniteMagnitude)).height
+            : fitted.height
+        let overflowsWithoutButton = fullHeight > compactHeightLimit + 0.5
+        guard overflows != overflowsWithoutButton else { return }
+        overflows = overflowsWithoutButton
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.overflows == overflowsWithoutButton else { return }
+            self.onOverflowChange?(overflowsWithoutButton)
+        }
+    }
     override func didMoveToWindow() { super.didMoveToWindow(); if wantsFocus { requestFocus() } }
     func requestFocus() {
         guard window != nil else { return }
@@ -254,7 +409,7 @@ final class ComposerTextView: UITextView {
     override func cut(_ sender: Any?) { onCopy?(); insertText("") }
     override func paste(_ sender: Any?) {
         if let text = UIPasteboard.general.string {
-            insertText(text.replacingOccurrences(of: "\u{fffc}", with: "").replacingOccurrences(of: ContextMentions.marker, with: ""))
+            insertText(ContextMentions.strippingMarkers(text.replacingOccurrences(of: "\u{fffc}", with: "")))
         }
     }
 }

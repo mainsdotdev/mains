@@ -1,6 +1,8 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Zstd } from "@hpcc-js/wasm-zstd";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliHistorySources, createCliHistoryScanner } from "./stats.cli-history";
 import { aggregateConsumption } from "./stats.consumption";
@@ -9,6 +11,17 @@ import { resolveDashboardRange } from "./stats.range";
 let root: string;
 const line = (id: string, tokens = 10) => JSON.stringify({ type: "assistant", timestamp: "2026-10-10T23:30:00Z", sessionId: "one-session",
   message: { id, model: "claude-test", usage: { input_tokens: tokens, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } });
+
+function codexTranscript(tokens = 100, earlierRows: object[] = []) {
+  return [
+    { type: "session_meta", payload: { id: "codex-native" } },
+    ...earlierRows,
+    { type: "turn_context", payload: { model: "gpt-test-ü" } },
+    { type: "event_msg", payload: { type: "token_count", info: { last_token_usage: {
+      input_tokens: tokens, cached_input_tokens: 80, output_tokens: 20,
+    } } } },
+  ].map((row) => JSON.stringify({ ...row, timestamp: "2026-10-10T12:00:00Z" })).join("\n") + "\n";
+}
 
 describe("CLI history scanning", () => {
   beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), "mains-cli-history-")); });
@@ -126,6 +139,56 @@ describe("CLI history scanning", () => {
         total_token_usage: { input_tokens: 200, output_tokens: 40 } } } }) + "\n");
     expect(aggregateConsumption((await scanner.read(source)).records, range, new Map()).totals)
       .toMatchObject({ records: 2, totalTokens: 240, sessions: 1 });
+  });
+
+  it("streams compressed Codex rollouts and counts both formats of an archived session once", async () => {
+    const active = path.join(root, "sessions");
+    const archived = path.join(root, "archived_sessions");
+    await fs.mkdir(active);
+    await fs.mkdir(archived);
+    const plain = path.join(active, "rollout.jsonl");
+    const compressed = path.join(archived, "archived-rollout.jsonl.zst");
+    // A long, incompressible row forces both the input and JSONL line to span reads.
+    const transcript = codexTranscript(100, [{ type: "response_item", payload: { text: randomBytes(300 * 1024).toString("base64") } }]);
+    const zstd = await Zstd.load();
+    await fs.writeFile(plain, transcript);
+    await fs.writeFile(compressed, zstd.compress(Buffer.from(transcript)));
+    const scanner = createCliHistoryScanner();
+    const source = [{ providerId: "codex" as const, directories: [active, archived] }];
+    const range = resolveDashboardRange({ period: "week", timeZone: "UTC" }, new Date("2026-10-11T12:00:00Z"));
+    const [both, concurrent] = await Promise.all([scanner.read(source), createCliHistoryScanner().read(source)]);
+    expect(concurrent).toEqual(both);
+    expect(both.sources[0]).toMatchObject({ status: "available", scannedFiles: 2, skippedLines: 0 });
+    expect(aggregateConsumption(both.records, range, new Map()).totals)
+      .toMatchObject({ records: 1, totalTokens: 120, sessions: 1 });
+
+    await fs.unlink(plain);
+    const archivedOnly = await scanner.read(source);
+    expect(archivedOnly.records).toMatchObject([{ sessionId: "codex-native", model: "gpt-test-ü", inputTokens: 100 }]);
+    expect((await scanner.read(source)).records[0]).toBe(archivedOnly.records[0]);
+
+    const moved = path.join(active, "moved-rollout.jsonl.zst");
+    await fs.rename(compressed, moved);
+    expect((await scanner.read(source)).records).toEqual(archivedOnly.records);
+    await fs.writeFile(moved, zstd.compress(Buffer.from(codexTranscript(200))));
+    expect((await scanner.read(source)).records).toMatchObject([{ inputTokens: 200 }]);
+  });
+
+  it("reports truncated compressed files and reads them after replacement", async () => {
+    const zstd = await Zstd.load();
+    const packed = zstd.compress(Buffer.from(codexTranscript()));
+    const broken = path.join(root, "broken.jsonl.zst");
+    await fs.writeFile(broken, packed.subarray(0, -1));
+    await fs.writeFile(path.join(root, "valid.jsonl.zst"), packed);
+    const scanner = createCliHistoryScanner();
+    const source = [{ providerId: "codex" as const, directories: [root] }];
+    const partial = await scanner.read(source);
+    expect(partial.sources[0]).toMatchObject({ status: "partial", scannedFiles: 1, unreadableFiles: 1 });
+    expect(partial.records).toMatchObject([{ inputTokens: 100 }]);
+
+    await fs.writeFile(broken, packed);
+    expect((await scanner.read(source)).sources[0])
+      .toMatchObject({ status: "available", scannedFiles: 2, unreadableFiles: 0 });
   });
 
   it("reports absent roots and malformed usage as missing or partial", async () => {

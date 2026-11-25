@@ -312,7 +312,7 @@ export function SidebarChatList({
   }
 
   return (
-    <div className="flex flex-col gap-2 pb-2 pt-2">
+    <div className="flex flex-col gap-2 pb-2">
       {/* No empty state: an unused Pinned header would be a permanent row
           explaining a feature nobody asked for. */}
       {pinnedRuns.length > 0 && (
@@ -343,7 +343,7 @@ export function SidebarChatList({
               >
                 <Plus className="size-3" />
               </Button>
-              <div className="-mr-1">
+              <div className="-mr-1 ml-1">
                 <SourceFilterButton
                   sources={sources}
                   onSourceVisibleChange={setSourceVisible}

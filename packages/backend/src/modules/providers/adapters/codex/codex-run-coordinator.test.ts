@@ -10,7 +10,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function liveRun(beforeStart?: (coordinator: ReturnType<typeof createCodexRunCoordinator>) => void, project?: (event: WorkRunEvent) => Promise<void>) {
+function liveRun(beforeStart?: (coordinator: ReturnType<typeof createCodexRunCoordinator>, notify: (method: string, params: unknown) => void) => void, project?: (event: WorkRunEvent) => Promise<void>) {
   const coordinator = createCodexRunCoordinator();
   let notify!: (method: string, params: unknown) => void;
   let serverRequest!: (id: number | string, method: string, params: unknown) => void;
@@ -28,7 +28,7 @@ function liveRun(beforeStart?: (coordinator: ReturnType<typeof createCodexRunCoo
   const finished = coordinator.executeTurn(server, {
     runId: "run", model: "model", timeout: 5000,
     startTurn: async () => {
-      beforeStart?.(coordinator);
+      beforeStart?.(coordinator, notify);
       notify("turn/started", { threadId: "parent", turn: { id: "turn-parent", status: "inProgress" } });
     },
   }, async (event) => { events.push(event); await project?.(event); }, new AbortController().signal);
@@ -38,6 +38,22 @@ function liveRun(beforeStart?: (coordinator: ReturnType<typeof createCodexRunCoo
 }
 
 describe("Codex active input delivery", () => {
+  it("discards a previous turn's terminal events before projecting or finishing the new turn", async () => {
+    const oldCompletion = { threadId: "parent", turn: { id: "old-turn", status: "interrupted" } };
+    const h = liveRun((_coordinator, notify) => notify("turn/completed", oldCompletion));
+    try {
+      h.notify("item/agentMessage/delta", { threadId: "parent", turnId: "turn-parent", itemId: "answer", delta: "Current " });
+      h.notify("turn/completed", oldCompletion);
+      h.notify("error", { threadId: "parent", turnId: "old-turn", willRetry: false, error: { message: "Previous failure" } });
+      h.notify("item/agentMessage/delta", { threadId: "parent", turnId: "turn-parent", itemId: "answer", delta: "answer" });
+      h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+      await expect(h.finished).resolves.toMatchObject({ status: "succeeded" });
+      const reports = h.events.filter((event) => event.type === "artifact" && event.kind === "report" && !event.ephemeral);
+      expect(reports).toEqual([expect.objectContaining({ content: "Current answer" })]);
+      expect(JSON.stringify(h.events)).not.toContain("Previous failure");
+    } finally { h.coordinator.shutdown(); }
+  });
+
   it("settles active status rows on shutdown and waits for their persistence", async () => {
     const closing = deferred<void>();
     const h = liveRun(undefined, async (event) => {

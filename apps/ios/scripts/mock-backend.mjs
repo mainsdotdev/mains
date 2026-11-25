@@ -1,32 +1,107 @@
 // Deterministic protocol fixture. Uses the REAL TypeScript codec and channels;
 // never starts an AI provider, opens a real database, or edits a workspace.
 import http from 'node:http';
-import { createRequire } from 'node:module';
+import { createHash, randomUUID } from 'node:crypto';
+import { createRequire, stripTypeScriptTypes } from 'node:module';
+import { readFile } from 'node:fs/promises';
 import { encodeWsMessage, decodeWsMessage, WS_PROTOCOL_VERSION } from '../../../packages/contracts/src/ws-protocol.ts';
 import { CHANNELS } from '../../../packages/contracts/src/channels.ts';
+import { atlasFixture, resetAtlasFixture } from './mock-atlas.mjs';
+import { historyWindow, compareHistoryCursors } from '../../../packages/contracts/src/run-history.ts';
+
+// Backend sources live in an explicit CommonJS package. Load this dependency-free
+// helper as stripped ESM so the fixture exercises the production projection store.
+const queueStoreSource = await readFile(new URL('../../../packages/backend/src/modules/runs/run-queue-projection.ts', import.meta.url), 'utf8');
+const { createRunQueueProjectionStore } = await import('data:text/javascript,' + encodeURIComponent(stripTypeScriptTypes(queueStoreSource)));
 
 const require = createRequire(new URL('../../server/package.json', import.meta.url));
 const { WebSocketServer, WebSocket } = require('ws');
 const port = Number(process.env.MAINS_FIXTURE_PORT ?? 18787);
 const descriptor = { backendId: 'ios-fixture', name: 'Test Mac', appVersion: '0.1.0', protocolVersion: WS_PROTOCOL_VERSION,
-  capabilities: ['runs', 'space', 'workspace'], serverTime: new Date().toISOString() };
+  capabilities: ['runs', 'space', 'workspace', 'assistants'], serverTime: new Date().toISOString() };
+const fixtureMate = {
+  id: 'fixture-mate', name: 'Fixture Mate', description: 'Checks releases',
+  avatar: { shape: 'terminal-amber', color: 'amber' }, teamId: 'release-team',
+  providerId: 'codex', model: 'fixture-balanced', needsSetup: false, welcome: null,
+  details: { spaceName: 'Release Workspace', effort: 'high', instructions: 'Summarize release risks and link the checks.' },
+};
+const fixtureMateTeams = [
+  { id: 'release-team', name: 'Release Team' },
+  { id: 'planning-team', name: 'Planning Team' },
+  { id: 'empty-team', name: 'Empty Team' },
+];
+const fixtureMates = [
+  fixtureMate,
+  { ...fixtureMate, id: 'fixture-planner', name: 'Fixture Planner', description: 'Plans trips', teamId: 'planning-team' },
+  { ...fixtureMate, id: 'fixture-reviewer', name: 'Fixture Reviewer', description: '', needsSetup: true },
+  { ...fixtureMate, id: 'fixture-solo', name: 'Fixture Solo', description: '', teamId: null, details: undefined },
+];
 const connections = new Set(), receipts = new Map(), observations = [];
 const timers = new Set(), replies = new Map();
 const pendingDecisions = new Map();
+const queueProjections = createRunQueueProjectionStore();
 const storedTurns = new Map(), storedDiffs = new Map();
+const createdMates = new Map();
+const createdMateTeams = new Map();
+let editedFixtureMate = null;
+const mateAssignments = new Map();
+const mateMemory = new Map();
+const matePins = new Map();
+const fixtureInfoTask = { id: 'fixture-info-task', title: 'Release handoff', status: 'completed', brief: 'Check the changelog.',
+  result: 'Changelog checked.', error: null, workerRunId: 'fixture-mate-chat-0', evidence: ['Release checklist'],
+  assignee: { id: fixtureMate.id, name: fixtureMate.name, avatar: fixtureMate.avatar, isArchived: false } };
+const fixtureClaudeMate = { ...fixtureMate, id: 'fixture-claude-mate', name: 'Claude Reviewer', providerId: 'claude_code' };
+const fixtureBlockedTask = { id: 'fixture-blocked-task', title: 'Needs report details', status: 'blocked', brief: 'Review the draft.',
+  result: null, error: null, workerRunId: null, evidence: [],
+  assignee: { id: fixtureClaudeMate.id, name: fixtureClaudeMate.name, avatar: fixtureClaudeMate.avatar, isArchived: false } };
+const fixtureRoutine = { id: 'fixture-info-routine', title: 'Morning release check', prompt: 'Summarize changes.', frequency: 'daily',
+  dayOfWeek: null, hour: 9, minute: 30, timezone: 'Europe/Istanbul', workspaceId: null, isActive: false, nextRunAt: null,
+  lastRunId: 'fixture-mate-chat-0', lastAssignmentStatus: 'completed', lastError: null, revision: 'fixture-revision' };
 let acceptsConnections = true;
 let holdSnapshot = 0;
+let atlasLibraryDelayMs = 0;
+let atlasPageDelayMs = 0;
+let chatHistoryDelayMs = 0;
+let atlasLibraryEmpty = false;
+let mateDetailsDelayMs = 0;
+let mateHistoryDelayMs = 0;
+let mateDirectoryDelayMs = 0;
+let mateRoutinesDelayMs = 0;
+let mateArchived = false;
 let contextDelayMs = 0, contextInvalidRows = false;
+let forkBehavior = null;
+let fileDeliveryFixture = false;
 let pagedHistory = false;
 let disjointHistory = false;
 let artifacts, runs, nextID, spaces, tools;
+const goals = new Map();
+let goalControlsFixture = false;
+function setFixtureGoal(runId, goal) {
+  goals.set(runId, { ...goal, revision: createHash('sha256').update(randomUUID()).digest('hex') });
+  event(CHANNELS.providers.mobileGoalChanged, runId);
+}
 function reset(longHistory = false, home = false, design = false, workspaceList = false, media = false, paging = false, disjoint = false) {
+  resetAtlasFixture();
   for (const timer of timers) clearTimeout(timer);
   timers.clear(); replies.clear(); acceptsConnections = true;
-  holdSnapshot = 0; contextDelayMs = 0; contextInvalidRows = false;
+  holdSnapshot = 0; atlasLibraryDelayMs = 0; atlasLibraryEmpty = false;
+  atlasPageDelayMs = 0; chatHistoryDelayMs = 0;
+  mateDetailsDelayMs = 0; mateHistoryDelayMs = 0; mateDirectoryDelayMs = 0; mateRoutinesDelayMs = 0;
+  contextDelayMs = 0; contextInvalidRows = false;
+  mateArchived = false;
+  forkBehavior = null;
+  fileDeliveryFixture = false;
   pagedHistory = paging;
   disjointHistory = disjoint;
   receipts.clear(); pendingDecisions.clear(); storedTurns.clear(); storedDiffs.clear(); observations.length = 0; nextID = 10;
+  createdMates.clear(); mateAssignments.clear();
+  createdMateTeams.clear(); editedFixtureMate = null;
+  mateMemory.clear(); matePins.clear();
+  goals.clear();
+  goalControlsFixture = false;
+  descriptor.backendId = 'ios-fixture';
+  descriptor.capabilities = ['runs', 'space', 'workspace', 'assistants', 'mobileGoalSummary', 'mobileGoalControls'];
+  queueProjections.clear();
   tools = new Map();
   spaces = [{ id: 'fixture-space', name: 'Codex', providerId: 'codex', icon: 'icon:codex', mode: 'chat', model: null, isArchived: false },
     { id: 'fixture-code', name: 'Code', providerId: 'codex', icon: 'icon:codex', mode: 'developer', model: null, isArchived: false }];
@@ -101,6 +176,11 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
         { id: 2, runId: id, kind: 'report', content: 'Hello from this workspace.', metadata: {}, createdAt: new Date(at.getTime() + 1) },
       ]);
     }
+    for (let index = 0; index < 16; index++) {
+      const id = `workspace-earlier-${index}`, at = new Date(Date.now() - (index + 4) * 86400000);
+      runs.push({ ...runs[0], id, title: `Earlier task ${index + 1}`, spaceId: 'fixture-code', workspaceId: 'fixture-workspace', mode: 'developer', createdAt: at, updatedAt: at });
+      artifacts.set(id, []);
+    }
   }
 }
 reset();
@@ -130,6 +210,20 @@ function fixturePDF() {
   return Buffer.from(source + '% harmless fixture padding\n'.repeat(6000));
 }
 const pdfBytes = fixturePDF();
+function fixtureFile(id) {
+  const file = { 701: ['archive.zip', 'application/zip', 'unsupported', 100 * 1024 * 1024],
+    702: ['large.txt', 'text/plain', 'text', 3 * 1024 * 1024], 703: ['report.pdf', 'application/pdf', 'native', pdfBytes.length] }[id];
+  if (!file) throw new Error('Unknown fixture output');
+  return { artifactId: id, runId: 'fixture-run', name: file[0], mimeType: file[1], previewType: file[2], byteSize: file[3], version: outputVersion, modifiedAt: 0 };
+}
+function fixtureChunk(id, input) {
+  const file = fixtureFile(id), start = input.offset;
+  if (input.runId !== file.runId || input.version !== file.version || !Number.isSafeInteger(start) || start < 0 || start >= file.byteSize) throw new Error('Invalid fixture chunk');
+  const end = Math.min(file.byteSize, start + 128 * 1024);
+  const bytes = id === 703 ? pdfBytes.subarray(start, end) : Buffer.alloc(end - start, id === 701 ? 0 : 120);
+  if (id === 701 && start === 0) bytes.set([80, 75, 3, 4]);
+  return { base64: bytes.toString('base64'), offset: start, nextOffset: end < file.byteSize ? end : null, byteSize: file.byteSize, version: file.version };
+}
 function send(socket, message) { if (socket.readyState === WebSocket.OPEN) socket.send(encodeWsMessage(message)); }
 function broadcast(channel, payload) { for (const socket of connections) send(socket, { kind: 'event', channel, payload }); }
 function event(channel, runId, extra = {}) { broadcast(channel, { runId, ts: Date.now(), ...extra }); }
@@ -137,17 +231,31 @@ function later(delay, callback) {
   const timer = setTimeout(() => { timers.delete(timer); callback(); }, delay);
   timers.add(timer);
 }
-function startReply(runId, message, commandId) {
+function startReply(runId, message, commandId, input = {}) {
   const date = new Date();
   const streamId = `reply-${commandId}`;
   const reply = { streamId, content: '', stopped: false };
   replies.set(runId, reply);
-  artifacts.get(runId).push({ id: nextID++, runId, kind: 'user-prompt', content: message, metadata: { source: 'user' }, createdAt: date });
+  const mentions = (input.initialContext ?? input.additionalContext ?? []).filter(item => item.metadata?.source === 'assistant_mention')
+    .map(({ metadata }) => ({ id: metadata.assistantId, name: metadata.name, token: metadata.token }));
+  // Exercise a whole-second computer clock behind the phone's optimistic timestamp.
+  const promptDate = mentions.length ? new Date(Math.floor(date.getTime() / 1000) * 1000 - 1000) : date;
+  artifacts.get(runId).push({ id: nextID++, runId, kind: 'user-prompt', content: message,
+    metadata: { source: 'user', clientUserMessageId: input.clientUserMessageId, skills: input.contextSkills,
+      assistantMentions: mentions.length ? mentions : undefined, clientPromptId: input.clientPromptId,
+      attachments: input.attachments?.map(({ name, type, mimeType }) => ({ name, type, mimeType })) }, createdAt: promptDate });
   const run = runs.find(run => run.id === runId);
+  const goalMode = run.providerId === 'codex' && input.conversationSettings?.config?.goalMode === true;
+  if (goalMode) later(850, () => {
+    if (replies.get(runId) !== reply || reply.stopped) return;
+    const usage = goalControlsFixture ? {} : { tokensUsed: 26438, timeUsedSeconds: 14 };
+    setFixtureGoal(runId, { objective: message, status: 'active', ...usage });
+  });
   run.status = 'running'; run.updatedAt = date;
   event(CHANNELS.runs.statusChanged, runId, { status: 'running' });
   event(CHANNELS.runs.eventPersisted, runId);
-  for (const [delay, content] of [[350, 'Streaming a native reply…'], [1200, 'Streaming a native reply… almost there.']]) {
+  const firstChunk = run.assistantId && message === 'Take your time' ? 6500 : 350;
+  for (const [delay, content] of [[firstChunk, 'Streaming a native reply…'], [firstChunk + 850, 'Streaming a native reply… almost there.']]) {
     later(delay, () => {
       if (replies.get(runId) !== reply || reply.stopped) return;
       reply.content = content;
@@ -155,10 +263,23 @@ function startReply(runId, message, commandId) {
         metadata: { source: 'agent_message_streaming', streaming: true } } });
     });
   }
-  later(message === 'Take your time' ? 30000 : 2400, () => {
+  later(message === 'Take your time' ? 30000 : goalMode ? (goalControlsFixture ? 60000 : 6500) : 2400, () => {
     if (replies.get(runId) !== reply || reply.stopped) return;
+    const mate = mentions.length ? fixtureMates.find(value => value.id === mentions[0].id) : null;
+    if (mate) {
+      const assignmentId = `assignment-${nextID++}`, workerRunId = `worker-${nextID++}`;
+      const result = 'Fixture Mate reviewed the workspace.';
+      mateAssignments.set(assignmentId, { runId, assignment: { id: assignmentId, title: 'Mate request', status: 'completed', result, workerRunId } });
+      runs.push({ ...run, id: workerRunId, title: 'Mate workspace review', assistantId: mate.id, status: 'succeeded' });
+      artifacts.set(workerRunId, [{ id: nextID++, runId: workerRunId, kind: 'report', content: 'Mate chat opened.', createdAt: new Date() }]);
+      artifacts.get(runId).push({ id: nextID++, runId, kind: 'report', content: 'Mate request',
+        metadata: { source: 'assistant_assignment', assignmentId }, createdAt: promptDate });
+    }
     artifacts.get(runId).push({ id: nextID++, runId, kind: 'report', content: 'Native reply delivered.', metadata: { streamId }, createdAt: new Date() });
     run.status = 'succeeded'; run.updatedAt = new Date();
+    if (goalMode && goals.has(runId)) {
+      setFixtureGoal(runId, { ...goals.get(runId), status: 'complete', tokensUsed: 28000, timeUsedSeconds: 20 });
+    }
     event(CHANNELS.runs.statusChanged, runId, { status: 'succeeded' });
     event(CHANNELS.runs.eventPersisted, runId);
     // A late native callback must never revive an acknowledged stream.
@@ -170,6 +291,100 @@ const server = http.createServer(async (request, response) => {
   const parts = []; for await (const part of request) parts.push(part);
   response.setHeader('Content-Type', 'application/json');
   if (request.url === '/observations') { response.end(JSON.stringify(observations)); return; }
+  if (request.method === 'POST' && request.url === '/test/mate-activity') {
+    const { phase } = JSON.parse(Buffer.concat(parts).toString());
+    const workingID = 'fixture-mate-working', waitingID = 'fixture-mate-waiting';
+    const requestId = 'fixture-mate-decision', now = Date.now();
+    if (phase === 'start') {
+      for (const [id, assistantId] of [[workingID, fixtureMate.id], [waitingID, 'fixture-planner']]) {
+        const at = new Date(now);
+        runs.push({ ...runs[0], id, assistantId, title: 'Mate activity', mode: 'work', status: 'running', createdAt: at, updatedAt: at });
+        event(CHANNELS.runs.statusChanged, id, { status: 'running' });
+      }
+      const pending = { requestId, runId: waitingID, kind: 'ask_user', timestamp: now, expiresAt: now + 300000 };
+      pendingDecisions.set(requestId, pending);
+      event(CHANNELS.runs.toolApprovalRequest, waitingID, pending);
+    } else if (phase === 'finish') {
+      pendingDecisions.delete(requestId);
+      event(CHANNELS.runs.toolApprovalResolved, waitingID, { requestId });
+      for (const id of [workingID, waitingID]) {
+        runs.find(run => run.id === id).status = 'succeeded';
+        event(CHANNELS.runs.statusChanged, id, { status: 'succeeded' });
+      }
+    }
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/inbox') {
+    const { older = false } = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    const original = runs[0], now = Date.now();
+    for (const [id, title, status, providerId, age] of [
+      ['inbox-waiting', 'Review deployment request', 'running', 'codex', older ? 90 * 86400000 : 60000],
+      ['inbox-running', 'Run the test suite', 'running', 'claude_code', older ? 90 * 86400000 : 120000],
+      ['inbox-failed', 'Fix the failing build', 'failed', 'codex', 180000],
+      ['inbox-finished', 'Prepare release notes', 'succeeded', 'claude_code', 240000],
+    ]) {
+      const at = new Date(now - age);
+      runs.push({ ...original, id, title, status, providerId, createdAt: at, updatedAt: at });
+      artifacts.set(id, []);
+    }
+    if (older) for (let index = 0; index < 105; index++) {
+      const id = `inbox-recent-${index}`, at = new Date(now - 300000 - index * 1000);
+      runs.push({ ...original, id, title: `Recent work ${index}`, createdAt: at, updatedAt: at }); artifacts.set(id, []);
+    }
+    const pending = { requestId: 'inbox-decision', approvalToken: 'inbox-incarnation', runId: 'inbox-waiting', kind: 'tool_approval',
+      toolName: 'Bash', question: 'Run the deployment checks?', toolInput: { command: 'npm test', cwd: '/fixture/mains' },
+      timestamp: now, expiresAt: now + 300000 };
+    pendingDecisions.set(pending.requestId, pending);
+    event(CHANNELS.runs.toolApprovalRequest, pending.runId, pending);
+    event(CHANNELS.runs.statusChanged, 'inbox-running', { status: 'running' });
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/search-data') {
+    const original = runs[0];
+    for (let index = 0; index < 140; index++) {
+      const id = `old-search-${String(index).padStart(3, '0')}`, at = new Date(1577836800000 + index * 1000);
+      runs.push({ ...original, id, title: `Telescope notes ${index}`, createdAt: at, updatedAt: at });
+      const history = [];
+      for (let turn = 0; turn < (index === 0 ? 150 : 1); turn++) {
+        history.push({ id: 10000 + index * 1000 + turn * 2, runId: id, kind: 'user-prompt', content: `Question ${turn}`, metadata: {}, createdAt: new Date(at.getTime() + turn * 2) },
+          { id: 10001 + index * 1000 + turn * 2, runId: id, kind: 'report', content: index === 0 && turn === 0 ? 'Deepneedle observation from the oldest message.' : `Telescope answer ${turn}`, metadata: {}, createdAt: new Date(at.getTime() + turn * 2 + 1) });
+      }
+      artifacts.set(id, history);
+    }
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/files') {
+    const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    fileDeliveryFixture = true;
+    runs.find(run => run.id === 'fixture-run').mode = body.mode === 'developer' ? 'developer' : 'chat';
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/fork') {
+    const body = JSON.parse(Buffer.concat(parts).toString());
+    forkBehavior = ['disconnect', 'unknown', 'refuse'].includes(body.behavior) ? body.behavior : null;
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/long-activity') {
+    const start = new Date('2026-10-01T00:00:00Z').getTime();
+    const rows = Array.from({ length: 45 }, (_, index) => [
+      { id: 20000 + index * 2, runId: 'fixture-run', kind: 'user-prompt', content: `Visible prompt ${index}`, metadata: {}, createdAt: new Date(start + index * 10000) },
+      { id: 20001 + index * 2, runId: 'fixture-run', kind: 'report', content: `Visible answer ${index}`, metadata: {}, createdAt: new Date(start + index * 10000 + 1000) },
+    ]).flat();
+    artifacts.set('fixture-run', rows);
+    tools.set('fixture-run', Array.from({ length: 451 }, (_, index) => ({
+      id: 30000 + index, toolName: index === 0 ? 'Agent' : 'Bash', status: 'done',
+      createdAt: new Date(start + 450000 + index), parentToolCallId: index === 0 ? null : '30000',
+      input: index === 0 ? { description: 'Tests', prompt: 'Verify the change' } : { command: `echo ${index}` },
+      output: { stdout: `Child output ${index}` }, metadata: {},
+    })));
+    response.writeHead(200); response.end('{}'); return;
+  }
+  // Simulate the desktop owner publishing through IPC; paired phones may only read this projection.
+  if (request.method === 'POST' && request.url === '/test/queue') {
+    const body = JSON.parse(Buffer.concat(parts).toString());
+    if (queueProjections.publish(body)) event(CHANNELS.runs.queueChanged, body.runId);
+    response.end('{}'); return;
+  }
   if (request.method === 'POST' && request.url === '/test/append-history') {
     const at = new Date();
     artifacts.get('fixture-run').push(
@@ -214,19 +429,110 @@ const server = http.createServer(async (request, response) => {
     holdSnapshot = Math.min(15000, Math.max(0, Number(body.durationMs ?? 700)));
     response.end('{}'); return;
   }
+  if (request.method === 'POST' && request.url === '/test/delay-atlas-library') {
+    const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    atlasLibraryDelayMs = Math.min(15000, Math.max(0, Number(body.durationMs ?? 0)));
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/delay-content') {
+    const { historyMs = 0, libraryMs = 0, pageMs = 0 } = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    chatHistoryDelayMs = Math.min(15000, Math.max(0, Number(historyMs)));
+    atlasLibraryDelayMs = Math.min(15000, Math.max(0, Number(libraryMs)));
+    atlasPageDelayMs = Math.min(15000, Math.max(0, Number(pageMs)));
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/empty-atlas-library') {
+    atlasLibraryEmpty = true;
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/hold-mate-details') {
+    const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    mateDetailsDelayMs = Math.min(15000, Math.max(0, Number(body.durationMs ?? 5000)));
+    mateHistoryDelayMs = Math.min(15000, Math.max(0, Number(body.historyMs ?? 0)));
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/hold-mate-loads') {
+    const { directoryMs = 0, routinesMs = 0 } = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    mateDirectoryDelayMs = Math.min(15000, Math.max(0, Number(directoryMs)));
+    mateRoutinesDelayMs = Math.min(15000, Math.max(0, Number(routinesMs)));
+    response.end('{}'); return;
+  }
   if (request.method === 'POST' && request.url === '/test/offline') {
+    const { durationMs = 3000 } = JSON.parse(Buffer.concat(parts).toString() || '{}');
     acceptsConnections = false;
     for (const socket of connections) socket.terminate();
-    later(3000, () => { acceptsConnections = true; });
+    later(Math.min(20000, Math.max(0, durationMs)), () => { acceptsConnections = true; });
     response.end('{}'); return;
   }
   if (request.method === 'POST' && request.url === '/pair') {
     const body = JSON.parse(Buffer.concat(parts).toString());
-    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
+    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-mate-voice', 'ios-test-mate-pinning', 'ios-test-reply-interrupted', 'ios-test-goal-controls', 'ios-test-live-spacing', 'ios-test-empty-conversation'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
       response.writeHead(403); response.end(JSON.stringify({ error: 'Invalid pairing code' })); return;
     }
     const paging = body.code.startsWith('ios-test-paging');
     reset(body.code === 'ios-test-chat' || paging, body.code === 'ios-test-home', body.code === 'ios-test-design', body.code === 'ios-test-workspace', body.code === 'ios-test-media', paging, body.code === 'ios-test-paging-disjoint');
+    goalControlsFixture = body.code === 'ios-test-goal-controls';
+    if (body.code === 'ios-test-empty-conversation') artifacts.set(runs[0].id, []);
+    if (body.code === 'ios-test-reply-interrupted') {
+      runs[0].status = 'failed';
+      runs[0].lastError = 'The provider stopped responding before it could finish the reply. You can send a follow-up to continue.';
+    }
+    if (body.code === 'ios-test-live-spacing') {
+      const run = runs[0];
+      const at = delta => new Date(run.createdAt.getTime() + delta);
+      run.status = 'running';
+      artifacts.get(run.id).push(
+        { id: 3, runId: run.id, kind: 'report', content: 'Reviewing the layout.', createdAt: at(2000) },
+        { id: 4, runId: run.id, kind: 'report', content: 'The files are ready.', createdAt: at(5000) },
+      );
+      tools.set(run.id, [
+        { id: 7, toolName: 'Read', status: 'done', input: { file_path: 'index.html' }, createdAt: at(3000) },
+        { id: 8, toolName: 'Glob', status: 'done', input: { pattern: '*.css' }, createdAt: at(4000) },
+      ]);
+    }
+    if (['ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-restore-mate', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll'].includes(body.code)) descriptor.capabilities.push('mateInfo', 'mateModelEditing');
+    if (body.code === 'ios-test-mate-pinning') {
+      descriptor.capabilities.push('mateInfo', 'matePinning');
+      matePins.set('fixture-planner', new Date('2026-11-09T09:00:00Z'));
+      matePins.set('fixture-reviewer', new Date('2026-11-09T08:00:00Z'));
+      matePins.set('fixture-solo', new Date('2026-11-09T07:00:00Z'));
+    }
+    if (body.code === 'ios-test-mate-scroll') descriptor.backendId = 'ios-fixture-mate-scroll';
+    if (body.code === 'ios-test-mate-team') descriptor.capabilities.push('mateTeamCreation');
+    if (body.code === 'ios-test-mate-consent') descriptor.backendId = `ios-fixture-mate-consent-${randomUUID()}`;
+    if (body.code === 'ios-test-mate-voice') {
+      descriptor.backendId = `ios-fixture-mate-voice-${randomUUID()}`;
+      descriptor.capabilities.push('mateRealtimeConversation');
+    }
+    if (body.code === 'ios-test-mate-info') {
+      const source = runs[0], id = 'fixture-retired-mate-chat';
+      runs.push({ ...source, id, mode: 'work', title: 'Archived release check', assistantId: 'fixture-retired-mate' });
+      artifacts.set(id, [{ id: nextID++, runId: id, kind: 'report', content: 'Archived release checklist.', createdAt: source.createdAt }]);
+    }
+    if (body.code === 'ios-test-mate-request') {
+      descriptor.backendId = `ios-fixture-mate-request-${randomUUID()}`;
+      const source = runs[0], id = 'fixture-linked-mate-request', workerRunId = 'fixture-linked-mate-chat', at = new Date();
+      const assignment = { ...fixtureInfoTask, id, title: 'Mate request', status: 'blocked', brief: 'Check the release notes first.',
+        result: 'Waiting for a release decision.', workerRunId };
+      mateAssignments.set(id, { runId: source.id, assignment });
+      runs.push({ ...source, id: workerRunId, mode: 'work', title: 'Release decision', assistantId: fixtureMate.id });
+      artifacts.set(workerRunId, [{ id: nextID++, runId: workerRunId, kind: 'report', content: 'I found two release options.', createdAt: at }]);
+      artifacts.get(source.id).push({ id: nextID++, runId: source.id, kind: 'report', content: 'Mate request',
+        metadata: { source: 'assistant_assignment', assignmentId: id }, createdAt: at });
+    }
+    if (body.code === 'ios-test-archived-mate' || body.code === 'ios-test-restore-mate') {
+      mateArchived = true;
+      const source = runs[0], workerRunId = 'fixture-old-mate-chat', id = 'fixture-old-mate-request', at = new Date();
+      const { id: mateId, name, avatar } = fixtureMate;
+      mateAssignments.set(id, { runId: source.id, assignment: {
+        id, title: 'Mate request', status: 'completed', result: 'Historical release report.', workerRunId,
+        assignee: { id: mateId, name, avatar, isArchived: true },
+      } });
+      runs.push({ ...source, id: workerRunId, mode: 'work', title: 'Release history', assistantId: mateId });
+      artifacts.set(workerRunId, [{ id: nextID++, runId: workerRunId, kind: 'report', content: 'Historical Mate reply.', createdAt: at }]);
+      artifacts.get(source.id).push({ id: nextID++, runId: source.id, kind: 'report', content: 'Mate request',
+        metadata: { source: 'assistant_assignment', assignmentId: id }, createdAt: at });
+    }
     response.end(JSON.stringify({ deviceId: 'fixture-phone', deviceToken: 'fixture-device-token', backend: descriptor })); return;
   }
   response.writeHead(404); response.end('{}');
@@ -251,15 +557,323 @@ wss.on('connection', socket => {
     try {
       if (receipts.has(commandId)) { send(socket, { kind: 'response', id, result: receipts.get(commandId) }); return; }
       switch (channel) {
+        case CHANNELS.search.conversations: {
+          const input = args[0], query = input.query.trim().toLowerCase();
+          if (input.accountId !== 'fixture-account') throw new Error('Invalid search account');
+          const matches = runs.filter(run => !run.isArchived).flatMap(run => {
+            const message = artifacts.get(run.id)?.find(row => ['user-prompt', 'report', 'result'].includes(row.kind) && row.content?.toLowerCase().includes(query));
+            const titleMatch = run.title?.toLowerCase().includes(query);
+            if (!titleMatch && !message) return [];
+            const rank = titleMatch ? 2 : 4, createdAt = run.createdAt.getTime(), cursor = input.cursor;
+            if (cursor && !(rank > cursor.rank || rank === cursor.rank && (createdAt < cursor.createdAt || createdAt === cursor.createdAt && run.id > cursor.runId))) return [];
+            return [{ rank, createdAt, hit: { runId: run.id, title: run.title, providerId: run.providerId, mode: run.mode,
+              context: workspaces.find(workspace => workspace.id === run.workspaceId)?.name ?? collections.find(collection => collection.id === run.collectionId)?.name ?? null,
+              updatedAt: run.updatedAt.getTime(), snippet: message?.content.slice(0, 400) ?? null,
+              messageCursor: message ? { timestamp: message.createdAt.getTime(), source: 'artifact', id: message.id } : null } }];
+          }).sort((a, b) => a.rank - b.rank || b.createdAt - a.createdAt || a.hit.runId.localeCompare(b.hit.runId));
+          const page = matches.slice(0, 25), last = page.at(-1);
+          result = { items: page.map(row => row.hit), nextCursor: matches.length > page.length && last ? { rank: last.rank, createdAt: last.createdAt, runId: last.hit.runId } : null }; break;
+        }
+        case CHANNELS.runs.readTextFile: {
+          const input = args[0], run = runs.find(run => run.id === input.runId);
+          if (!fileDeliveryFixture || !run || run.mode === 'developer' || input.filePath !== 'docs/notes.md') throw new Error('Markdown file unavailable');
+          result = { fileName: 'notes.md', relativePath: 'docs/notes.md', content: '# Notes\n\nA run-local file with $x^2$ and [a PDF](report.pdf).' }; break;
+        }
         case CHANNELS.backend.describe: result = descriptor; break;
+        case CHANNELS.providers.getMobileGoalSummary: result = goals.get(args[0]) ?? null; break;
+        case CHANNELS.providers.changeMobileGoal: {
+          const [runId, change] = args, current = goals.get(runId);
+          if (!commandId || !current || change?.expectedRevision !== current.revision) throw new Error('This goal changed elsewhere.');
+          if (change.action === 'edit' && current.status !== 'complete' && change.objective?.trim()) {
+            setFixtureGoal(runId, { ...current, objective: change.objective });
+          } else if (change.action === 'pause' && current.status === 'active') {
+            setFixtureGoal(runId, { ...current, status: 'paused' });
+          } else if (change.action === 'resume' && current.status === 'paused') {
+            setFixtureGoal(runId, { ...current, status: 'active' });
+          } else if (change.action === 'clear') {
+            goals.delete(runId);
+            event(CHANNELS.providers.mobileGoalChanged, runId);
+          } else throw new Error('Invalid goal change.');
+          result = { applied: true };
+          receipts.set(commandId, { success: true, data: result });
+          if (goalControlsFixture && change.action === 'pause') { socket.terminate(); return; }
+          break;
+        }
+        case CHANNELS.assistants.mobileDirectory: {
+          const creatingTeams = descriptor.capabilities.includes('mateTeamCreation');
+          const canPin = descriptor.capabilities.includes('matePinning');
+          const initialMates = fixtureMates.map(mate => {
+            const profile = mate.id === editedFixtureMate?.id ? editedFixtureMate : creatingTeams ? { ...mate, teamId: null } : mate;
+            return canPin ? { ...profile, pinnedAt: matePins.get(mate.id) ?? null } : profile;
+          });
+          const mates = [...initialMates, ...createdMates.values()].map(mate => mateArchived && mate.id === fixtureMate.id
+            ? { ...mate, isArchived: true } : mate);
+          if (descriptor.capabilities.includes('mateInfo')) {
+            mates.push({ ...fixtureMate, id: 'fixture-retired-mate', name: 'Retired Release Mate', isArchived: true });
+          }
+          if (descriptor.backendId.startsWith('ios-fixture-mate-consent-')) mates.push(fixtureClaudeMate);
+          if (descriptor.backendId === 'ios-fixture-mate-scroll') {
+            const index = mates.findIndex(mate => mate.id === fixtureMate.id);
+            const instructions = Array.from({ length: 14 }, (_, step) =>
+              `Release check ${step + 1}. Summarize important changes and link the source notes. Report any missing validation before sharing the build.`
+            ).join('\n\n');
+            mates[index] = { ...mates[index], details: { ...fixtureMate.details, instructions } };
+          }
+          const [_, selected, archived = false] = args;
+          result = {
+            mates: selected ? mates.filter(mate => mate.id === selected).map(({ details, ...mate }) => details && (!mate.isArchived || archived) ? { ...mate, details } : mate)
+              : mates.filter(mate => !!mate.isArchived === archived).map(({ details: _details, ...mate }) => mate),
+            teams: creatingTeams ? [...createdMateTeams.values()] : fixtureMateTeams,
+          };
+          const delay = selected ? mateDetailsDelayMs : mateDirectoryDelayMs;
+          if (delay) {
+            later(delay, () => send(socket, { kind: 'response', id, result: { success: true, data: result } }));
+            return;
+          }
+          break;
+        }
+        case CHANNELS.assistants.mobileAssignment: {
+          const task = mateAssignments.get(args[2]);
+          if (!task || task.runId !== args[1]) throw new Error('Mate request not found');
+          const { assignment } = task;
+          result = assignment.assignee?.id === fixtureMate.id
+            ? { ...assignment, assignee: { ...assignment.assignee, isArchived: mateArchived } } : assignment;
+          break;
+        }
+        case CHANNELS.assistants.mobileMemory: {
+          const [account, mateID, noteID] = args;
+          if (account !== 'fixture-account' || mateID !== fixtureMate.id) throw new Error('Mate unavailable');
+          result = noteID ? mateMemory.get(noteID) : [...mateMemory.values()];
+          break;
+        }
+        case CHANNELS.assistants.mobileAssignments: {
+          const items = descriptor.backendId.startsWith('ios-fixture-mate-consent-') ? [fixtureBlockedTask, fixtureInfoTask] : [fixtureInfoTask];
+          if (typeof args[2] === 'string') {
+            const linked = mateAssignments.get(args[2])?.assignment;
+            result = linked?.assignee?.id === args[1] ? { brief: '', evidence: [], ...linked } : items.find(item => item.id === args[2]);
+          } else {
+            result = { items, activeCount: items.filter(item => item.status === 'blocked').length, hasMore: false };
+          }
+          if (!result) throw new Error('Assignment not found');
+          break;
+        }
+        case CHANNELS.assistants.mobileRoutines:
+          result = args[2] === fixtureRoutine.id ? fixtureRoutine : { items: [fixtureRoutine], nextOffset: null };
+          if (mateRoutinesDelayMs && typeof args[2] !== 'string') {
+            later(mateRoutinesDelayMs, () => send(socket, { kind: 'response', id, result: { success: true, data: result } }));
+            return;
+          }
+          break;
+        case CHANNELS.assistants.mobileManage: {
+          const [account, mateID, change] = args;
+          const pinChange = change.action === 'setPinned' && descriptor.capabilities.includes('matePinning') &&
+            typeof change.pinned === 'boolean' && fixtureMates.some(mate => mate.id === mateID);
+          const claudeFollowup = descriptor.backendId.startsWith('ios-fixture-mate-consent-') &&
+            mateID === fixtureClaudeMate.id && change.action === 'followup' && change.id === fixtureBlockedTask.id;
+          if (account !== 'fixture-account' || !commandId || (mateID !== fixtureMate.id && !pinChange && !claudeFollowup)) {
+            throw new Error('Invalid fixture Mate change');
+          }
+          if (change.action === 'archive' && change.archived === false && mateArchived && descriptor.capabilities.includes('mateInfo')) {
+            mateArchived = false;
+            receipts.set(commandId, { success: true, data: { accepted: true } });
+            send(socket, { kind: 'response', id, result: { success: false, error: 'Command outcome is unknown. Check the previous result.' } });
+            return;
+          }
+          if (change.action === 'archive' && change.archived === true && !mateArchived && descriptor.capabilities.includes('mateInfo')) {
+            mateArchived = true;
+          } else if (pinChange) {
+            if (change.pinned && !matePins.has(mateID)) matePins.set(mateID, new Date());
+            if (!change.pinned) matePins.delete(mateID);
+          } else if (change.action === 'saveMemory') {
+            mateMemory.set(change.note.id, { ...change.note, revision: change.note.revision + 1 });
+          } else if (change.action === 'updateProfile' && descriptor.capabilities.includes('mateInfo')) {
+            const { name, description, avatar, instructions } = change.profile;
+            const previous = editedFixtureMate ?? (descriptor.capabilities.includes('mateTeamCreation') ? { ...fixtureMate, teamId: null } : fixtureMate);
+            const teamId = change.teamChange ? change.teamChange.teamId : previous.teamId;
+            if (change.teamChange && (change.teamChange.expectedTeamId !== previous.teamId || teamId && !createdMateTeams.has(teamId))) {
+              throw new Error('Team is unavailable');
+            }
+            const modelChange = change.modelChange;
+            if (modelChange && (modelChange.expectedModel !== previous.model || modelChange.expectedEffort !== previous.details.effort)) {
+              throw new Error('Saved model settings changed');
+            }
+            editedFixtureMate = { ...previous, name, description, avatar, teamId, model: modelChange?.model ?? previous.model,
+              details: { ...previous.details, instructions, effort: modelChange?.effort ?? previous.details.effort } };
+          } else if (change.action === 'followup' && descriptor.backendId.startsWith('ios-fixture-mate-request-')) {
+            const linked = mateAssignments.get(change.id)?.assignment;
+            if (!linked || linked.assignee.id !== mateID || linked.status !== 'blocked') throw new Error('Assignment is unavailable for this Mate');
+            linked.status = 'running';
+          } else if (!descriptor.backendId.startsWith('ios-fixture-mate-consent-') || !['assign', 'followup', 'runRoutine'].includes(change.action)) {
+            throw new Error('Invalid fixture Mate change');
+          }
+          result = { accepted: true };
+          receipts.set(commandId, { success: true, data: result });
+          broadcast(CHANNELS.assistants.changed, {});
+          break;
+        }
+        case CHANNELS.assistants.createTeam: {
+          const { accountId, name } = args[0];
+          if (!descriptor.capabilities.includes('mateTeamCreation') || !commandId || accountId !== 'fixture-account' || !name || name.length > 100) {
+            throw new Error('Invalid team creation');
+          }
+          result = [...createdMateTeams.values()].find(team => team.name === name);
+          if (!result) {
+            result = { id: `fixture-team-${nextID++}`, name };
+            createdMateTeams.set(result.id, result);
+          }
+          receipts.set(commandId, { success: true, data: result });
+          broadcast(CHANNELS.assistants.changed, {});
+          if (name === 'Launch Team') {
+            send(socket, { kind: 'response', id, result: { success: false, error: 'Command outcome is unknown. Check the previous result.' } });
+            return;
+          }
+          break;
+        }
+        case CHANNELS.assistants.create: {
+          const input = args[0], space = spaces.find(space => space.id === input.spaceId);
+          if (!commandId || input.accountId !== 'fixture-account' || !space || !input.profileSetup) throw new Error('Invalid Mate creation');
+          const mateId = `created-mate-${nextID++}`;
+          const question = { question: `Hi, I’m ${input.name}. What would you like me to help with?`, options: [],
+            idleMessage: 'Profile saved. What would you like me to do first?', profileSetup: { turns: [] } };
+          createdMates.set(mateId, { id: mateId, name: input.name, avatar: input.avatar, teamId: input.teamId, description: '',
+            providerId: space.providerId, model: input.model, needsSetup: true,
+            details: { spaceName: space.name, effort: input.effort ?? '', instructions: '' },
+            welcome: { runId: `welcome-${mateId}`, question, state: 'ready', error: null } });
+          result = { id: mateId };
+          const receipt = { success: true, data: result };
+          receipts.set(commandId, receipt);
+          broadcast(CHANNELS.assistants.changed, {});
+          later(3500, () => { if (socket.readyState === WebSocket.OPEN) send(socket, { kind: 'response', id, result: receipt }); });
+          return;
+        }
+        case CHANNELS.assistants.setupProfile: {
+          const [accountId, mateId, input] = args;
+          const mate = createdMates.get(mateId), welcome = mate?.welcome, question = welcome?.question, setup = question?.profileSetup;
+          if (!commandId || accountId !== 'fixture-account' || welcome?.state !== 'ready' || !setup || setup.saved) throw new Error('Invalid Mate setup');
+          if (input.action === 'answer' && input.step === setup.turns.length && input.step < 2 && !setup.draft) {
+            setup.turns.push({ question: question.question, answer: input.answer });
+            welcome.state = 'generating';
+            later(2_500, () => {
+              if (setup.turns.length === 1) question.question = 'What should I focus on first?';
+              else setup.draft = { description: 'Helps plan meals.', instructions: 'Suggest practical recipes and make concise shopping lists.' };
+              welcome.state = 'ready';
+              broadcast(CHANNELS.assistants.changed, {});
+            });
+          } else if (input.action === 'save' && setup.draft) {
+            setup.draft = input.profile;
+            setup.saved = true;
+            mate.description = input.profile.description;
+            mate.details.instructions = input.profile.instructions;
+            mate.needsSetup = false;
+            welcome.state = 'skipped';
+          } else { throw new Error('Unexpected Mate setup step'); }
+          result = null;
+          receipts.set(commandId, { success: true, data: result });
+          broadcast(CHANNELS.assistants.changed, {}); break;
+        }
+        case CHANNELS.assistants.send: {
+          const input = args[0], mate = createdMates.get(input.assistantId), welcome = mate?.welcome;
+          if (!commandId || input.accountId !== 'fixture-account' || !welcome?.question.profileSetup.saved ||
+              input.runId !== welcome.runId || input.requestId !== `welcome-${mate.id}`) throw new Error('Invalid first Mate message');
+          const runId = welcome.runId, date = new Date();
+          runs.unshift({ id: runId, assistantId: mate.id, accountId: input.accountId, title: input.message, providerId: mate.providerId,
+            mode: 'work', spaceId: 'fixture-space', model: mate.model, status: 'queued', isArchived: false, isReplica: false,
+            lastError: null, createdAt: date, updatedAt: date });
+          artifacts.set(runId, [{ id: nextID++, runId, kind: 'report', content: welcome.question.idleMessage,
+            metadata: { source: 'assistant_welcome', question: welcome.question }, createdAt: date }]);
+          mate.welcome = null;
+          result = { runId };
+          receipts.set(commandId, { success: true, data: result });
+          startReply(runId, input.message, commandId);
+          broadcast(CHANNELS.assistants.changed, {}); break;
+        }
+        case CHANNELS.assistants.conversations: {
+          result = args[1] === fixtureMate.id ? Array.from({ length: 20 }, (_, index) => {
+            const id = `fixture-mate-chat-${index}`, title = `Release check ${index + 1}`;
+            let run = runs.find(row => row.id === id);
+            if (!run) {
+              const date = new Date(Date.now() - (index === 0 ? 85_000 : index * 86_400_000));
+              run = { id, title, assistantId: fixtureMate.id, accountId: 'fixture-account', providerId: fixtureMate.providerId,
+                mode: 'developer', spaceId: 'fixture-code', model: fixtureMate.model, status: 'succeeded',
+                isArchived: false, isReplica: false, lastError: null, createdAt: date, updatedAt: date };
+              runs.push(run);
+              if (index === 0) {
+                const at = offset => new Date(date.getTime() + offset);
+                artifacts.set(id, [
+                  { id: 1, runId: id, kind: 'user-prompt', content: 'Check whether the build is ready.', metadata: { source: 'user' }, createdAt: date },
+                  { id: 2, runId: id, kind: 'report', content: 'The release checklist is ready.', metadata: { streamId: 'mate-check' },
+                    createdAt: at(1_000) },
+                  { id: 3, runId: id, kind: 'report', content: 'Temporary build note.', metadata: { working: true }, createdAt: at(2_000) },
+                  { id: 4, runId: id, kind: 'log', content: 'Signing is still pending.', metadata: { level: 'warn' }, createdAt: at(3_000) },
+                  ...Array.from({ length: 7 }, (_, part) => ({
+                    id: 5 + part, runId: id, kind: 'report',
+                    content: `Release note ${part + 1}. The build passed local validation. Check the release notes before sharing the build with the team.`,
+                    createdAt: at(4_000 + part * 1_000),
+                  })),
+                ]);
+                tools.set(id, [
+                  { id: 1, toolName: 'Edit', status: 'done', input: { file_path: 'src/Mate.swift' }, createdAt: at(1_500) },
+                  { id: 2, toolName: 'mcp__mains__AskAssistantQuestion', status: 'done', createdAt: at(1_600),
+                    input: { question: 'Which release audience should we use?', options: [{ label: 'External testing' }, { label: 'Internal testing' }] },
+                    output: { contentItems: [{ type: 'inputText', text: JSON.stringify({ status: 'answered', answer: 'Internal testing' }) }] } },
+                  { id: 3, toolName: 'AskAssistantQuestion', status: 'canceled', createdAt: at(1_700),
+                    input: { question: 'When should we distribute the build?', options: [{ label: 'Today' }, { label: 'Tomorrow' }] },
+                    output: { status: 'canceled' } },
+                  { id: 4, toolName: 'AskAssistantQuestion', status: 'done', createdAt: at(1_800),
+                    input: { question: 'Any release notes?' }, output: 'User responded: After signing completes.' },
+                ]);
+                storedTurns.set(id, [{ id: 91, runId: id, turnIndex: 0, status: 'completed', model: null,
+                  startedAt: date, createdAt: date, endedAt: at(10_000),
+                  changes: { id: 'fixture-mate-diff', files: [{ path: 'src/Mate.swift', status: 'modified', additions: 2, deletions: 1, binary: false }],
+                    fileCount: 1, additions: 2, deletions: 1, truncated: false } }]);
+              } else if (index === 2) {
+                artifacts.set(id, [
+                  { id: 1, runId: id, kind: 'user-prompt', content: 'Save these notes to Atlas.', metadata: { source: 'user' }, createdAt: date },
+                  { id: 2, runId: id, kind: 'report', content: '[Open saved travel notes](/atlas/fixture-atlas-page)',
+                    createdAt: new Date(date.getTime() + 1_000) },
+                ]);
+              }
+            }
+            return { id, title, updatedAt: run.updatedAt };
+          }) : runs.filter(run => run.assistantId === args[1]).map(({ id, title, updatedAt }) => ({ id, title, updatedAt })); break;
+        }
+        case CHANNELS.atlas.mobileLibrary:
+          result = atlasLibraryEmpty ? { items: [], page: 1, hasNext: false } :
+            atlasFixture(channel, args[0], { pdfBytes, outputBytes, imageBase64, version: outputVersion });
+          if (atlasLibraryDelayMs) {
+            const data = result;
+            later(atlasLibraryDelayMs, () => send(socket, { kind: 'response', id, result: { success: true, data } }));
+            return;
+          }
+          break;
+        case CHANNELS.atlas.readMobilePage:
+        case CHANNELS.atlas.describeMobileFile:
+        case CHANNELS.atlas.readMobileFile:
+        case CHANNELS.atlas.readMobileImage:
+        case CHANNELS.atlas.readMobileBookmark:
+        case CHANNELS.atlas.mobileTags:
+        case CHANNELS.atlas.readMobileTags:
+        case CHANNELS.atlas.mobileTrash:
+          result = atlasFixture(channel, args[0], { pdfBytes, outputBytes, imageBase64, version: outputVersion }); break;
+        case CHANNELS.atlas.saveMobileFile:
+        case CHANNELS.atlas.saveMobileBookmark:
+        case CHANNELS.atlas.updateMobileItem:
+        case CHANNELS.atlas.editMobileBookmark:
+        case CHANNELS.atlas.setMobileTags:
+        case CHANNELS.atlas.setMobileTrash:
+        case CHANNELS.atlas.deleteMobileTrash:
+          if (!commandId) throw new Error('Atlas saves require a command identity');
+          result = atlasFixture(channel, args[0], { pdfBytes, outputBytes, imageBase64, version: outputVersion });
+          receipts.set(commandId, { success: true, data: result }); broadcast(CHANNELS.atlas.changed, {}); break;
         case CHANNELS.account.get: result = { id: 'fixture-account', displayName: 'Fixture' }; break;
+        case CHANNELS.runs.listActive: result = runs.filter(run => ['running', 'queued'].includes(run.status) && !run.isReplica); break;
         case CHANNELS.runs.getAll:
           if (holdSnapshot) {
             const delay = holdSnapshot; holdSnapshot = 0;
             const captured = encodeWsMessage({ kind: 'response', id, result: { success: true, data: runs } });
             later(delay, () => { if (socket.readyState === WebSocket.OPEN) socket.send(captured); }); return;
           }
-          result = runs; break;
+          result = [...runs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, args[0] ?? 100); break;
         case CHANNELS.space.getAll: result = { spaces }; break;
         case CHANNELS.space.update: {
           if (!commandId) throw new Error('Missing command identity');
@@ -296,10 +910,13 @@ wss.on('connection', socket => {
           // Claude's SDK projection retains optional keys whose values are undefined.
           // The real wire codec tags those values rather than dropping the keys.
           result = args[0] === 'claude_code' ? modelList.map(model => ({
-            ...model, description: model.description, isDefault: model.isDefault,
+            ...model, description: model.id === 'fixture-deep' ? 'Deep Thinker 5.2 · For complex problems' : model.description,
+            isDefault: model.isDefault,
             supportsFastMode: model.supportsFastMode, supportedEffortLevels: model.supportedEffortLevels,
             serviceTiers: model.serviceTiers,
-          })) : modelList;
+          })) : modelList.map(model => args[0] === 'codex' && model.supportsFastMode ? {
+            ...model, serviceTiers: [{ id: 'fast', name: 'Fast' }, { id: 'ultrafast', name: 'Ultrafast' }],
+          } : model);
           break;
         case CHANNELS.runs.updateConversationSettings: {
           if (!commandId) throw new Error('Missing command identity');
@@ -314,6 +931,12 @@ wss.on('connection', socket => {
           break;
         }
         case CHANNELS.runs.listOutputs: {
+          if (fileDeliveryFixture) {
+            if (args[0].runId !== 'fixture-run') throw new Error('Invalid file run');
+            const ids = args[0].artifactId ? [args[0].artifactId] : [701, 702, 703];
+            result = !args[0].artifactId && args[0].offset === 0 ? { items: [], nextOffset: 100 } : { items: ids.map(fixtureFile), nextOffset: null };
+            break;
+          }
           if (!runs.some(r => r.id === args[0].runId)) throw new Error('Conversation not found');
           const pdf = args[0].artifactId === 505 || artifacts.get(args[0].runId)?.some(item => item.id === 505);
           const item = pdf ? { artifactId: 505, runId: args[0].runId, name: 'report.pdf', mimeType: 'application/pdf', byteSize: pdfBytes.length, version: outputVersion, previewType: 'native' }
@@ -322,6 +945,7 @@ wss.on('connection', socket => {
         }
         case CHANNELS.runs.readOutputFile: {
           const input = args[0];
+          if (fileDeliveryFixture) { result = fixtureChunk(input.artifactId, input); break; }
           const bytes = input.artifactId === 505 ? pdfBytes : outputBytes;
           if (!runs.some(r => r.id === input.runId) || ![503, 505].includes(input.artifactId) || input.version !== outputVersion || input.offset < 0 || input.offset >= bytes.length) throw new Error('Invalid output selection');
           const end = Math.min(bytes.length, input.offset + 128 * 1024);
@@ -335,11 +959,15 @@ wss.on('connection', socket => {
         }
         case CHANNELS.runArtifacts.describeAttachmentFile: {
           const input = args[0];
+          if (fileDeliveryFixture && input.runId === 'fixture-run' && input.attachmentId === 'a'.repeat(64)) {
+            result = { ...fixtureFile(701), attachmentId: input.attachmentId }; delete result.artifactId; break;
+          }
           if (input.runId !== 'fixture-run' || input.attachmentId !== 'c'.repeat(64)) throw new Error('Invalid attachment reference');
           result = { runId: input.runId, attachmentId: input.attachmentId, name: 'report.pdf', mimeType: 'application/pdf', byteSize: pdfBytes.length, modifiedAt: 0, version: outputVersion, previewType: 'native' }; break;
         }
         case CHANNELS.runArtifacts.readAttachmentChunk: {
           const input = args[0];
+          if (fileDeliveryFixture && input.runId === 'fixture-run' && input.attachmentId === 'a'.repeat(64)) { result = fixtureChunk(701, input); break; }
           if (input.runId !== 'fixture-run' || input.attachmentId !== 'c'.repeat(64) || input.version !== outputVersion || input.offset < 0 || input.offset >= pdfBytes.length) throw new Error('Invalid attachment selection');
           const end = Math.min(pdfBytes.length, input.offset + 128 * 1024);
           result = { base64: pdfBytes.subarray(input.offset, end).toString('base64'), offset: input.offset, nextOffset: end < pdfBytes.length ? end : null, byteSize: pdfBytes.length, version: outputVersion }; break;
@@ -357,6 +985,7 @@ wss.on('connection', socket => {
         }
         case CHANNELS.providers.getCodexPermissions: result = { profilesSupported: true, profiles: [{ id: 'review', description: 'Managed review profile', allowed: true }], allowedSandboxModes: ['read-only', 'workspace-write'], allowedApprovalPolicies: null, requiresNamedProfile: false }; break;
         case CHANNELS.runs.getById: result = runs.find(run => run.id === args[0]) ?? null; break;
+        case CHANNELS.runs.getQueue: result = { queues: queueProjections.read(args[0]) }; break;
         case CHANNELS.runs.listPendingApprovals: result = [...pendingDecisions.values()].filter(value => !args[0] || value.runId === args[0]); break;
         case CHANNELS.runs.toolApprovalResponse: {
           const input = args[0], pending = pendingDecisions.get(input.requestId);
@@ -387,6 +1016,40 @@ wss.on('connection', socket => {
         case CHANNELS.runs.getHistory: {
           if (args[0].profile !== 'mobile') throw new Error('Missing bounded mobile profile');
           const all = artifacts.get(args[0].runId) ?? [];
+          if (args[0].range || args[0].conversationWindow && !pagedHistory && !disjointHistory) {
+            const input = args[0], calls = tools.get(input.runId) ?? [];
+            const key = (row, source) => ({ timestamp: row.createdAt.getTime(), source, id: row.id });
+            const timeline = [...all.map(row => key(row, 'artifact')), ...calls.map(row => key(row, 'tool'))].sort(compareHistoryCursors);
+            let start, end, keys, total;
+            if (input.range) {
+              const scoped = timeline.filter(item => compareHistoryCursors(item, input.range.start) >= 0 && compareHistoryCursors(item, input.range.end) < 0);
+              const eligible = scoped.filter(item => input.direction === 'older' ? compareHistoryCursors(item, input.cursor) < 0
+                : input.direction === 'newer' ? compareHistoryCursors(item, input.cursor) >= 0 : true);
+              keys = input.direction === 'newer' ? eligible.slice(0, 200) : eligible.slice(-200);
+              start = keys[0] ?? null;
+              end = keys.length && compareHistoryCursors(keys.at(-1), scoped.at(-1)) < 0 ? { ...keys.at(-1), id: keys.at(-1).id + 1 } : input.range.end;
+              total = keys.length;
+            } else {
+              const anchors = all.filter(row => row.kind === 'user-prompt').map(row => key(row, 'artifact'));
+              if (timeline[0] && (!anchors[0] || compareHistoryCursors(timeline[0], anchors[0]) < 0)) anchors.unshift(timeline[0]);
+              ({ start, end } = historyWindow(anchors, input));
+              const scoped = timeline.filter(item => (!start || compareHistoryCursors(item, start) >= 0) && (!end || compareHistoryCursors(item, end) < 0));
+              const messages = scoped.filter(item => item.source === 'artifact').reverse();
+              const prompt = anchors.findLast(anchor => anchor.source === 'artifact' &&
+                (!start || compareHistoryCursors(start, anchor) <= 0) && (!end || compareHistoryCursors(anchor, end) < 0));
+              const priority = [...(input.cursor ? [input.cursor] : []), ...(prompt ? [prompt] : []), ...messages, ...scoped.filter(item => item.source === 'tool').reverse()];
+              keys = [...new Map(priority.map(item => [item.source + ':' + item.id, item])).values()].slice(0, 400);
+              total = scoped.length;
+            }
+            const ids = new Set(keys.map(item => item.source + ':' + item.id));
+            const rangeFirst = input.range?.start ?? timeline[0], rangeLast = input.range?.end;
+            result = { artifacts: all.filter(row => ids.has('artifact:' + row.id)), toolCalls: calls.filter(row => ids.has('tool:' + row.id)),
+              turns: storedTurns.get(input.runId) ?? [], start, end, last: timeline.at(-1) ?? null,
+              hasOlder: !!start && !!rangeFirst && compareHistoryCursors(rangeFirst, start) < 0,
+              hasNewer: !!end && timeline.some(item => compareHistoryCursors(item, end) >= 0 && (!rangeLast || compareHistoryCursors(item, rangeLast) < 0)) };
+            if (!input.range && total > keys.length && start) result.activity = { start, end: end ?? { ...timeline.at(-1), id: timeline.at(-1).id + 1 }, omittedCount: total - keys.length };
+            break;
+          }
           if (disjointHistory) {
             // Mobile pages may split a long prompt at their row/byte cap and have no overlap.
             const key = row => ({ timestamp: row.createdAt.getTime(), source: 'artifact', id: row.id });
@@ -420,13 +1083,61 @@ wss.on('connection', socket => {
               hasOlder: start > 0, hasNewer: !!upper && all.some(row => compare(key(row), upper) >= 0) };
             break;
           }
-          const lower = args[0].direction === 'refresh' ? args[0].cursor : null;
+          const lower = ['refresh', 'newer'].includes(args[0].direction) ? args[0].cursor : null;
           const upper = args[0].direction === 'refresh' ? args[0].end : null;
           const compare = (item, cursor) => item.createdAt.getTime() - cursor.timestamp || item.id - cursor.id;
-          const items = all.filter(item => (!lower || compare(item, lower) >= 0) && (!upper || compare(item, upper) < 0)).slice(-200);
+          const eligible = all.filter(item => (!lower || compare(item, lower) >= 0) && (!upper || compare(item, upper) < 0));
+          const items = args[0].direction === 'newer' ? eligible.slice(0, 200) : eligible.slice(-200);
+          const ending = args[0].direction === 'newer' && items.length && items.at(-1).id !== all.at(-1)?.id
+            ? { timestamp: items.at(-1).createdAt.getTime(), source: 'artifact', id: items.at(-1).id + 1 } : upper ?? null;
           result = { artifacts: items, toolCalls: tools.get(args[0].runId) ?? [], turns: storedTurns.get(args[0].runId) ?? [], start: items.length ? { timestamp: items[0].createdAt.getTime(), source: 'artifact', id: items[0].id } : null,
-            end: upper ?? null, last: items.length ? { timestamp: items.at(-1).createdAt.getTime(), source: 'artifact', id: items.at(-1).id } : null,
-            hasOlder: items.length > 0 && items[0].id !== all[0]?.id, hasNewer: !!upper && all.some(item => compare(item, upper) >= 0) };
+            end: ending, last: all.length ? { timestamp: all.at(-1).createdAt.getTime(), source: 'artifact', id: all.at(-1).id } : null,
+            hasOlder: items.length > 0 && items[0].id !== all[0]?.id, hasNewer: !!ending && all.some(item => compare(item, ending) >= 0) };
+          break;
+        }
+        case CHANNELS.runs.inputStatus: {
+          const input = args[0];
+          if (!commandId || input.accountId !== 'fixture-account' || !input.clientUserMessageId) throw new Error('Invalid input check');
+          result = { accepted: artifacts.get(input.runId)?.some(row => row.metadata?.clientUserMessageId === input.clientUserMessageId) ?? false };
+          receipts.set(commandId, { success: true, data: result }); break;
+        }
+        case CHANNELS.runs.steer: {
+          const input = args[0], run = runs.find(r => r.id === input.runId), reply = replies.get(input.runId);
+          if (!commandId || input.accountId !== 'fixture-account' || !input.clientUserMessageId || typeof input.message !== 'string') throw new Error('Invalid steer identity or input');
+          if (!['codex', 'claude_code'].includes(run?.providerId)) throw new Error('This provider does not support steering.');
+          if (input.message === 'Finish before steer' && reply) {
+            reply.stopped = true; run.status = 'succeeded';
+            event(CHANNELS.runs.statusChanged, run.id, { status: run.status });
+          }
+          if (run.status !== 'running' || !reply || reply.stopped) throw new Error('There is no active turn to steer. The message stays queued.');
+          artifacts.get(run.id).push({ id: nextID++, runId: run.id, kind: 'user-prompt', content: input.message,
+            metadata: { source: 'user', clientUserMessageId: input.clientUserMessageId, delivery: 'steer', skills: input.contextSkills,
+              attachments: input.attachments?.map(({ name, type, mimeType }) => ({ name, type, mimeType })) }, createdAt: new Date() });
+          result = { runId: run.id, turnId: reply.streamId };
+          receipts.set(commandId, { success: true, data: result });
+          event(CHANNELS.runs.eventPersisted, run.id);
+          if (input.message === 'Reconnect steer once') { socket.terminate(); return; }
+          if (input.message === 'Unconfirmed accepted steer') {
+            send(socket, { kind: 'response', id, result: { success: false, error: 'Command outcome is unknown because its result was not recorded. Check the conversation before sending another command.' } }); return;
+          }
+          break;
+        }
+        case CHANNELS.runs.fork: {
+          const input = args[0], behavior = forkBehavior; forkBehavior = null;
+          const source = runs.find(run => run.id === input.sourceRunId);
+          if (!commandId || !source || input.accountId !== source.accountId) throw new Error('Missing fork identity or account');
+          if (behavior === 'refuse') throw new Error('Provider does not support session forking');
+          if (source.isReplica || source.isArchived || ['running', 'queued'].includes(source.status)) throw new Error('Fork a finished local conversation');
+          const runId = `fixture-run-${nextID++}`;
+          runs.push({ ...source, id: runId, title: 'Fork of ' + source.title, status: 'succeeded', createdAt: new Date(), updatedAt: new Date() });
+          artifacts.set(runId, []);
+          result = { runId, sourceRunId: source.id };
+          receipts.set(commandId, { success: true, data: result });
+          startReply(runId, input.message, commandId, input);
+          if (behavior === 'disconnect') { socket.terminate(); return; }
+          if (behavior === 'unknown') {
+            send(socket, { kind: 'response', id, result: { success: false, error: 'Command outcome is unknown. Check the original fork.' } }); return;
+          }
           break;
         }
         case CHANNELS.runs.execute:
@@ -440,6 +1151,7 @@ wss.on('connection', socket => {
             send(socket, { kind: 'response', id, result: failure }); return;
           }
           if (channel === CHANNELS.runs.execute && !spaces.some(space => space.id === input.spaceId)) throw new Error('Invalid space');
+          if (channel === CHANNELS.runs.continue && input.clientUserMessageId && runs.find(run => run.id === input.runId)?.status === 'running') throw new Error('This conversation already has an active response.');
           const runId = input.runId ?? `new-${nextID++}`;
           if (!artifacts.has(runId)) {
             artifacts.set(runId, []);
@@ -451,7 +1163,7 @@ wss.on('connection', socket => {
           }
           result = { runId, resumed: true };
           receipts.set(commandId, { success: true, data: result });
-          startReply(runId, input.message ?? input.goal, commandId);
+          startReply(runId, input.message ?? input.goal, commandId, input);
           if (input.message === 'Reconnect once') { socket.terminate(); return; }
           break;
         }
@@ -474,7 +1186,12 @@ wss.on('connection', socket => {
         case 'test:refuse': throw new Error('Explicit refusal');
         default: throw new Error(`Unsupported fixture channel: ${channel}`);
       }
-      send(socket, { kind: 'response', id, result: { success: true, data: result } });
+      const reply = { kind: 'response', id, result: { success: true, data: result } };
+      const delay = channel === CHANNELS.runs.getHistory
+        ? args[0].runId.startsWith('fixture-mate-chat-') ? mateHistoryDelayMs : chatHistoryDelayMs
+        : channel === CHANNELS.atlas.readMobilePage ? atlasPageDelayMs : 0;
+      if (delay) later(delay, () => send(socket, reply));
+      else send(socket, reply);
     } catch (error) { send(socket, { kind: 'response', id, result: { success: false, error: error.message } }); }
   });
 });

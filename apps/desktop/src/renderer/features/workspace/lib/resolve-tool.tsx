@@ -1,5 +1,6 @@
 import { GenericTool } from "@/components/ui/icons";
 import {
+  ASSISTANT_TOOLS,
   ATLAS_PAGE_TOOLS,
   BUILTIN_TOOLS,
   DEFAULT_VERBS,
@@ -263,7 +264,7 @@ function resolveToolImpl(toolName: string): ResolvedTool {
 
   // Exact app-owned names precede MCP vendors and loose Read/Create matching.
   const atlasName = lower.replace(/^mcp__mains__/, "");
-  const atlas = ATLAS_PAGE_TOOLS.find((tool) => tool.aliases.includes(atlasName));
+  const atlas = [...ATLAS_PAGE_TOOLS, ...ASSISTANT_TOOLS].find((tool) => tool.aliases.includes(atlasName));
   if (atlas) {
     return { displayName: atlas.displayName, groupKey: atlas.groupKey,
       groupLabel: atlas.displayName, category: atlas.category, icon: atlas.icon, isBuiltin: true };

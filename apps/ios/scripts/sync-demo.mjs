@@ -15,7 +15,13 @@ seed.models = {
     model('gpt-6.1-terra', 'GPT 6.1 Terra', 'For focused coding tasks.', ['low','medium','high','xhigh','max','ultra']),
     model('gpt-6-sol', 'GPT 6 Sol', 'Previous generation workhorse.', ['low','medium','high','xhigh','max','ultra']),
     model('gpt-6-luna', 'GPT 6 Luna', 'Fast answers for simpler tasks.', ['low','medium','high','xhigh','max']),
-  ].map(m => ({ ...m, serviceTiers: [{ id:'fast', name:'Fast', description:'Prioritize response speed.' }] })),
+  ].map(m => {
+    const serviceTiers = [{ id: 'fast', name: 'Fast', description: 'Prioritize response speed.' }];
+    if (m.id === 'gpt-6.1-sol') {
+      serviceTiers.push({ id: 'ultrafast', name: 'Ultrafast', description: 'Sample Ultrafast tier for Demo Mode.' });
+    }
+    return { ...m, serviceTiers };
+  }),
   claude_code: [
     model('sonnet', 'Sonnet 5.5', 'For everyday work and routine tasks.', ['low','medium','high','xhigh','max'], true),
     model('opus', 'Opus 5.5', 'For complex work and deeper reasoning.', ['low','medium','high','xhigh','max']),

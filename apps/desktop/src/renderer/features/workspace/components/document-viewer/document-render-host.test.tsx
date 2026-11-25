@@ -5,7 +5,7 @@ const native = vi.hoisted(() => ({ fetch: vi.fn(), docx: vi.fn(), revision: 0 })
 vi.mock("@/lib/local-document-url", () => ({ fetchLocalDocument: native.fetch,
   localDocumentUrlRevision: () => native.revision, subscribeLocalDocumentUrls: () => () => {} }));
 vi.mock("./renderers/render-docx", () => ({ renderDocx: native.docx }));
-vi.mock("./document-annotations", () => ({ DocumentAnnotations: () => null }));
+vi.mock("./document-annotations", () => ({ DocumentAnnotations: ({ active }: { active: boolean }) => <div data-testid="annotation-layer" data-active={active} /> }));
 vi.mock("./document-fallback", () => ({ DocumentFallback: () => <div role="alert">Unavailable</div> }));
 import { DocumentRenderHost } from "./document-render-host";
 const doc = { path: "/docs/a.docx", fileName: "a.docx", docType: "docx" as const };
@@ -32,6 +32,7 @@ describe("Office render lifetime", () => {
     const host = view.container.querySelector(".isolate")!;
     expect(host.shadowRoot?.textContent).toContain("Current document");
     expect(current.setZoom).toHaveBeenLastCalledWith(1.5);
+    expect(screen.getByTestId("annotation-layer").getAttribute("data-active")).toBe("false");
     view.unmount(); expect(current.destroy).toHaveBeenCalledOnce(); expect(old.destroy).toHaveBeenCalledOnce();
   });
   it("disposes the native controller immediately when an empty render fails", async () => {

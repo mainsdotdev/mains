@@ -1,5 +1,6 @@
+import type { PrActivityInput, PrActivityPage, PrCommitPage } from "@mains/contracts/pull-requests";
 export type { PrRefInput } from "@mains/contracts/pull-requests";
-import type { PrRefInput } from "@mains/contracts/pull-requests";
+import type { PrRefInput, PrRevision } from "@mains/contracts/pull-requests";
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 
@@ -78,11 +79,17 @@ export interface PrReviewThread {
 }
 
 export interface PrCheck {
+  id: string;
+  url: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
   name: string;
   status: PrCiStatus;
 }
 
 export interface PullRequestDetail extends PullRequestSummary {
+  revision?: PrRevision;
+  commitCount: number;
   body: string;
   mergedAt: string | null;
   mergeable: string;
@@ -132,6 +139,30 @@ export const pullRequestsApi = baseApi.injectEndpoints({
       query: (input) => ({
         handler: CHANNELS.pullRequests.getDetail,
         args: [input],
+      }),
+      providesTags: (_result, _error, input) => [pullRequestDetailTag(input), "Connection"],
+    }),
+
+    getPrCommits: builder.infiniteQuery<PrCommitPage, PrRefInput, string | null>({
+      infiniteQueryOptions: {
+        initialPageParam: null,
+        getNextPageParam: (last) => last.hasPreviousPage && last.startCursor ? last.startCursor : undefined,
+      },
+      query: ({ queryArg, pageParam }) => ({
+        handler: CHANNELS.pullRequests.getCommits,
+        args: [{ ...queryArg, cursor: pageParam }],
+      }),
+      providesTags: (_result, _error, input) => [pullRequestDetailTag(input), "Connection"],
+    }),
+
+    getPrActivity: builder.infiniteQuery<PrActivityPage, PrActivityInput, string | null>({
+      infiniteQueryOptions: {
+        initialPageParam: null,
+        getNextPageParam: (last) => last.hasPreviousPage && last.startCursor ? last.startCursor : undefined,
+      },
+      query: ({ queryArg, pageParam }) => ({
+        handler: CHANNELS.pullRequests.getActivity,
+        args: [{ ...queryArg, cursor: pageParam }],
       }),
       providesTags: (_result, _error, input) => [pullRequestDetailTag(input), "Connection"],
     }),
@@ -223,6 +254,8 @@ export const {
   useSearchPullRequestsQuery,
   useLazySearchPullRequestsQuery,
   useGetPrDetailQuery,
+  useGetPrCommitsInfiniteQuery,
+  useGetPrActivityInfiniteQuery,
   useGetPrDiffQuery,
   useMergePrMutation,
   useMarkPrReadyMutation,

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { SidebarHeader } from "./sidebar-header";
+import { SidebarTopRows } from "./sidebar-top-rows";
 import { SidebarFooter } from "./sidebar-footer";
 import { SidebarContent } from "./sidebar-content";
 import { NavigationRail } from "./navigation-rail";
+import { AssistantsSidebar } from "@/features/assistants/components/assistants-sidebar";
 import { AtlasSidebar } from "@/features/atlas/components/atlas-sidebar";
 import { TasksSidebar } from "@/features/tasks/components/tasks-sidebar";
 import DeleteConfirmationModal from "./delete-confirmation-modal";
@@ -40,6 +42,7 @@ import { ResizeHandle } from "@/components/layout/resize-handle";
 import { useAppSelector, useAppDispatch } from "@/lib/redux/hooks";
 import { setSidebarCollapsed, setSidebarWidth } from "@/lib/redux/slices/appSettingsSlice";
 import { setLayoutWidthVar } from "@/hooks/use-layout-width-vars";
+import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
 import {
   LAYOUT_PANEL_ANIM_MS,
   SIDEBAR_WIDTH_VAR,
@@ -48,6 +51,7 @@ import {
   SIDEBAR_WIDTH_DEFAULT,
   hasSidebarPanel,
   isAtlasRoute,
+  isAssistantsRoute,
   isSettingsRoute,
   isTasksRoute,
   isWorkspaceRoute,
@@ -80,6 +84,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   const { spaces, activeSpaceId, activeSpace } = useActiveSpace();
   const [updateSpace] = useUpdateSpaceMutation();
   const spaceProvider = useSpaceProviderVariant();
+  const assistantsRoute = isAssistantsRoute(location.pathname);
   const atlasRoute = isAtlasRoute(location.pathname);
 
   const { searchQuery } = useSidebarSearch();
@@ -269,6 +274,9 @@ export default function Sidebar({ collapsed }: SidebarProps) {
 
   const handleModeChange = (mode: ModeId) => {
     if (!activeSpace || mode === activeSpace.mode) return;
+    if (isHomeRoute && location.pathname !== WORKSPACE_BASE_PATH) {
+      navigate(WORKSPACE_BASE_PATH, { replace: true });
+    }
     void updateSpace({ id: activeSpace.id, payload: { mode } });
   };
 
@@ -324,25 +332,28 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         }}
         role="complementary"
         aria-label={
-          atlasRoute ? "Atlas sidebar" : showTasksSidebar ? "Tasks sidebar" : "Workspace sidebar"
+          assistantsRoute ? "Mates sidebar" : atlasRoute ? "Atlas sidebar" : showTasksSidebar ? "Tasks sidebar" : "Workspace sidebar"
         }
         aria-hidden={panelHidden}
         inert={panelHidden}
       >
         {isSettingsOpen ? (
           <SettingsView onClose={handleCloseSettings} />
+        ) : assistantsRoute ? (
+          <AssistantsSidebar />
         ) : atlasRoute ? (
           <AtlasSidebar />
         ) : showTasksSidebar ? (
           <TasksSidebar />
         ) : (
           <div className="h-full overflow-hidden flex flex-col">
-            <SidebarHeader
-              mode={activeSpace?.mode}
-              providerId={activeSpace?.providerId}
-              onModeChange={handleModeChange}
-            />
-            <div className="px-3 py-1">
+            <SidebarTopRows header={
+              <SidebarHeader
+                mode={activeSpace?.mode}
+                providerId={activeSpace?.providerId}
+                onModeChange={handleModeChange}
+              />
+            }>
               <NewButton
                 onClick={isChatShell ? () => handleNewChat() : handleOpenAddProjectModal}
                 shortcutLabel={newItemShortcut}
@@ -357,7 +368,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                 title={sidebarConfig.title}
                 actionPrefix={sidebarConfig.actionPrefix}
               />
-            </div>
+            </SidebarTopRows>
             {isMobile && modeConfig.showTasksNav && (
               <div className="px-3 mb-px">
                 <Button

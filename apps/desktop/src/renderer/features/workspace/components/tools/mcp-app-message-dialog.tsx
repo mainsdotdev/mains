@@ -28,8 +28,8 @@ export function McpAppMessageDialog({ appName, preview, onCancel, onSend }: {
           onChange={(event) => setText(event.target.value)} />
         {preview.newConversation && <Caption>This will start a new chat.</Caption>}
         <div className="flex justify-end gap-2 pt-1">
-          <Button variant="primary" onClick={onCancel}>Cancel</Button>
-          <Button variant="submit" disabled={!canSend} onClick={() => onSend(text)}>Send</Button>
+          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
+          <Button variant="primary" disabled={!canSend} onClick={() => onSend(text)}>Send</Button>
         </div>
       </div>
     </Modal>

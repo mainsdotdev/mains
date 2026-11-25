@@ -55,6 +55,8 @@ export interface UpdateRunSettingsPayload {
   fastMode?: boolean;
   goalMode?: boolean;
   planMode?: boolean;
+  /** Codex voice preference for the next realtime session. */
+  realtimeVoice?: string;
 }
 
 // ─────────────────────────────────────────────────────────────

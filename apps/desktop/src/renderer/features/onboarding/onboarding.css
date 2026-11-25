@@ -23,14 +23,9 @@
     var(--onboarding-ink) 8%,
     transparent
   );
-  --glass-fill-primary: color-mix(
+  --onboarding-button-fill: color-mix(
     in srgb,
     var(--onboarding-ink) 5%,
-    var(--onboarding-surface)
-  );
-  --glass-hover-primary: color-mix(
-    in srgb,
-    var(--onboarding-ink) 8%,
     var(--onboarding-surface)
   );
   --onboarding-muted: color-mix(
@@ -408,6 +403,11 @@
   --onboarding-riso-width: 420px;
   --onboarding-riso-rotation: -18deg;
 }
+.onboarding-step-riso-github-cli {
+  --onboarding-riso-x: 76%;
+  --onboarding-riso-y: 56%;
+  --onboarding-riso-rotation: -15deg;
+}
 .onboarding-step-riso-theme {
   --onboarding-riso-x: 82%;
   --onboarding-riso-y: 22%;
@@ -616,9 +616,9 @@ label:has(:checked) > .onboarding-radio::after {
   top: 50%;
   right: 80px;
   transform: translateY(-50%);
-  padding: 5px 7px;
+  padding: 4px 10px;
   color: var(--onboarding-muted);
-  font-size: 10px;
+  font-size: 12px;
   transition-property: box-shadow;
 }
 .onboarding-setup-button:hover {
@@ -656,7 +656,7 @@ label:has(:checked) > .onboarding-radio::after {
   gap: 8px;
   width: 100%;
   padding: 10px 12px;
-  border-radius: 9px;
+  border-radius: 16px;
   background: var(--onboarding-surface);
 }
 .onboarding-command code {
@@ -691,7 +691,7 @@ label:has(:checked) > .onboarding-radio::after {
   align-items: center;
   gap: 6px;
   padding: 7px 10px;
-  color: var(--onboarding-muted);
+  color: var(--onboarding-ink);
   font-size: 11px;
   transition-property: box-shadow;
 }

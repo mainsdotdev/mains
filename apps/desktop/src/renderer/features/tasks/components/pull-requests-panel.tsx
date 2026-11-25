@@ -9,14 +9,7 @@ import {
   type PrSearchPage,
   type PullRequestSummary,
 } from "@/lib/redux/api";
-import {
-  Body,
-  Button,
-  DropdownWrapper,
-  Input,
-  SegmentedTabs,
-  Text,
-} from "@/components/ui";
+import { Button, DropdownWrapper, Input, SegmentedTabs, toast } from "@/components/ui";
 import { Close, Layers, Search, Trash } from "@/components/ui/icons";
 import GitHubModal from "@/features/settings/components/connections/github/github-modal";
 import { useClickOutside } from "@/hooks/use-click-outside";
@@ -28,6 +21,7 @@ import {
   sortedEntries,
 } from "./filter-section";
 import { PrListItem } from "./pr-list-item";
+import { TasksLoadError, TasksState } from "./tasks-state";
 
 const PAGE_SIZE = 30;
 
@@ -50,7 +44,7 @@ interface PullRequestsPanelProps {
   scope: TasksScope;
   selectedNodeId: string | null;
   /** `null` clears the drawer — the list has nothing left to point at. */
-  onSelectPr: (pr: PullRequestSummary | null) => void;
+  onSelectPr: (pr: PullRequestSummary | null, opener?: HTMLElement) => void;
 }
 
 /**
@@ -61,18 +55,18 @@ interface PullRequestsPanelProps {
  */
 export function PullRequestsPanel(props: PullRequestsPanelProps) {
   const [connectOpen, setConnectOpen] = useState(false);
-  const { data: availability, refetch } = useGetPrAvailabilityQuery(undefined, {
+  const availability = useGetPrAvailabilityQuery(undefined, {
     refetchOnMountOrArgChange: 30,
   });
 
   return (
     <>
-      <PullRequestsList {...props} onConnect={() => setConnectOpen(true)} />
+      <PullRequestsList {...props} availabilityQuery={availability} onConnect={() => setConnectOpen(true)} />
       <GitHubModal
         open={connectOpen}
         onClose={() => setConnectOpen(false)}
-        isConnected={availability?.connected === true}
-        onSuccess={() => void refetch()}
+        isConnected={availability.currentData?.connected === true}
+        onSuccess={() => void availability.refetch()}
       />
     </>
   );
@@ -82,8 +76,13 @@ function PullRequestsList({
   scope,
   selectedNodeId,
   onSelectPr,
+  availabilityQuery,
   onConnect,
-}: PullRequestsPanelProps & { onConnect: () => void }) {  // The sidebar owns repository scoping on desktop; without it (mobile) the
+}: PullRequestsPanelProps & {
+  availabilityQuery: ReturnType<typeof useGetPrAvailabilityQuery>;
+  onConnect: () => void;
+}) {
+  // The sidebar owns repository scoping on desktop; without it (mobile) the
   // facet menu's Repository section is the only way to narrow by repo.
   const showScopeFacets = useIsMobile();
   const [relationship, setRelationship] = useState<PrRelationship>("all");
@@ -110,15 +109,14 @@ function PullRequestsList({
     return () => clearTimeout(timer);
   }, [text]);
 
-  // Re-checked on mount like the search below: returning from the connections
-  // screen must not keep serving a cached "not connected".
-  const { data: availability, isLoading: availabilityLoading } =
-    useGetPrAvailabilityQuery(undefined, { refetchOnMountOrArgChange: 30 });
+  const { currentData: availability, isFetching: checkingAvailability, isError: availabilityError } = availabilityQuery;
+  const connected = availability?.connected === true && !availability.error && !availabilityError;
 
   // Facet options are the repos selected on the GitHub connection — the same
   // set the search is scoped to by default — plus anything present in the
   // loaded rows (covers the no-selection global fallback).
-  const { data: selectedResources } = useGetSelectedResourcesQuery("github");
+  const resources = useGetSelectedResourcesQuery("github", { skip: !connected });
+  const selectedResources = resources.currentData;
 
   // The sidebar picks a resource by id; the search wants its `owner/repo`
   // slug. Until the resources load the slug is unknown, so the search waits
@@ -147,8 +145,6 @@ function PullRequestsList({
     [relationship, lifecycle, debouncedText, searchRepos],
   );
 
-  const connected = availability?.connected === true && !availability.error;
-
   // currentData (not data): on a filter/tab change RTK's `data` keeps serving
   // the previous query's rows until the new one lands — the list must drop to
   // the loading state instead of silently showing stale results.
@@ -172,10 +168,11 @@ function PullRequestsList({
   );
 
   const items = useMemo(() => {
+    if (!firstPage) return [];
     const seen = new Set<string>();
     const merged: PullRequestSummary[] = [];
     for (const page of [firstPage, ...extraPages]) {
-      for (const item of page?.items ?? []) {
+      for (const item of page.items) {
         if (seen.has(item.nodeId)) continue;
         seen.add(item.nodeId);
         merged.push(item);
@@ -213,15 +210,20 @@ function PullRequestsList({
   // A non-default state counts as a filter too, now that it lives inside
   // the facet menu with no always-visible control of its own.
   const activeFilterCount = repoFilters.length + (lifecycle !== "all" ? 1 : 0);
+  const narrowed = Boolean(debouncedText) || relationship !== "all" || activeFilterCount > 0;
 
   const clearFilters = () => {
     setRepoFilters([]);
     setLifecycle("all");
   };
 
-  // The detail drawer is always open — keep it pointed at the top row
-  // whenever nothing (or something no longer listed) is selected.
+  // Keep the split view pointed at a visible row. The compact view opens
+  // only when the user activates a row.
   useEffect(() => {
+    if (!connected || scopePending) {
+      if (selectedNodeId) onSelectPr(null);
+      return;
+    }
     if (items.length === 0) {
       // Same as the issues panel: a disconnected provider (or a search that
       // came back empty) must not leave a stale PR in the drawer.
@@ -232,47 +234,58 @@ function PullRequestsList({
       return;
     }
     onSelectPr(items[0]);
-  }, [items, selectedNodeId, isFetching, onSelectPr]);
+  }, [connected, scopePending, items, selectedNodeId, isFetching, onSelectPr]);
 
   const handleLoadMore = async () => {
     if (!lastPage?.endCursor) return;
-    const result = await loadMore(
-      { ...filters, cursor: lastPage.endCursor },
-      true,
-    ).unwrap();
-    setExtra((prev) => ({
-      key: filtersKey,
-      pages: prev.key === filtersKey ? [...prev.pages, result] : [result],
-    }));
+    try {
+      const result = await loadMore(
+        { ...filters, cursor: lastPage.endCursor },
+        true,
+      ).unwrap();
+      setExtra((prev) => ({
+        key: filtersKey,
+        pages: prev.key === filtersKey ? [...prev.pages, result] : [result],
+      }));
+    } catch {
+      toast.error("Unable to load more pull requests.");
+    }
   };
 
-  if (availabilityLoading) {
+  if (availabilityError) {
+    return <TasksLoadError title="Unable to check GitHub access." onRetry={() => void availabilityQuery.refetch()} />;
+  }
+
+  if (!availability || (checkingAvailability && !connected)) {
+    return <TasksState title="Checking GitHub access…" role="status" />;
+  }
+
+  if (availability.error) {
     return (
-      <div className="flex items-center justify-center py-16 px-6">
-        <Text as="span" size="xs" tone="inherit" className="shine-text">
-          Checking GitHub access...
-        </Text>
-      </div>
+      <TasksState title="GitHub access could not be verified." role="alert">
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button variant="primary" onClick={onConnect}>Manage GitHub</Button>
+          <Button variant="subtle" onClick={() => void availabilityQuery.refetch()}>Try again</Button>
+        </div>
+      </TasksState>
     );
   }
 
-  if (!availability?.connected || availability.error) {
+  if (!availability.connected) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 py-16 px-6 text-center">
-        <Body size="s" weight="medium">
-          {availability?.error ?? "GitHub is not connected"}
-        </Body>
-        {!availability?.error && (
-          <Body size="xs" tone="muted" className="max-w-90">
-            Connect GitHub to see pull requests you authored, are reviewing, or
-            were asked to review.
-          </Body>
-        )}
-        <Button variant="primary" onClick={onConnect}>
-          {availability?.error ? "Manage GitHub" : "Connect GitHub"}
-        </Button>
-      </div>
+      <TasksState
+        title="GitHub is not connected"
+        description="Connect GitHub to see pull requests you authored, reviewed, or were asked to review."
+      >
+        <Button variant="primary" onClick={onConnect}>Connect GitHub</Button>
+      </TasksState>
     );
+  }
+
+  if (scopePending) {
+    return resources.isError
+      ? <TasksLoadError title="Unable to load the selected GitHub repositories." onRetry={() => void resources.refetch()} />
+      : <TasksState title="Loading GitHub repositories…" role="status" />;
   }
 
   return (
@@ -309,13 +322,13 @@ function PullRequestsList({
             options={RELATIONSHIP_FILTERS}
             semantics="radiogroup"
             aria-label="Pull request relationship"
-            className="w-fit"
+            className="w-fit max-w-full overflow-x-auto noscrollbar"
           />
           <div className="flex items-center gap-1.5">
             {activeFilterCount > 0 && (
               <Button
                 onClick={clearFilters}
-                className="px-2 py-1 flex items-center gap-1 text-xs rounded-full bg-primary/60 dark:bg-primary/10 glass-outline text-primary-800 dark:text-primary-200 cursor-pointer whitespace-nowrap"
+                className="px-2 py-1 flex items-center gap-1 text-xs rounded-full button-neutral text-primary-800 dark:text-primary-200 cursor-pointer whitespace-nowrap"
                 tooltip="Clear filters"
               >
                 <Trash className="size-3.5" />
@@ -334,7 +347,7 @@ function PullRequestsList({
                 aria-expanded={repoFilterOpen}
                 className={
                   repoFilterOpen || activeFilterCount > 0
-                    ? "bg-primary/80 dark:bg-primary/10 glass-outline text-primary-900 dark:text-primary-100"
+                    ? "button-neutral border-0 text-primary-900 dark:text-primary-100"
                     : undefined
                 }
               >
@@ -390,27 +403,13 @@ function PullRequestsList({
       {/* Scrolling list — rows fade out as they slide under the controls */}
       <div className="scroll-bounce flex-1 min-h-0 overflow-y-auto noscrollbar px-6 pt-3 pb-16 mask-[linear-gradient(to_bottom,transparent,black_1.75rem)]">
         {isError ? (
-          <div className="flex flex-col items-center gap-2 py-10">
-            <Body size="xs" tone="secondary">
-              Unable to load pull requests.
-            </Body>
-            <Button variant="subtle" onClick={() => refetch()}>
-              Try again
-            </Button>
-          </div>
+          <TasksLoadError title="Unable to load pull requests." onRetry={() => void refetch()} />
         ) : isFetching && items.length === 0 ? (
-          <div className="flex items-center justify-center py-10">
-            <Text as="span" size="xs" tone="inherit" className="shine-text">
-              Loading pull requests...
-            </Text>
-          </div>
-        ) : items.length === 0 ? (
-          <div className="flex items-center justify-center py-10">
-            <Body size="xs" tone="secondary">
-              No pull requests match these filters.
-            </Body>
-          </div>
-        ) : (
+          <TasksState title="Loading pull requests…" role="status" />
+        ) : items.length === 0 && (
+          <TasksState title={narrowed ? "No pull requests match these filters." : "No pull requests found."} />
+        )}
+        {items.length > 0 && (
           <div className="space-y-2 min-w-0">
             {items.map((pr, index) => (
               <div
@@ -422,7 +421,7 @@ function PullRequestsList({
                   pr={pr}
                   isActive={selectedNodeId === pr.nodeId}
                   compact
-                  onClick={() => onSelectPr(pr)}
+                  onClick={(opener) => onSelectPr(pr, opener)}
                 />
               </div>
             ))}
@@ -430,11 +429,11 @@ function PullRequestsList({
               <div className="flex justify-center pt-2">
                 <Button
                   variant="subtle"
-                  disabled={isFetchingMore}
+                  isLoading={isFetchingMore}
                   onClick={handleLoadMore}
                   className="text-primary-800 dark:text-primary-200"
                 >
-                  {isFetchingMore ? "Loading..." : "Load more"}
+                  Load more
                 </Button>
               </div>
             )}

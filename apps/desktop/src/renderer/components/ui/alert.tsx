@@ -137,21 +137,17 @@ export default function Alert({
             className="flex-1 rounded-full font-semibold"
             variant={primaryButtonVariant}
             onClick={onPrimary}
-            disabled={isPrimaryLoading}
+            isLoading={isPrimaryLoading}
           >
-            {isPrimaryLoading ? (
-              "Loading..."
-            ) : (
-              <span className="flex items-center justify-center gap-1">
-                {primaryButtonText}
-                <EnterHint />
-              </span>
-            )}
+            <span className="flex items-center justify-center gap-1">
+              {primaryButtonText}
+              <EnterHint />
+            </span>
           </Button>
           <Button
             ref={secondaryButtonRef}
             className="flex-1 rounded-full font-semibold"
-            variant="primary"
+            variant="secondary"
             onClick={onSecondary}
             disabled={isPrimaryLoading}
           >

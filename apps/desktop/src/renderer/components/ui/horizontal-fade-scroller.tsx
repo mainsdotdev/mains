@@ -34,7 +34,7 @@ function ScrollArrow({
       aria-label={side === "left" ? "Scroll left" : "Scroll right"}
       onClick={onClick}
       className={cn(
-        "absolute top-1/2 z-(--z-base) flex size-7 -translate-y-1/2 items-center justify-center rounded-full glass-button text-primary-700 dark:text-primary-300",
+        "absolute top-1/2 z-(--z-base) flex size-7 -translate-y-1/2 items-center justify-center rounded-full button-neutral text-primary-700 dark:text-primary-300",
         "opacity-0 transition-opacity duration-200",
         side === "left" ? "left-1" : "right-1",
         visible ? "group-hover/rail:opacity-100" : "pointer-events-none",

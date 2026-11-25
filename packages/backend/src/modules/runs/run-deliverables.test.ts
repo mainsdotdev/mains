@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import type { RunArtifactResponse } from "./runs.dto";
 import type { RunTurnResponse } from "@mains/contracts/runs";
 import { projectRunDeliverables } from "./run-deliverables";
+import { describeRunOutput } from "./run-output-files";
 
 let root: string;
 const at = (second: number) => new Date(second * 1000);
@@ -31,6 +32,15 @@ beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-deliverab
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
 describe("per-turn final-answer deliverables", () => {
+  it("exposes linked audio and video to the run's bounded file reader", async () => {
+    file("Su Damlası.WAV"); file("screen demo.mp4"); file("unused.wav");
+    const selected = outputs(await project([report(1, "[Dinle](Su%20Damlas%C4%B1.WAV) · [Watch](<screen demo.mp4>)")]));
+    const descriptors = await Promise.all(selected.map((row) => describeRunOutput("r", row, false)));
+    expect(descriptors.map(({ name, mimeType, previewType }) => ({ name, mimeType, previewType }))).toEqual([
+      { name: "Su Damlası.WAV", mimeType: "audio/wav", previewType: "native" },
+      { name: "screen demo.mp4", mimeType: "video/mp4", previewType: "native" },
+    ]);
+  });
   it("selects native absolute paths and file URLs with spaces and percent signs", async () => {
     const absolute = file("Türkçe report 100%.pdf");
     for (const reference of [absolute, pathToFileURL(absolute).href]) {

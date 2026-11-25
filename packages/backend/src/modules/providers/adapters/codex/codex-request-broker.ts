@@ -3,9 +3,9 @@ import type {
   ToolApprovalRequest,
   ToolApprovalResponse,
 } from "../../../runs/runs.dto";
+import type { WorkRunEventHandler } from "../../../../../shared/adapter.types";
 import { requestToolApproval, updatePendingRequest } from "../../../runs/user-input-broker";
 import type { ApprovalPresentationPatch } from "../../../runs/user-input-lifecycle";
-import { guardsService } from "../../../guards/guards.service";
 import type { MainsToolContext } from "../mains-tools.core";
 import {
   dispatchMainsTool,
@@ -69,6 +69,7 @@ export interface CodexServerResponder {
 export interface CodexRequestRunState {
   threadId?: string | null;
   mode?: ModeId;
+  assistantId?: string | null;
   fileChangeItems: Map<
     string,
     Array<{ path: string; kind: string; diff?: string }>
@@ -84,6 +85,7 @@ export interface CodexServerRequest {
   params: unknown;
   runId: string;
   runIsDead: boolean;
+  onUserInputEvent?: WorkRunEventHandler;
 }
 
 interface CodexRequestBrokerOptions {
@@ -97,9 +99,6 @@ interface CodexRequestBrokerOptions {
     request: ToolApprovalRequest,
   ) => Promise<ToolApprovalResponse>;
   updateApproval?: (requestId: string, patch: ApprovalPresentationPatch) => boolean;
-  checkCommand?: (
-    command: string,
-  ) => Promise<{ blocked: boolean }>;
   dispatchTool?: typeof dispatchMainsTool;
   openExternal?: (url: string) => Promise<unknown>;
   logger?: AdapterLogger;
@@ -120,9 +119,6 @@ export function createCodexRequestBroker(
     options.requestApproval ?? requestToolApproval;
   const updateApproval = options.updateApproval ?? updatePendingRequest;
   const fileApprovals = new Map<string, { runId: string; itemKey: string; reason?: string }>();
-  const checkCommand =
-    options.checkCommand ??
-    ((command: string) => guardsService.checkCommand(command));
   const dispatchTool =
     options.dispatchTool ?? dispatchMainsTool;
   const openExternal =
@@ -134,7 +130,10 @@ export function createCodexRequestBroker(
   const mainsToolNames = new Map(
     MODE_IDS.map((mode) => [
       mode,
-      new Set(toCodexDynamicTools(mode).map((tool) => tool.name)),
+      {
+        conversation: new Set(toCodexDynamicTools(mode).map((tool) => tool.name)),
+        assistant: new Set(toCodexDynamicTools(mode, true).map((tool) => tool.name)),
+      },
     ]),
   );
 
@@ -262,22 +261,6 @@ export function createCodexRequestBroker(
             ? `Network access: ${networkApprovalContext.protocol ?? "https"}://${networkApprovalContext.host}`
             : "Command approval"
         );
-
-      // Dependency guard check — intercept install commands before approval
-      let guardResult: { blocked: boolean };
-      try {
-        guardResult = command
-          ? await checkCommand(command)
-          : { blocked: false };
-      } catch (error) {
-        logger.error("Command guard failed:", error);
-        respondCommandApproval(server, id, approval, "decline");
-        break;
-      }
-      if (guardResult.blocked) {
-        respondCommandApproval(server, id, approval, "decline");
-        break;
-      }
 
       try {
         const result = await requestApproval({
@@ -423,6 +406,13 @@ export function createCodexRequestBroker(
         typeof p?.autoResolutionMs === "number"
           ? p.autoResolutionMs
           : undefined;
+      const recordInput = async (event: Parameters<WorkRunEventHandler>[0]) => {
+        try {
+          await request.onUserInputEvent?.(event);
+        } catch {
+          logger.warn("Could not record a Codex user input event.");
+        }
+      };
 
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
@@ -440,22 +430,30 @@ export function createCodexRequestBroker(
           (q.description as string) ??
           "";
         const opts = normalizeOptions(q);
+        const requestId = questions.length === 1 ? String(id) : `${id}-q${i}`;
+        const input = { question: text, header: (q.header as string) || undefined, options: opts };
+        const startedAt = now();
+        const toolCallId = `codex-user-input-${p?.itemId ?? id}-${i}`;
+        const recordQuestion = request.onUserInputEvent && q.isSecret !== true && typeof text === "string" && text.trim();
+        if (recordQuestion) await recordInput({
+          type: "tool_call", toolName: "UserInput", input, startedAt,
+          metadata: { phase: "start", toolCallId },
+        });
+        let recordedAnswer: string | undefined;
         try {
           const result = await requestApproval({
             // Synthetic per-question requestId so each dialog has a
             // unique broker key while still sharing the codex JSON-RPC id.
-            requestId: questions.length === 1 ? String(id) : `${id}-q${i}`,
+            requestId,
             runId,
             toolName: "UserInput",
             kind: "ask_user",
-            header: (q.header as string) || undefined,
-            question: text,
-            options: opts,
+            ...input,
             multiSelect: false,
             isOther: q.isOther === true,
             isSecret: q.isSecret === true,
             autoResolutionMs,
-            timestamp: now(),
+            timestamp: startedAt,
           });
           if (!result.approved) {
             answers[qId] = { answers: [] };
@@ -467,9 +465,16 @@ export function createCodexRequestBroker(
             : [];
           const fallback = opts?.[0]?.label ?? "yes";
           answers[qId] = { answers: parts.length > 0 ? parts : [fallback] };
+          recordedAnswer = result.answer?.trim() ? result.answer : fallback;
         } catch {
           answers[qId] = { answers: [] };
           aborted = true;
+        } finally {
+          if (recordQuestion) await recordInput({
+            type: "tool_call", toolName: "UserInput", input, endedAt: now(),
+            output: recordedAnswer === undefined ? { status: "canceled" } : { status: "answered", answer: recordedAnswer },
+            metadata: { phase: "complete", toolCallId },
+          });
         }
       }
 
@@ -508,8 +513,10 @@ export function createCodexRequestBroker(
       const toolArgs = parseToolArguments(
         toolParams?.arguments,
       );
-      const mode = getRunState(runId)?.mode ?? DEFAULT_MODE_ID;
-      if (toolName && mainsToolNames.get(mode)?.has(toolName)) {
+      const state = getRunState(runId);
+      const mode = state?.mode ?? DEFAULT_MODE_ID;
+      const toolNames = mainsToolNames.get(mode)?.[state?.assistantId ? "assistant" : "conversation"];
+      if (toolName && toolNames?.has(toolName)) {
         const ctx =
           getMainsToolContext(runId) ?? {
             workspaceId: null,
@@ -548,11 +555,18 @@ export function createCodexRequestBroker(
             success: false,
           });
         }
+      } else if (toolName) {
+        // A resumed thread can still request a tool from its saved catalog.
+        // Return a tool result so the app-server preserves the reason.
+        server.respondToRequest(id, {
+          contentItems: [{ type: "inputText", text: `Unknown dynamic tool: ${toolName}` }],
+          success: false,
+        });
       } else {
         server.respondToRequestError(
           id,
           -32601,
-          `Unknown dynamic tool: ${toolName ?? "undefined"}`,
+          "Unknown dynamic tool: undefined",
         );
       }
       break;

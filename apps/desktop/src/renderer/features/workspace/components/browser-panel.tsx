@@ -261,6 +261,14 @@ export function BrowserPanel({
     browserState.tabs.find((tab) => tab.tabId === browserState.activeTabId) ??
     null;
   const isBlank = !activeTab?.url || activeTab.url === BLANK_URL;
+  // New tabs can come from either the browser toolbar or the shared preview strip.
+  useEffect(() => {
+    if (!isOpen || !isVisible || !isBlank || !activeTab?.tabId ||
+      (selectedPreviewId && selectedPreviewId !== activeTab.tabId)) return;
+    const frame = requestAnimationFrame(() => locationInputRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, isVisible, isBlank, activeTab?.tabId, selectedPreviewId]);
+
   // The typed input leads the rows, so the default selection (0) is exactly
   // what was typed; history matches follow it.
   const addressRows = useMemo(
@@ -278,6 +286,7 @@ export function BrowserPanel({
 
   const applyBrowserState = useCallback((state: BrowserState) => {
     if (state.ownerKey && state.ownerKey !== ownerKey) return;
+    const activeChanged = browserStateOwnerRef.current !== ownerKey || activeTabIdRef.current !== state.activeTabId;
     const lastTabClosed = browserStateOwnerRef.current === ownerKey && !!activeTabIdRef.current && !state.tabs.length;
     const changedNativeSelection = browserStateOwnerRef.current === ownerKey &&
       !!activeTabIdRef.current && activeTabIdRef.current !== state.activeTabId && !!state.activeTabId &&
@@ -298,7 +307,7 @@ export function BrowserPanel({
     const active = state.tabs.find((tab) => tab.tabId === state.activeTabId);
     if (
       active &&
-      document.activeElement !== locationInputRef.current
+      (activeChanged || document.activeElement !== locationInputRef.current)
     ) {
       setUrlInput(active.url === BLANK_URL ? "" : active.url);
     }
@@ -682,9 +691,7 @@ export function BrowserPanel({
   const createTab = useCallback(() => {
     if (!api) return;
     void api.createTab(undefined, ownerKey).then((response: any) => {
-      if (applyResponseState(response, "Failed to create tab")) {
-        requestAnimationFrame(() => locationInputRef.current?.focus());
-      }
+      applyResponseState(response, "Failed to create tab");
     });
   }, [api, applyResponseState, ownerKey]);
 
@@ -1525,7 +1532,7 @@ export function BrowserPanel({
               }}
               disabled={!activeTab?.canGoBack}
               aria-label="Back"
-              className="glass-card"
+              className="button-neutral border-0"
             >
               <ChevronLeft className="size-5" />
             </Button>
@@ -1539,7 +1546,7 @@ export function BrowserPanel({
               }}
               disabled={!activeTab?.canGoForward}
               aria-label="Forward"
-              className="glass-card"
+              className="button-neutral border-0"
             >
               <ChevronLeft className="size-5 rotate-180" />
             </Button>
@@ -1550,7 +1557,7 @@ export function BrowserPanel({
               onClick={() => {
                 void (activeTab?.isLoading ? api.stop() : api.reload());
               }}
-              className="glass-card group"
+              className="button-neutral border-0 group"
               aria-label={activeTab?.isLoading ? "Stop" : "Reload"}
             >
               {activeTab?.isLoading ? (
@@ -1691,7 +1698,7 @@ export function BrowserPanel({
               tooltipShortcut="Esc"
               tooltipPosition="top-left"
               onClick={() => void toggleSelect()}
-              className={`glass-card ${selectMode ? "text-accent dark:text-accent" : ""}`}
+              className={`button-neutral border-0 ${selectMode ? "text-accent dark:text-accent" : ""}`}
               aria-label={selectMode ? "Exit annotation mode" : "Annotate browser"}
               aria-pressed={selectMode}
             >
@@ -1707,7 +1714,7 @@ export function BrowserPanel({
               aria-label="Open browser menu"
               aria-haspopup="menu"
               aria-expanded={browserMenuOpen}
-              className="glass-card"
+              className="button-neutral border-0"
             >
               <Option className="size-4 rotate-90" />
             </Button>
@@ -1798,7 +1805,7 @@ export function BrowserPanel({
               >
                 Zoom
               </Text>
-              <div className="flex h-6 items-center overflow-hidden rounded-lg glass-outline">
+              <div className="flex h-6 items-center overflow-hidden rounded-lg button-outline">
                 <Button
                   role="menuitem"
                   tabIndex={-1}

@@ -7,7 +7,7 @@ import { toast } from "@/components/ui";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { store } from "@/lib/redux";
 import { appApi } from "@/lib/transport";
-import { BROWSER_PANEL_WIDTH_MIN, BROWSER_PANEL_WIDTH_MAX, clamp, isWorkspaceRoute } from "@/lib/layout";
+import { BROWSER_PANEL_WIDTH_MIN, BROWSER_PANEL_WIDTH_MAX, clamp, isAssistantsRoute, isWorkspaceRoute } from "@/lib/layout";
 import { setBrowserPanelWidth, setRightPanelOpen, setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
 import { openPreviewTab, transferPreviewTab } from "@/lib/redux/slices/previewSlice";
 import { openNewRunTab, replaceMcpAppContext, setMcpAppRunId, setPendingRunId, setSelectedCollectionId } from "@/lib/redux/slices/workspaceSlice";
@@ -138,7 +138,7 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
     commit({ ...current, ...patch });
   }, [commit]);
   const activeContext = JSON.stringify([backendId, activeSpaceId, provider.providerId, mode,
-    mode === "developer" ? workspaceId : selectedCollectionId]);
+    mode === "developer" ? workspaceId : selectedCollectionId, isAssistantsRoute(pathname) ? composerKey : null]);
   const [launch] = useState(() => createMcpAppLaunch(activeContext, pathname));
   const hostRef = useRef<McpAppConversationHost | null>(null);
   const [openingRequest, setOpening] = useState<{ id: string; request: ReturnType<typeof launch.begin> } | null>(null);
@@ -149,16 +149,23 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
   const sending = useRef(new Set<string>());
   const activeId = preview.activeTab?.kind === "app" ? preview.activeTab.id : "";
 
-  const captureScope = useCallback((): McpAppScope => ({
-    backendId, spaceId: activeSpaceId, providerId: provider.providerId, mode,
-    workspaceId: mode === "developer" ? workspaceId : undefined,
-    collectionId: mode === "developer" ? null : store.getState().workspace.selectedCollectionId,
-  }), [backendId, activeSpaceId, provider.providerId, mode, workspaceId]);
+  const captureScope = useCallback((): McpAppScope => {
+    const host = hostRef.current;
+    if (isAssistantsRoute(pathname) && host?.scope.assistantId && host.ownerKey === composerKey) return host.scope;
+    return { backendId, spaceId: activeSpaceId, providerId: provider.providerId, mode,
+      workspaceId: mode === "developer" ? workspaceId : undefined,
+      collectionId: mode === "developer" ? null : store.getState().workspace.selectedCollectionId };
+  }, [backendId, activeSpaceId, provider.providerId, mode, workspaceId, pathname, composerKey]);
   const showConversation = useCallback((scope: McpAppScope, runId?: string, replace = false) => {
+    if (scope.assistantId) {
+      if (isAssistantsRoute(pathname) && hostRef.current?.scope.assistantId === scope.assistantId && hostRef.current.runId === runId) return;
+      navigate(mcpAppConversationPath(scope, runId), { replace });
+      return;
+    }
     dispatch(setSelectedCollectionId(scope.collectionId ?? null));
     if (runId) dispatch(setPendingRunId(runId));
     navigate(mcpAppConversationPath(scope, runId), { replace });
-  }, [dispatch, navigate]);
+  }, [dispatch, navigate, pathname]);
   const reveal = useCallback((panel: PanelState) => {
     dispatch(setRightPanelOpen(false));
     dispatch(setSessionPanelOpen(false));
@@ -198,12 +205,14 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
     }
     setOpening({ id: app.id, request });
     try {
-      let runId: string | undefined = store.getState().workspace.mcpAppRunIdByKey[mcpAppConversationKey(scope, app.id)];
+      let runId: string | undefined = scope.assistantId ? hostRef.current?.runId
+        : store.getState().workspace.mcpAppRunIdByKey[mcpAppConversationKey(scope, app.id)];
       let runScope = scope;
       if (runId) {
         const response = await appApi.runs.getById(runId);
         const run = response.success ? response.data : null;
-        if (!run || run.providerId !== scope.providerId || run.mode !== scope.mode || run.spaceId !== scope.spaceId)
+        if (!run || run.providerId !== scope.providerId || run.mode !== scope.mode || run.spaceId !== scope.spaceId ||
+            (run.assistantId ?? null) !== (scope.assistantId ?? null))
           throw new Error("This app's conversation is unavailable. Open the app from a conversation to start again.");
         if (scope.mode === "developer" && run.workspaceId !== scope.workspaceId) runId = undefined;
         else runScope = { ...scope, workspaceId: run.workspaceId ?? undefined, collectionId: run.collectionId ?? null };
@@ -224,6 +233,7 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
 
   const openTool = useCallback((result: McpAppToolOpen, automatic = false) => {
     if (!hasUsableMcpAppResult(result.output)) return;
+    if (isAssistantsRoute(pathname) && (hostRef.current?.runId !== result.runId || !hostRef.current.scope.assistantId)) return;
     const scope = hostRef.current?.runId === result.runId ? hostRef.current.scope : captureScope();
     const ownerKey = composerOwnerKey(scope, result.runId);
     if (automatic && composerKey !== ownerKey) return;
@@ -244,11 +254,13 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
     reveal(panel);
     rememberRun(panel, result.runId);
     if (!automatic) showConversation(scope, result.runId);
-  }, [captureScope, composerKey, entries, commit, reveal, rememberRun, showConversation, launch]);
+  }, [captureScope, composerKey, entries, commit, reveal, rememberRun, showConversation, launch, pathname]);
 
   const attachRun = useCallback((fromKey: string, runId: string, scope: McpAppScope) => {
     for (const current of Object.values(panelsRef.current)) {
-      if (current.ownerKey !== fromKey || !sameMcpAppScope(current.scope, scope)) continue;
+      const sameAssistant = !!scope.assistantId && current.scope.assistantId === scope.assistantId &&
+        current.scope.backendId === scope.backendId && current.scope.spaceId === scope.spaceId && current.scope.providerId === scope.providerId;
+      if (current.ownerKey !== fromKey || !sameMcpAppScope(current.scope, scope) && !sameAssistant) continue;
       const ownerKey = composerOwnerKey(scope, runId);
       if (ownerKey !== fromKey) {
         const workspace = store.getState().workspace;
@@ -269,23 +281,23 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
   const registerConversation = useCallback((host: McpAppConversationHost) => {
     hostRef.current = host;
     const current = Object.values(panelsRef.current).find((panel) => panel.pendingNewChat && sameMcpAppScope(panel.scope, host.scope));
-    if (current) { dispatch(openNewRunTab()); update(current.document.id, { pendingNewChat: false }); }
+    if (current) { if (!host.scope.assistantId) dispatch(openNewRunTab()); update(current.document.id, { pendingNewChat: false }); }
     return () => { if (hostRef.current === host) hostRef.current = null; };
   }, [dispatch, update]);
 
   const newChat = useCallback((id: string) => {
     const current = panelsRef.current[id];
     if (!current || sending.current.has(id)) return;
-    const scope = current.scope;
+    const scope = current.scope.assistantId ? { ...current.scope, mode: "work", workspaceId: undefined, collectionId: null } : current.scope;
     const ownerKey = composerOwnerKey(scope, null);
     const items = (store.getState().workspace.contextItemsByKey[current.ownerKey] ?? []).filter((item) => item.kind === "mcp-app" && item.sessionId === id);
     dispatch(replaceMcpAppContext({ key: current.ownerKey, sessionId: id, items: [] }));
     dispatch(replaceMcpAppContext({ key: ownerKey, sessionId: id, items }));
     dispatch(setMcpAppRunId({ key: mcpAppConversationKey(scope, current.document.app.id), runId: null }));
-    dispatch(openNewRunTab());
+    if (!scope.assistantId) dispatch(openNewRunTab());
     const previewKey = previewOwnerKey(scope, ownerKey);
     dispatch(transferPreviewTab({ fromKey: current.previewKey, toKey: previewKey, id }));
-    commit({ ...current, ownerKey, previewKey, runId: undefined, pendingNewChat: true, chatMode: "input", chatVisible: true });
+    commit({ ...current, scope, ownerKey, previewKey, runId: undefined, pendingNewChat: true, chatMode: "input", chatVisible: true });
     showConversation(scope);
   }, [dispatch, commit, showConversation]);
   const sendMessage = useCallback(async (id: string, content: unknown, options?: McpAppMessageOptions) => {
@@ -343,7 +355,7 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
       setChatHost: (chatHost: HTMLDivElement | null) => update(id, { chatHost }),
       sendMessage: (content: unknown, options?: McpAppMessageOptions) => sendMessage(id, content, options),
       updateModelContext: (value: unknown) => updateModelContext(id, value), newChat: () => newChat(id) };
-    const isOpen = !!panel && preview.isOpen && activeId === id && panel.previewKey === preview.ownerKey && isWorkspaceRoute(pathname);
+    const isOpen = !!panel && preview.isOpen && activeId === id && panel.previewKey === preview.ownerKey && (isWorkspaceRoute(pathname) || isAssistantsRoute(pathname));
     const ownItems = panel ? (panel.ownerKey === composerKey ? contextItems : contextItemsByKey[panel.ownerKey]) : [];
     return { document: panel?.document ?? null, scope: panel?.scope ?? null, ownerKey: panel?.ownerKey ?? null, runId: panel?.runId,
       isOpen, isExpanded: isOpen && preview.isExpanded, width,

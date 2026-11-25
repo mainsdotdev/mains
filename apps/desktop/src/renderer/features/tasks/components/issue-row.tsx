@@ -134,7 +134,7 @@ export function IssueRow({
   showProvider: boolean;
   /** Keeps statuses aligned when any row has a priority. */
   showPriority: boolean;
-  onClick: () => void;
+  onClick: (opener: HTMLElement) => void;
 }) {
   const { issue, entity } = row;
   const title = entity.title || `Issue ${issue.identifier ?? `#${issue.number ?? "?"}`}`;
@@ -148,11 +148,11 @@ export function IssueRow({
       role="button"
       tabIndex={0}
       aria-current={isActive ? "true" : undefined}
-      onClick={onClick}
+      onClick={(event) => onClick(event.currentTarget)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onClick();
+          onClick(event.currentTarget);
         }
       }}
       className={`@container w-full cursor-pointer rounded-2xl px-3 py-2 text-left transition-all duration-200 ease-out ${

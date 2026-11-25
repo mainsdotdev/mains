@@ -17,6 +17,12 @@
               "value" : {
                 "solid" : "display-p3:0.92226,0.92226,0.92226,1.00000"
               }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "extended-gray:1.00000,1.00000"
+              }
             }
           ],
           "glass" : true,

@@ -540,7 +540,7 @@ export function AtlasPageHeader({
         <ModalHeader onClose={closeCoverPicker}>
           <Text weight="medium">Page cover</Text>
           <Button
-            variant="primary"
+            variant="secondary"
             className="ml-auto"
             disabled={disabled}
             onClick={() => uploadRef.current?.click()}

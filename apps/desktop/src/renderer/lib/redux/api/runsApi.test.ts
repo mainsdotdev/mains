@@ -10,11 +10,13 @@ import {
 } from "../../transport";
 import { baseApi } from "./baseApi";
 import { runsApi } from "./runsApi";
+import { assistantsApi } from "./assistantsApi";
 import { workspaceApi } from "./workspaceApi";
 import workspaceReducer, { activateWorkspaceView, setActiveTab, setDraftText } from "../slices/workspaceSlice";
 import { selectSessionRunId } from "@/features/workspace/components/session-panel/select-session-run";
 import appSettingsReducer, { setBrowserPanelOpen, setRightPaneContextKey } from "../slices/appSettingsSlice";
 import backendsReducer from "../slices/backendsSlice";
+import { onRunUiStateForgotten } from "../ui-state-cleanup";
 
 function createStore() {
   return configureStore({
@@ -28,6 +30,41 @@ function createStore() {
       getDefaultMiddleware().concat(baseApi.middleware),
   });
 }
+
+describe("conversation lookup timeout", () => {
+  afterEach(() => {
+    resetTransport();
+    vi.useRealTimers();
+  });
+
+  it.each([
+    {
+      channel: CHANNELS.runs.getById, response: null,
+      start: (store: ReturnType<typeof createStore>) => store.dispatch(runsApi.endpoints.getRunById.initiate("run")),
+    },
+    {
+      channel: CHANNELS.assistants.conversations, response: [],
+      start: (store: ReturnType<typeof createStore>) => store.dispatch(assistantsApi.endpoints.assistantConversations.initiate({ accountId: "account", id: "mate" })),
+    },
+  ])("settles and allows a new read after $channel stalls", async ({ channel, start, response }) => {
+    vi.useFakeTimers();
+    const invoke = vi.fn<Transport["invoke"]>()
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce(ok(response));
+    setTransport({
+      kind: "test", invoke, subscribe: () => () => undefined,
+      status: () => "connected", onStatusChange: () => () => undefined,
+    });
+    const store = createStore();
+    const subscription = start(store);
+    const timedOut = expect(subscription.unwrap()).rejects.toMatchObject({ error: "The request timed out." });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await timedOut;
+    await expect(subscription.refetch().unwrap()).resolves.toEqual(response);
+    expect(invoke.mock.calls.map(([handler]) => handler)).toEqual([channel, channel]);
+    subscription.unsubscribe();
+  });
+});
 
 describe("archived runs cache", () => {
   afterEach(() => {
@@ -183,15 +220,23 @@ describe("permanent deletion UI cleanup", () => {
     store.dispatch(setRightPaneContextKey({ ownerKey: owner, browserExpansionKey: owner }));
     store.dispatch(setBrowserPanelOpen(true));
 
-    await expect(store.dispatch(runsApi.endpoints.deleteRun.initiate("run-a")).unwrap()).rejects.toBeTruthy();
-    expect(store.getState().workspace.draftTextByKey[owner]).toBe("unfinished");
-    expect(store.getState().appSettings.browserPanelOpen).toBe(true);
+    const onForgotten = vi.fn();
+    const unsubscribe = onRunUiStateForgotten(onForgotten);
+    try {
+      await expect(store.dispatch(runsApi.endpoints.deleteRun.initiate("run-a")).unwrap()).rejects.toBeTruthy();
+      expect(store.getState().workspace.draftTextByKey[owner]).toBe("unfinished");
+      expect(store.getState().appSettings.browserPanelOpen).toBe(true);
+      expect(onForgotten).not.toHaveBeenCalled();
 
-    shouldFail = false;
-    await store.dispatch(runsApi.endpoints.deleteRun.initiate("run-a")).unwrap();
-    expect(store.getState().workspace.draftTextByKey[owner]).toBeUndefined();
-    expect(store.getState().appSettings.activeRightPaneContextKey).toBe("default");
-    expect(store.getState().appSettings.browserPanelOpen).toBe(false);
+      shouldFail = false;
+      await store.dispatch(runsApi.endpoints.deleteRun.initiate("run-a")).unwrap();
+      expect(store.getState().workspace.draftTextByKey[owner]).toBeUndefined();
+      expect(store.getState().appSettings.activeRightPaneContextKey).toBe("default");
+      expect(store.getState().appSettings.browserPanelOpen).toBe(false);
+      expect(onForgotten).toHaveBeenCalledExactlyOnceWith("local", "run-a");
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("clears a deleted workspace's view and unsent draft", async () => {

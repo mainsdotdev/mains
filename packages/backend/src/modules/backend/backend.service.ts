@@ -1,7 +1,13 @@
 import { getLocalBackendId } from "../../db/backend-identity";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
+import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_MODEL_EDITING_CAPABILITY, MOBILE_MATE_PINNING_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY } from "@mains/contracts/assistants";
 import { CHANNELS } from "@mains/contracts/channels";
+import { MOBILE_GOAL_CONTROLS_CAPABILITY, MOBILE_GOAL_SUMMARY_CAPABILITY } from "@mains/contracts/provider-goals";
+import { MATE_REALTIME_CONVERSATION_CAPABILITY } from "@mains/contracts/realtime";
+import { WORKSPACE_FILE_SEARCH_CAPABILITY } from "@mains/contracts/search";
+import { MOBILE_PLAN_DECISION_CAPABILITY } from "@mains/contracts/plan-decision";
+import { MOBILE_PLUGIN_ICONS_CAPABILITY } from "@mains/contracts/plugin-icons";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { assertAuthActive, createAuthFence, createAuthGrants } from "@mains/contracts/auth-lifecycle";
 import { registeredChannels } from "../../ipc-kit";
@@ -29,6 +35,27 @@ import type {
 export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.backend.describe,
   CHANNELS.account.get,
+  CHANNELS.search.conversations,
+  CHANNELS.search.workspaceFiles,
+  CHANNELS.assistants.mobileDirectory,
+  CHANNELS.assistants.mobileAssignment,
+  CHANNELS.assistants.mobileMemory,
+  CHANNELS.assistants.mobileAssignments,
+  CHANNELS.assistants.mobileRoutines,
+  CHANNELS.assistants.conversations,
+  // Narrow Atlas readers return identities and bounded content, never host paths.
+  CHANNELS.atlas.mobileLibrary,
+  CHANNELS.atlas.readMobilePage,
+  CHANNELS.atlas.readMobilePageCover,
+  CHANNELS.atlas.readMobilePageImage,
+  CHANNELS.atlas.describeMobileFile,
+  CHANNELS.atlas.readMobileSaveStatus,
+  CHANNELS.atlas.readMobileFile,
+  CHANNELS.atlas.readMobileImage,
+  CHANNELS.atlas.readMobileBookmark,
+  CHANNELS.atlas.mobileTrash,
+  CHANNELS.atlas.mobileTags,
+  CHANNELS.atlas.readMobileTags,
   CHANNELS.runs.getAll,
   CHANNELS.runs.listActive,
   CHANNELS.runs.listRecent,
@@ -42,6 +69,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   // managed directory. This deliberately does not expose fileExplorer:*.
   CHANNELS.runs.readTextFile,
   CHANNELS.runs.listOutputs,
+  CHANNELS.runs.getQueue,
   CHANNELS.runs.readOutputFile,
   CHANNELS.runs.listPendingApprovals,
   CHANNELS.runTurns.getByRun,
@@ -71,11 +99,14 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   // The composer's model picker: what each provider can run, with the effort
   // levels each model supports.
   CHANNELS.providers.getModels,
+  CHANNELS.providers.getRealtimeVoices,
   // The composer's context picker: the skills and slash commands a provider
   // offers, so a phone can attach one the way the desktop's "@" menu does.
   // Read-only listings — installing or editing a skill stays off this list.
   CHANNELS.providers.getSkills,
+  CHANNELS.providers.getMobilePluginIcons,
   CHANNELS.providers.getCodexPermissions,
+  CHANNELS.providers.getMobileGoalSummary,
   CHANNELS.providers.getCommands,
 ]);
 
@@ -84,22 +115,50 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
  * router turns into exactly-once semantics through `command_receipts`. The
  * control loop's verbs — answer a request or a question, continue or steer a
  * run, start one, branch one, stop one — plus the picker writes the composer
- * needs. Anything touching files, git, terminal or settings stays out.
+ * needs, plus narrow saves of existing conversation files/bookmark URLs into
+ * Atlas and organizing permanent Atlas favorites, projects, tags and Trash.
+ * Arbitrary filesystem paths, git, terminal and general settings stay out.
  */
 export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
+  CHANNELS.assistants.create,
+  CHANNELS.assistants.createTeam,
+  CHANNELS.assistants.setupProfile,
+  CHANNELS.assistants.prepareWelcome,
+  CHANNELS.assistants.respondWelcome,
+  CHANNELS.assistants.send,
+  CHANNELS.assistants.mobileManage,
+  CHANNELS.atlas.updateMobileItem,
+  CHANNELS.atlas.setMobileTrash,
+  CHANNELS.atlas.deleteMobileTrash,
+  CHANNELS.atlas.setMobileTags,
+  CHANNELS.atlas.editMobileBookmark,
+  CHANNELS.atlas.saveMobileFile,
+  CHANNELS.atlas.saveMobileBookmark,
+  CHANNELS.runs.createRealtimeConversation,
+  CHANNELS.runs.startRealtime,
+  CHANNELS.runs.stopRealtime,
   CHANNELS.runs.toolApprovalResponse,
+  CHANNELS.runs.decidePlan,
   CHANNELS.runs.continue,
   CHANNELS.runs.execute,
   // Branching a run reaches no further than continuing one: the fork inherits
   // the source's workspace, mode and policy snapshot wholesale, so a device
   // can't widen its own reach by forking.
   CHANNELS.runs.fork,
+  // The same owned-record retirement and collection-membership operations as
+  // desktop, guarded by the existing durable command receipt at the WS seam.
+  CHANNELS.runs.archive,
+  CHANNELS.runs.delete,
+  CHANNELS.runs.moveToCollection,
   // Stopping a run you can already start and continue takes nothing further —
   // it only ends work the device itself asked for.
   CHANNELS.runs.abort,
   // A message for the turn already running: the same payload and owner checks
   // as a continuation, delivered before the turn ends rather than after it.
   CHANNELS.runs.steer,
+  // Recover a previously accepted queue/steer input by its original identity.
+  // This can persist the provider's acceptance projection, so it is a command.
+  CHANNELS.runs.inputStatus,
   // Codex's end-of-turn questions. Answering one sends a formatted message
   // through that same steer/continue seam; dismissing only records that the
   // user chose not to answer.
@@ -113,6 +172,7 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   // plan) as one narrow patch: `providers:update` replaces the whole config,
   // credentials included, and stays desktop-only.
   CHANNELS.providers.updateRunSettings,
+  CHANNELS.providers.changeMobileGoal,
 ]);
 
 /**
@@ -122,6 +182,10 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
  * connections. Exactly the channels the phone subscribes to.
  */
 export const PAIRED_DEVICE_EVENTS: ReadonlySet<string> = new Set([
+  CHANNELS.assistants.changed,
+  CHANNELS.atlas.changed,
+  CHANNELS.runs.realtimeEvent,
+  CHANNELS.runs.queueChanged,
   CHANNELS.runs.statusChanged,
   CHANNELS.runs.updated,
   CHANNELS.runs.ephemeralEvent,
@@ -130,6 +194,7 @@ export const PAIRED_DEVICE_EVENTS: ReadonlySet<string> = new Set([
   CHANNELS.runs.toolApprovalResolved,
   CHANNELS.runs.diffUpdated,
   CHANNELS.providers.modelsUpdated,
+  CHANNELS.providers.mobileGoalChanged,
   CHANNELS.providers.skillsUpdated,
   CHANNELS.workspace.gitStateChanged,
 ]);
@@ -238,7 +303,27 @@ export const backendService = {
             PAIRED_DEVICE_CHANNELS.has(channel) || PAIRED_DEVICE_COMMANDS.has(channel),
         )
       : served;
-    const capabilities = [...new Set(reachable.map(namespaceOf))].sort();
+    const namespaces = reachable.map(namespaceOf);
+    const mateInfoChannels = [CHANNELS.assistants.mobileMemory, CHANNELS.assistants.mobileAssignments,
+      CHANNELS.assistants.mobileRoutines, CHANNELS.assistants.mobileManage];
+    if (mateInfoChannels.every(channel => reachable.includes(channel))) {
+      namespaces.push(MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_MODEL_EDITING_CAPABILITY);
+      if (reachable.includes(CHANNELS.assistants.mobileDirectory) && served.includes(CHANNELS.assistants.setPinned)) {
+        namespaces.push(MOBILE_MATE_PINNING_CAPABILITY);
+      }
+    }
+    if (reachable.includes(CHANNELS.assistants.createTeam)) namespaces.push(MOBILE_MATE_TEAM_CREATION_CAPABILITY);
+    if (reachable.includes(CHANNELS.runs.createRealtimeConversation) && reachable.includes(CHANNELS.runs.startRealtime)) {
+      namespaces.push(MATE_REALTIME_CONVERSATION_CAPABILITY);
+    }
+    if (reachable.includes(CHANNELS.providers.getMobileGoalSummary)) namespaces.push(MOBILE_GOAL_SUMMARY_CAPABILITY);
+    if (reachable.includes(CHANNELS.search.workspaceFiles)) namespaces.push(WORKSPACE_FILE_SEARCH_CAPABILITY);
+    if (reachable.includes(CHANNELS.runs.decidePlan)) namespaces.push(MOBILE_PLAN_DECISION_CAPABILITY);
+    if (reachable.includes(CHANNELS.providers.getMobilePluginIcons)) namespaces.push(MOBILE_PLUGIN_ICONS_CAPABILITY);
+    if (reachable.includes(CHANNELS.providers.getMobileGoalSummary) && reachable.includes(CHANNELS.providers.changeMobileGoal)) {
+      namespaces.push(MOBILE_GOAL_CONTROLS_CAPABILITY);
+    }
+    const capabilities = [...new Set(namespaces)].sort();
     return {
       backendId,
       name: machineName(),

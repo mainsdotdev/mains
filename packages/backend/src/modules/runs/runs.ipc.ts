@@ -6,6 +6,9 @@ import { ok } from "@mains/contracts/service-response";
 import type { IpcInvokeContext } from "../../ipc-kit/handler-registry";
 import { runsService } from "./runs.service";
 import { runForPairedDevice } from "./runs.device-projection";
+import { runQueueProjections } from "./run-queue-projection";
+import type { PublishRunQueuePayload } from "@mains/contracts/run-queue-projection";
+import { emit } from "../../ipc-kit/event-bus";
 import type {
   CreateRunPayload,
   UpdateRunPayload,
@@ -49,6 +52,16 @@ import type {
 // IPC Handlers
 // ─────────────────────────────────────────────────────────────
 export function registerRunsIpc(): void {
+  runQueueProjections.clear();
+  ipcMain.handle(CHANNELS.runs.publishQueue, handle(async (payload: PublishRunQueuePayload) => {
+    if (!await runsService.getRunById(payload?.runId)) throw new Error("Run not found");
+    if (runQueueProjections.publish(payload)) emit(CHANNELS.runs.queueChanged, { runId: payload.runId }, { runId: payload.runId });
+    return null;
+  }));
+  ipcMain.handle(CHANNELS.runs.getQueue, handle(async (runId: string) => {
+    if (!await runsService.getRunById(runId)) return { queues: [] };
+    return { queues: runQueueProjections.read(runId) };
+  }));
   openUserDecisions();
   const getHistory = handle((payload: ReadRunHistoryPayload) => runsService.getHistoryPage(payload));
   ipcMain.handle(CHANNELS.runs.getHistory, (ctx: IpcInvokeContext, payload: ReadRunHistoryPayload) =>
@@ -57,8 +70,12 @@ export function registerRunsIpc(): void {
   ipcMain.handle(CHANNELS.runs.listOutputs, handle((payload: ListRunOutputsPayload) => runsService.listOutputs(payload)));
   ipcMain.handle(CHANNELS.runs.readOutputFile, handle((payload: ReadRunOutputPayload) => runsService.readOutputFile(payload)));
   ipcMain.handle(CHANNELS.runs.createRealtimeConversation, handle((payload: CreateRealtimeConversationPayload) => runsService.createRealtimeConversation(payload)));
-  ipcMain.handle(CHANNELS.runs.startRealtime, handle((payload: RunRealtimeStartPayload) => runsService.startRealtime(payload)));
-  ipcMain.handle(CHANNELS.runs.stopRealtime, handle((payload: RunRealtimeStopPayload) => runsService.stopRealtime(payload)));
+  ipcMain.handle(CHANNELS.runs.startRealtime, (ctx: IpcInvokeContext, payload: RunRealtimeStartPayload) =>
+    handle(() => runsService.startRealtime(payload, ctx?.deviceId ? {
+      deviceId: ctx.deviceId, clientId: ctx.clientId, signal: ctx.connectionSignal,
+    } : undefined))(ctx));
+  ipcMain.handle(CHANNELS.runs.stopRealtime, (ctx: IpcInvokeContext, payload: RunRealtimeStopPayload) =>
+    handle(() => runsService.stopRealtime(payload, ctx?.deviceId))(ctx));
   // Runs
   const getAll = handle((limit?: number) => runsService.getAllRuns(limit));
   ipcMain.handle(CHANNELS.runs.getAll, async (ctx: IpcInvokeContext, limit?: number) => {
@@ -71,10 +88,11 @@ export function registerRunsIpc(): void {
     handle(() => runsService.listArchivedRuns()),
   );
 
-  ipcMain.handle(
-    CHANNELS.runs.listActive,
-    handle(() => runsService.listActiveRuns()),
-  );
+  const listActive = handle(() => runsService.listActiveRuns());
+  ipcMain.handle(CHANNELS.runs.listActive, async (ctx: IpcInvokeContext) => {
+    const result = await listActive(ctx);
+    return ctx?.deviceId && result.success ? ok(result.data.map(runForPairedDevice)) : result;
+  });
 
   ipcMain.handle(
     CHANNELS.runs.getExecutionRoot,
@@ -138,12 +156,11 @@ export function registerRunsIpc(): void {
     ),
   );
 
-  ipcMain.handle(
-    CHANNELS.runs.moveToCollection,
-    handle((payload: MoveRunToCollectionPayload) =>
-      runsService.moveRunToCollection(payload),
-    ),
-  );
+  const moveToCollection = handle((payload: MoveRunToCollectionPayload) => runsService.moveRunToCollection(payload));
+  ipcMain.handle(CHANNELS.runs.moveToCollection, async (ctx: IpcInvokeContext, payload: MoveRunToCollectionPayload) => {
+    const result = await moveToCollection(ctx, payload);
+    return ctx?.deviceId && result.success ? ok(runForPairedDevice(result.data)) : result;
+  });
 
   ipcMain.handle(
     CHANNELS.runs.setPinned,
@@ -170,15 +187,19 @@ export function registerRunsIpc(): void {
     handle((id: string) => runsService.cancelRun(id)),
   );
 
-  ipcMain.handle(
-    CHANNELS.runs.delete,
-    handle((id: string) => runsService.deleteRun(id)),
-  );
+  const deleteRun = handle((id: string) => runsService.deleteRun(id));
+  ipcMain.handle(CHANNELS.runs.delete, async (ctx: IpcInvokeContext, id: string) => {
+    const result = await deleteRun(ctx, id);
+    if (ctx?.deviceId && result.success) emit(CHANNELS.runs.updated, { runId: id, ts: Date.now() });
+    return result;
+  });
 
-  ipcMain.handle(
-    CHANNELS.runs.archive,
-    handle((id: string) => runsService.archiveRun(id)),
-  );
+  const archive = handle((id: string) => runsService.archiveRun(id));
+  ipcMain.handle(CHANNELS.runs.archive, async (ctx: IpcInvokeContext, id: string) => {
+    const result = await archive(ctx, id);
+    if (ctx?.deviceId && result.success) emit(CHANNELS.runs.updated, { runId: id, ts: Date.now() });
+    return ctx?.deviceId && result.success ? ok(runForPairedDevice(result.data)) : result;
+  });
 
   ipcMain.handle(
     CHANNELS.runs.unarchive,
@@ -324,6 +345,9 @@ export function registerRunsIpc(): void {
 }
 
 export function unregisterRunsIpc(): void {
+  runQueueProjections.clear();
+  ipcMain.removeHandler(CHANNELS.runs.publishQueue);
+  ipcMain.removeHandler(CHANNELS.runs.getQueue);
   ipcMain.removeHandler(CHANNELS.runs.steer);
   ipcMain.removeHandler(CHANNELS.runs.inputStatus);
   ipcMain.removeHandler(CHANNELS.runs.decidePlan);

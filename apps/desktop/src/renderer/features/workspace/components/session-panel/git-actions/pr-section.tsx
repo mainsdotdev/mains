@@ -414,7 +414,7 @@ export function PrSection({
           <div className="ml-auto flex items-center gap-2">
 
             <Button
-              variant="submit"
+              variant="primary"
               onClick={handleCreatePr}
               disabled={busy || generatingPr}
               isLoading={pending === "pr"}

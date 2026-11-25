@@ -4,6 +4,7 @@
 
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
+import type { GitHubCliStatus } from "@mains/contracts/github-cli";
 import type { CreatePrPayload, CreatePrResult } from "@mains/contracts/pr-attachments";
 
 export interface GitFlowStatus {
@@ -188,6 +189,10 @@ export const gitFlowApi = baseApi.injectEndpoints({
       }),
     }),
 
+    getGitHubCliStatus: builder.query<GitHubCliStatus, void>({
+      query: () => ({ handler: CHANNELS.gitFlow.getGitHubCliStatus }),
+    }),
+
     getPublishPreflight: builder.query<PublishPreflight, string>({
       query: (workspaceId) => ({
         handler: CHANNELS.gitFlow.getPublishPreflight,
@@ -219,6 +224,7 @@ export const {
   useCreatePrGitFlowMutation,
   useGenerateCommitMessageGitFlowMutation,
   useGeneratePrBodyGitFlowMutation,
+  useGetGitHubCliStatusQuery,
   useGetPublishPreflightQuery,
   usePublishRepoMutation,
 } = gitFlowApi;

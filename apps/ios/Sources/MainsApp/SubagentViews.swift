@@ -9,6 +9,9 @@ struct SubagentSelection: Identifiable {
 
 /// The card is an overlay: opening it never changes the transcript's insets.
 struct SubagentDock: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let agents: [SessionSubagent]
     let partial: Bool
     @Binding var expanded: Bool
@@ -23,9 +26,10 @@ struct SubagentDock: View {
                 SubagentGlyph()
                 Text("\(agents.count) \(agents.count == 1 ? "agent" : "agents")")
             }.font(.subheadline.weight(.medium)).foregroundStyle(.primary).padding(.horizontal, 16).frame(height: 44)
-                .modifier(GlassSurface(radius: 22))
+                .contentShape(.capsule)
         }
-        .buttonStyle(ChatPressStyle()).accessibilityIdentifier("subagentDock")
+        .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 22))
+        .accessibilityIdentifier("subagentDock")
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         .frame(maxWidth: .infinity).padding(.vertical, 2)
         .overlay(alignment: .bottom) {
@@ -39,8 +43,8 @@ struct SubagentDock: View {
                     }.padding(14)
                 }
                 .scrollBounceBehavior(.basedOnSize).frame(height: cardHeight)
-                .modifier(GlassSurface(radius: 22))
-                .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(.primary.opacity(0.08)) }
+                .clipShape(.rect(cornerRadius: 22))
+                .modifier(GlassSurface(radius: 22, interactive: false))
                 .padding(.horizontal, 24).padding(.bottom, 56)
                 .transition(reduceMotion ? .opacity : .scale(scale: 0.94, anchor: .bottom).combined(with: .opacity))
                 .accessibilityIdentifier("subagentList")
@@ -57,7 +61,7 @@ struct SubagentDock: View {
     @ViewBuilder private func group(_ title: String, states: [SubagentState]) -> some View {
         let items = agents.filter { states.contains($0.state) }
         if !items.isEmpty {
-            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader)
+            Text(title).font(.caption.weight(.semibold).width(.expanded)).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader)
             ForEach(items) { agent in
                 Button { select(agent) } label: {
                     HStack(spacing: 12) {
@@ -66,7 +70,6 @@ struct SubagentDock: View {
                             Text(agent.title).font(.subheadline.weight(.medium)).lineLimit(2)
                             Text(agent.state.label).font(.caption).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                        if agent.state == .running { ProgressView().controlSize(.mini).accessibilityHidden(true) }
                         Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
                     }.foregroundStyle(.primary).padding(.vertical, 7).padding(.leading, CGFloat(min(3, agent.depth)) * 10).contentShape(Rectangle())
                 }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("subagent-\(agent.id)")
@@ -81,6 +84,9 @@ struct SubagentDock: View {
 }
 
 struct SubagentSummaryRow: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let text: String
     let open: () -> Void
     var body: some View {
@@ -89,16 +95,21 @@ struct SubagentSummaryRow: View {
                 SubagentGlyph()
                 Text(text).lineLimit(1)
                 Image(systemName: "chevron.right").font(.caption2)
-            }.font(.subheadline).foregroundStyle(.secondary).frame(minHeight: 30).contentShape(Rectangle())
-        }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("subagentSummary")
+            }.font(.subheadline).foregroundStyle(.secondary)
+                .padding(.horizontal, 12).frame(minHeight: 36).contentShape(.capsule)
+        }
+        .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 18))
+        .accessibilityIdentifier("subagentSummary")
     }
 }
 
 struct SubagentDetailSheet: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let selection: SubagentSelection
     @Environment(\.dismiss) private var dismiss
-    @State private var fullMessage: AgentContentReference?
     private var valid: Bool { session.ownership == selection.owner && session.viewingRunID == selection.runID }
     private var agent: SessionSubagent? { valid ? session.transcript.subagents.first { $0.id == selection.agentID } : nil }
     private var subtitle: String {
@@ -108,15 +119,11 @@ struct SubagentDetailSheet: View {
         return [session.pairing?.descriptor.name, workspace].compactMap { $0 }.joined(separator: " · ")
     }
     var body: some View {
+        let flow = agent.flatMap { session.transcript.subagentFlow(for: $0) }
         NavigationStack {
             ScrollView {
-                if let agent, let flow = session.transcript.subagentFlow(for: agent) {
-                    VStack(alignment: .leading, spacing: 20) {
-                        HStack(spacing: 8) {
-                            if agent.state == .running { ProgressView().controlSize(.mini) }
-                            Text(agent.state.label).font(.subheadline)
-                            if let duration = flow.duration { Text(Duration.seconds(max(0, duration)).formatted(.time(pattern: .minuteSecond))).font(.caption.monospacedDigit()) }
-                        }.foregroundStyle(.secondary)
+                if let agent, let flow {
+                    LazyVStack(alignment: .leading, spacing: 20) {
                         if !agent.detail.isEmpty { Text(agent.detail).font(.footnote).foregroundStyle(.secondary) }
                         if let prompt = flow.prompt, !prompt.isEmpty {
                             DisclosureGroup("Task") { ChatMessageBody(text: prompt).padding(.top, 8) }.font(.subheadline)
@@ -124,11 +131,16 @@ struct SubagentDetailSheet: View {
                         ForEach(TranscriptGroup.build(flow.rows)) { group in
                             if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, live: agent.state == .running) }
                             else if let row = group.rows.first {
-                                ChatMessage(session: session, row: row, providerID: "", readContent: { fullMessage = AgentContentReference(id: $0) })
+                                if let artifactID = row.deferredArtifactID {
+                                    SubagentStoredMessage(session: session, selection: selection, row: row, artifactID: artifactID)
+                                        .id(artifactID)
+                                } else {
+                                    ChatMessage(session: session, row: row, providerID: "")
+                                }
                             }
                         }
                         if let report = flow.report, !report.isEmpty {
-                            Text("Result").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            Text("Result").font(.caption.weight(.semibold).width(.expanded)).foregroundStyle(.secondary)
                             ChatMessageBody(text: report)
                         }
                         if let error = flow.error, !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red).textSelection(.enabled) }
@@ -141,38 +153,80 @@ struct SubagentDetailSheet: View {
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
                         .animation(nil, value: flow.rows)
                 } else {
-                    ContentUnavailableView("Activity unavailable", systemImage: "person.crop.rectangle.stack",
-                        description: Text("Return to the conversation to load this agent’s messages."))
+                    EmptyStateView(artwork: .activity, title: "Activity unavailable",
+                                   description: Text("Return to the conversation to load this agent’s messages."))
                 }
             }
             // Details open at the start of the flow and never pull the reader
             // away from a tool or report while further child activity arrives.
-            .defaultScrollAnchor(.top).background(Color(.systemBackground))
+            .defaultScrollAnchor(.top)
+            .defaultScrollAnchor(flow == nil ? .center : .top, for: .alignment)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly).accessibilityIdentifier("closeSubagent")
                 }
                 ToolbarItem(placement: .principal) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(agent?.title ?? "Subagent").font(.headline).lineLimit(1)
+                    VStack(spacing: 2) {
+                        Text(agent?.title ?? "Subagent").font(.headline.width(.expanded)).lineLimit(1)
                         Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                    }.accessibilityElement(children: .combine)
+                    }.multilineTextAlignment(.center).accessibilityElement(children: .combine)
                 }
-            }
-            .sheet(item: $fullMessage) { reference in
-                NavigationStack { FullMessageView(session: session, artifactID: reference.id) }
             }
         }
         .presentationDetents([.fraction(0.55), .large]).presentationDragIndicator(.visible)
-        .onChange(of: valid, initial: true) { _, valid in if !valid { fullMessage = nil; dismiss() } }
+        .onChange(of: valid, initial: true) { _, valid in if !valid { dismiss() } }
         .accessibilityIdentifier("subagentDetail")
     }
 }
 
-private struct AgentContentReference: Identifiable { let id: Int }
+private struct SubagentStoredMessage: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let selection: SubagentSelection
+    let row: TranscriptRow
+    let artifactID: Int
+    @State private var fullText: String?
+    @State private var failure: String?
+    @State private var retry = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ChatMessage(session: session, row: row, providerID: "", fullText: fullText)
+            if fullText == nil {
+                if !session.isConnected {
+                    Text("Connect to load the full message.").font(.footnote).foregroundStyle(.secondary)
+                } else if let failure {
+                    Text(failure).font(.footnote).foregroundStyle(.secondary)
+                    Button("Retry") { retry += 1 }
+                } else {
+                    ProgressView("Loading full message…").font(.footnote)
+                }
+            }
+        }
+        .task(id: LoadRequest(connected: session.isConnected, retry: retry)) {
+            guard session.isConnected, fullText == nil else { return }
+            failure = nil
+            do {
+                fullText = try await session.readFullMessage(artifactID: artifactID, runID: selection.runID, owner: selection.owner)
+            } catch {
+                if !Task.isCancelled { failure = error.localizedDescription }
+            }
+        }
+    }
+
+    private struct LoadRequest: Equatable {
+        let connected: Bool
+        let retry: Int
+    }
+}
 
 private struct SubagentGlyph: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 4).stroke(lineWidth: 1.6).frame(width: 18, height: 13).offset(y: 3)

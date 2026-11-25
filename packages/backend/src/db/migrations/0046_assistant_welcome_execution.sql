@@ -1,0 +1,1 @@
+ALTER TABLE `assistant_welcomes` ADD `execution` text DEFAULT '{"mode":"work"}' NOT NULL;

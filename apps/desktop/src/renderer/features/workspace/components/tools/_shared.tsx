@@ -129,6 +129,10 @@ const GERUND_BY_PAST: Record<string, string> = {
   replied: "replying",
   opened: "opening",
   closed: "closing",
+  asked: "asking",
+  assigned: "assigning",
+  recalled: "recalling",
+  reported: "reporting",
   // Built-in display verbs not covered above
   monitored: "monitoring",
   grepped: "grepping",
@@ -190,6 +194,7 @@ interface ToolHeaderProps {
   isExpanded: boolean;
   onToggle: () => void;
   isCompact?: boolean;
+  ariaLabel?: string;
   /** Middle slot rendered between verb and chevron — provider-specific content
    *  (file path, pattern, stats, char count, etc.). */
   children?: ReactNode;
@@ -213,6 +218,7 @@ export function ToolHeader({
   isExpanded,
   onToggle,
   isCompact = false,
+  ariaLabel,
   children,
   afterChevron,
 }: ToolHeaderProps) {
@@ -226,6 +232,8 @@ export function ToolHeader({
   return (
     <Button
       type="button"
+      aria-label={ariaLabel}
+      aria-expanded={hasDetails ? isExpanded : undefined}
       onClick={() => hasDetails && onToggle()}
       className={`group w-full min-w-0 flex items-center gap-1.5 py-1 text-s font-sans ${
         hasDetails ? "cursor-pointer" : "cursor-default"

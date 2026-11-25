@@ -29,6 +29,8 @@ export interface IpcInvokeContext {
    * device token rather than the unrestricted owner token. Undefined locally.
    */
   deviceId?: string;
+  /** In-memory socket lifetime; never included in a wire response. */
+  connectionSignal?: AbortSignal;
 }
 
 export type IpcHandler = (

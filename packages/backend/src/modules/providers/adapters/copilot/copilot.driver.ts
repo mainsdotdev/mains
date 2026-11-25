@@ -75,7 +75,6 @@ import {
 } from "../adapter.shared";
 import type { MainsToolContext } from "../mains-tools.core";
 import { toCopilotTools } from "../mains-tools.registry";
-import { guardsService } from "../../../guards/guards.service";
 import { copilotApprovalInput, mapCopilotPermissionApproval } from "./copilot-approval";
 
 // ─────────────────────────────────────────────────────────────
@@ -501,24 +500,9 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
       // Bypass mode: auto-allow every tool (matches the Claude driver's bypass
       // path). `ask_user` needs no exemption — allowing it here simply lets the
-      // SDK route it to onUserInputRequest, which surfaces the real dialog. We
-      // short-circuit before the guard hook to preserve the historical bypass
-      // behavior (which installed no PreToolUse hook at all, so guards never ran).
+      // SDK route it to onUserInputRequest, which surfaces the real dialog.
       if (bypass) {
         return { permissionDecision: "allow" };
-      }
-
-      const guardHook = await guardsService.buildCopilotGuardHook();
-      assertCurrent();
-      if (guardHook) {
-        const guardResult = await guardHook({
-          toolName: input.toolName, toolArgs: input.toolArgs,
-          timestamp: input.timestamp.getTime(), cwd: input.workingDirectory,
-        });
-        assertCurrent();
-        if (guardResult?.permissionDecision === "deny") {
-          return guardResult;
-        }
       }
 
       const baselineAllowed = allowedOverride

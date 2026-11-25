@@ -1,9 +1,75 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { accountService, DEFAULT_ACCOUNT } from "../account";
+import { fileExplorerService } from "../fileExplorer";
+import { workspaceService } from "../workspace";
 import { searchRepo } from "./search.repo";
 import { searchService, searchSnippet } from "./search.service";
 
 describe("searchService", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("returns relative matches and permits folder mentions only when requested", async () => {
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), "mains-workspace-search-")));
+    try {
+      const root = path.join(dir, "repo");
+      const docs = path.join(root, "docs");
+      await mkdir(docs, { recursive: true });
+      const regular = path.join(docs, "Release Notes.md");
+      const outside = path.join(dir, "outside.md");
+      await Promise.all([writeFile(regular, "file"), writeFile(outside, "outside")]);
+      await symlink(dir, path.join(root, "link"), "junction");
+      vi.spyOn(accountService, "getAccount").mockResolvedValue(DEFAULT_ACCOUNT);
+      const workspace: NonNullable<Awaited<ReturnType<typeof workspaceService.get>>> = {
+        id: "workspace", rootPath: root, accountId: DEFAULT_ACCOUNT.id, name: "Repo", projectId: "project",
+        repoUrl: null, baseBranch: null, metadata: null, status: "todo", isArchived: false, sortOrder: 0,
+        pinnedAt: null, createdAt: new Date(), updatedAt: new Date(), ownerBackendId: "local", isReplica: false,
+      };
+      const lookup = vi.spyOn(workspaceService, "get").mockResolvedValue(workspace);
+      const input = { workspaceId: workspace.id, query: "docs/release" };
+      const file = { path: "docs/Release Notes.md", type: "file" };
+      await expect(searchService.workspaceFiles(input)).resolves.toEqual([file]);
+      await expect(searchService.workspaceFiles({ ...input, query: "docs", includeDirectories: true })).resolves.toEqual([
+        { path: "docs", type: "directory" }, file,
+      ]);
+
+      const fileCandidates = [regular, outside, path.join(root, "link", "outside.md"), path.join(root, "deleted.md")].map(fullPath => ({
+        name: path.basename(fullPath), fullPath, type: "file" as const, hasChildren: false,
+      }));
+      const directoryCandidates = [docs, path.join(root, "link"), regular].map(fullPath => ({
+        name: path.basename(fullPath), fullPath, type: "directory" as const, hasChildren: true,
+      }));
+
+      const search = vi.spyOn(fileExplorerService, "searchFiles").mockResolvedValue([...directoryCandidates, ...fileCandidates]);
+      await expect(searchService.workspaceFiles({ ...input, includeDirectories: true })).resolves.toEqual([{ path: "docs", type: "directory" }, file]);
+      expect(search).toHaveBeenLastCalledWith({ rootPath: root, query: input.query, max: 50, includeDirectories: true });
+      search.mockClear();
+      for (const fields of [{ isArchived: true }, { isReplica: true }, { accountId: "other" }]) {
+        lookup.mockResolvedValue({ ...workspace, ...fields });
+        await expect(searchService.workspaceFiles(input)).rejects.toThrow("Choose an active local workspace");
+      }
+      expect(search).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("projects a bounded phone search page without paths, settings or full message bodies", async () => {
+    const row = { id: "old-run", title: "Old telescope", goal: "Telescope notes", providerId: "codex", mode: "work", context: "Science",
+      updatedAt: 1700000000000, createdAt: 1600000000000, rank: 4, artifactId: 42, messageTime: 1600000001000, matchSnippet: "A telescope observation" };
+    const read = vi.spyOn(searchRepo, "findConversations").mockReturnValue([row, { ...row, id: "next-run" }]);
+    const page = await searchService.conversations({ accountId: " account-1 ", query: " telescope ", limit: 1 });
+    expect(read).toHaveBeenCalledWith({ accountId: "account-1", query: "telescope", limit: 2, cursor: undefined });
+    expect(page.items).toEqual([{ runId: "old-run", title: "Old telescope", providerId: "codex", mode: "work", context: "Science", updatedAt: row.updatedAt,
+      snippet: "A telescope observation", messageCursor: { timestamp: row.messageTime, source: "artifact", id: 42 } }]);
+    expect(page.nextCursor).toEqual({ rank: 4, createdAt: row.createdAt, runId: row.id });
+    await expect(searchService.conversations({ accountId: "account-1", query: "x", cursor: { rank: 9, createdAt: 1, runId: "r" } })).rejects.toThrow("Invalid search cursor");
+    read.mockClear();
+    expect(await searchService.conversations({ accountId: "account-1", query: "  " })).toEqual({ items: [], nextCursor: null });
+    expect(read).not.toHaveBeenCalled();
+  });
 
   it("does not touch storage for an empty query", async () => {
     const workspaceSpy = vi.spyOn(searchRepo, "findWorkspaces");

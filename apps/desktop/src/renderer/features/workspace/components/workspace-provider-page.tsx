@@ -3,7 +3,8 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { createPortal } from "react-dom";
 import { toast } from "@/components/ui";
 import { Document, Picture } from "@/components/ui/icons";
-import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
+import { assistantHref } from "@/features/assistants/lib/assistant-navigation";
 import { getProviderVariant } from "@/lib/provider-variants";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import type { RefObject } from "react";
@@ -50,6 +51,7 @@ import { useMcpAppConversation } from "../hooks/use-mcp-app-conversation";
 import { useVoiceChatPresence } from "../hooks/use-voice-chat-presence";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useModeConfig } from "@/hooks/use-mode-config";
+import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
 import {
   isExitPlanApproval,
   submitPlanDecision,
@@ -59,6 +61,7 @@ import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import type { FloatingChatMode } from "../../../../shared/floating-chat";
 import { FloatingChatOverlay } from "./floating-chat-overlay";
 import { ComposerSendTargetSelect } from "./composer-send-target-select";
+import { ComposerQueueCard } from "./composer-run-queue";
 import { ChatHeader } from "./chat-header";
 import { NewConversationContextSelect } from "./new-conversation-context-select";
 import { floatingChatRunStatus } from "../lib/floating-chat-run-status";
@@ -76,6 +79,7 @@ import { queueForBrowserChat } from "../lib/run-queue-preview";
 import type { RunSettingConfig, SettingsChangeSource } from "@mains/contracts/run-settings";
 import { useWorkspaceData } from "../hooks/use-workspace-data";
 import { isRunTab } from "../lib/repo-utils";
+import { workspaceViewKey } from "../lib/ui-context";
 const ReplicaWorkspaceView = lazy(() => import("@/features/bridge/components/replica-workspace-view").then((module) => ({ default: module.ReplicaWorkspaceView })));
 
 interface WorkspaceProviderPageProps {
@@ -88,16 +92,23 @@ interface WorkspaceProviderPageProps {
 export function WorkspaceProviderPage(props: WorkspaceProviderPageProps) {
   const { runId } = useParams<{ runId?: string }>();
   const { mode, showTabs } = useModeConfig();
-  const activeTab = useAppSelector((state) => state.workspace.activeTab);
+  const { activeSpaceId } = useActiveSpace();
   const selectedBackend = useAppSelector((state) => state.backends.activeBackendId ?? "local");
+  const chatViewKey = workspaceViewKey({ backendId: selectedBackend, spaceId: activeSpaceId, providerId: props.providerId, mode });
+  const savedTab = useAppSelector(({ workspace }) => workspace.workspaceViewKey === chatViewKey
+    ? workspace.activeTab
+    : workspace.workspaceViews[chatViewKey]?.activeTab);
   const { currentWorkspace, loading: workspaceLoading } = useWorkspaceData(props.providerId, mode);
-  const requested = runId ?? (!showTabs && typeof activeTab === "string" && isRunTab(activeTab) ? activeTab : undefined);
+  const requested = runId ?? (!showTabs && savedTab && isRunTab(savedTab) ? savedTab : undefined);
   const { currentData: run, error } = useGetRunByIdQuery(requested ?? "", { skip: !requested });
-  const { currentData: ownerWorkspace } = useGetWorkspaceQuery(run?.workspaceId ?? "", { skip: !run?.isReplica || !run.workspaceId });
-  if (run?.isReplica || (!requested && currentWorkspace?.isReplica)) {
+  const showReplicaRun = run?.isReplica && run.mode === mode && run.providerId === props.providerId;
+  const { currentData: ownerWorkspace } = useGetWorkspaceQuery(run?.workspaceId ?? "", { skip: !showReplicaRun || !run?.workspaceId });
+  if (run?.assistantId && !run.isReplica) return <Navigate to={assistantHref(run.assistantId, run.id)} replace />;
+  if (runId && run?.isReplica && !showReplicaRun) return <Navigate to={WORKSPACE_BASE_PATH} replace />;
+  if (showReplicaRun || (!requested && mode === "developer" && currentWorkspace?.isReplica)) {
     const workspace = run?.workspaceId ? ownerWorkspace ?? (currentWorkspace?.id === run.workspaceId ? currentWorkspace : null) : currentWorkspace?.isReplica ? currentWorkspace : null;
     return <Suspense fallback={<div className="p-6 text-xs text-primary-500">Loading synced conversation…</div>}><ReplicaWorkspaceView key={`${selectedBackend}/${workspace?.id ?? run?.id}`} initialRun={run} workspace={workspace}
-      providerId={props.providerId} variant={props.variant} /></Suspense>;
+      mode={mode} providerId={props.providerId} variant={props.variant} /></Suspense>;
   }
   // Ownership must resolve before mounting any composer/provider controller.
   if ((requested && run === undefined && !error) || (!requested && mode === "developer" && workspaceLoading)) return <div className="flex h-full items-center justify-center"><span className="text-xs text-primary-500">Loading conversation…</span></div>;
@@ -748,6 +759,14 @@ function InteractiveWorkspaceProviderPage({
           onShowDetails={() => floatingPanel.setChatMode("details")}
           onMinimize={() => floatingPanel.setChatMode("icon")}
           onComposerHeightChange={browserChatOnly ? handleBrowserComposerHeight : undefined}
+          beforeComposer={browserRunQueue && (
+            <div className="shrink-0 px-3">
+              <ComposerQueueCard
+                controls={browserRunQueue}
+                isRunning={ws.composerRun?.status === "running" || ws.composerRun?.status === "queued"}
+              />
+            </div>
+          )}
           composer={
             <ComposerSlot
               request={blockingApproval}
@@ -915,6 +934,7 @@ function InteractiveWorkspaceProviderPage({
                 onStop={handleStop}
                 isNewRunTabActive={ws.showNewRunTab}
                 layout="centered"
+                providerNoticeClassName="mb-0"
               />
             </div>
           </div>

@@ -9,6 +9,14 @@ private final class DecisionFaults {
     var failBefore: String?
     var failAfter: String?
     var delay: String?
+    var holdNextHistory = false
+    var heldHistory: CheckedContinuation<Void, Never>?
+
+    func releaseHistory() {
+        let continuation = heldHistory
+        heldHistory = nil
+        continuation?.resume()
+    }
 }
 
 extension SessionIntegrationTests {
@@ -64,6 +72,11 @@ private final class DecisionFaultTransport: BackendTransport {
         if faults.failBefore == channel { faults.failBefore = nil; throw MainsError.timeout }
         if faults.delay == channel { faults.delay = nil; try await Task.sleep(for: .milliseconds(150)) }
         let result = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
+        if channel == "runs:getHistory", faults.holdNextHistory {
+            faults.holdNextHistory = false
+            await withCheckedContinuation { faults.heldHistory = $0 }
+            faults.heldHistory = nil
+        }
         if faults.failAfter == channel { faults.failAfter = nil; throw MainsError.timeout }
         return result
     }
@@ -71,6 +84,56 @@ private final class DecisionFaultTransport: BackendTransport {
 
 @Suite(.serialized)
 struct DecisionTests {
+    @Test func planProposalsStayVisibleOutsideCollapsedWork() throws {
+        let date = Date(timeIntervalSince1970: 10)
+        let call = try JSONValue.object(["id": .number(3), "toolName": .string("Plan"), "status": .string("done"),
+            "createdAt": .number(10_000), "input": .object(["plan": .string("## Summary")])]).decode(ToolCall.self)
+        let rows = [
+            TranscriptRow(id: "intro", kind: .response, text: "Starting", date: date, live: false, deferredArtifactID: nil),
+            TranscriptRow(id: "plan", kind: .tool, text: "Plan", date: date, live: false, deferredArtifactID: nil, tool: call),
+            TranscriptRow(id: "reply", kind: .response, text: "Finished", date: date, live: false, deferredArtifactID: nil),
+        ]
+        let section = try #require(TranscriptSection.build(rows).first)
+        #expect(section.displayedRows(expanded: false).map(\.id) == ["plan", "reply"])
+        #expect(section.displayedRows(expanded: true).map(\.id) == ["intro", "plan", "reply"])
+    }
+
+    @Test(arguments: [PlanProposal.Decision.apply, .dismiss]) @MainActor
+    func demoPlanDecisionsKeepOneDurableOutcome(_ choice: PlanProposal.Decision) async throws {
+        let (session, backend, faults) = try makeSession()
+        defer { session.setActive(false); backend.shutdown() }
+        try await eventually { session.isConnected && session.supportsPlanDecisions }
+        var settings = session.settings(for: try #require(session.spaces.first { $0.id == "codex" }))
+        settings.config["planMode"] = .bool(true)
+        let id = try await session.send("Review the code", spaceID: "codex", workspaceID: session.homeTargets["codex"]?.workspaceID, settings: settings)
+        await session.selectConversation(id)
+        try await eventually {
+            session.transcript.rows.contains { $0.plan != nil } && session.conversations.first { $0.id == id }?.isActive == false
+        }
+        let plan = try #require(session.transcript.rows.compactMap(\.plan).first)
+        #expect(plan.text.contains("## Review the sample workspace"))
+        #expect(session.canDecidePlan(plan, runID: id))
+        faults.failAfter = choice == .apply ? "runs:decidePlan" : nil
+        if choice == .apply {
+            await #expect(throws: MainsError.timeout) { try await session.decidePlan(plan, runID: id, decision: choice) }
+            #expect(session.pendingPlanDecision?.uncertain == true)
+            await session.selectConversation(DemoBackend.tourID)
+            try await session.checkPlanDecision()
+        } else { try await session.decidePlan(plan, runID: id, decision: choice) }
+        #expect(session.pendingPlanDecision == nil)
+        await session.selectConversation(id)
+        try await eventually { session.transcript.rows.compactMap(\.plan).first?.status == choice.status }
+        let calls = faults.calls.filter { $0.channel == "runs:decidePlan" }
+        #expect(calls.count == (choice == .apply ? 2 : 1))
+        #expect(calls.first?.commandID != nil && calls.first?.args.first?["checkOnly"] != .bool(true))
+        if choice == .apply {
+            #expect(calls.last?.args.first?["checkOnly"] == .bool(true))
+            #expect(calls.first?.args.first?["toolCallId"] == calls.last?.args.first?["toolCallId"])
+            #expect(session.settings(forRunID: id)?.config["planMode"] == .bool(false))
+        }
+        #expect(session.transcript.rows.filter { $0.kind == .prompt && $0.text == "Execute the plan above." }.count == (choice == .apply ? 1 : 0))
+    }
+
     @Test func shellApprovalPreviewMatchesDesktopWithoutRewritingAmbiguousCommands() {
         let simple = ApprovalCommandPreview(command: #"/bin/zsh -lc "pwd && rg --files -g 'AGENTS.md'""#)
         #expect(simple.shell == "zsh -lc" && simple.command == "pwd && rg --files -g 'AGENTS.md'")
@@ -212,6 +275,25 @@ struct DecisionTests {
         let approvals = faults.calls.filter { $0.channel == "runs:toolApprovalResponse" }
         #expect(approvals.count == 4 && approvals.allSatisfy { $0.args[0]["approvalToken"].string != nil && $0.commandID != nil })
         #expect(approvals[0].args[0]["answer"] == .string("acceptForSession"))
+        #expect(faults.calls.filter { $0.channel == "runs:answerAsyncQuestions" }.count == 1)
+    }
+
+    @Test @MainActor func acceptedAsyncAnswerStaysHiddenWhileAnOlderHistoryReadCompletes() async throws {
+        let (session, backend, faults) = try makeSession()
+        defer { faults.releaseHistory(); session.exitDemo(); backend.shutdown() }
+        try await openWalkthrough(session)
+        try await skipApprovals(session)
+        let pending = try #require(session.pendingQuestions)
+        faults.holdNextHistory = true
+        let refresh = Task { await session.loadHistory(direction: "refresh") }
+        try await eventually { faults.heldHistory != nil }
+
+        try await session.answerQuestions(pending, answers: ["Functionality", "Keep the answer settled"])
+        #expect(session.decisionState(for: pending.id).phase == .done)
+        #expect(session.pendingQuestions == nil, "An accepted answer must disappear before a delayed history refresh completes.")
+        faults.releaseHistory()
+        _ = await refresh.value
+        #expect(session.pendingQuestions == nil, "An older history response must not bring an accepted question back.")
         #expect(faults.calls.filter { $0.channel == "runs:answerAsyncQuestions" }.count == 1)
     }
 

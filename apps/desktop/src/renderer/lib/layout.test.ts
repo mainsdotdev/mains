@@ -3,10 +3,13 @@ import { hasSidebarPanel, shouldHideRightPanel, shouldHideWorkspacePanels } from
 
 describe("hasSidebarPanel", () => {
   it("keeps the list panel for conversations, settings, Atlas and Tasks", () => {
-    for (const route of ["/", "/code", "/code/runs/123", "/code/workspace-id", "/settings", "/atlas", "/atlas/page-id", "/tasks"]) {
+    for (const route of ["/", "/code", "/code/runs/123", "/code/workspace-id", "/settings", "/assistants", "/assistants/detail", "/atlas", "/atlas/page-id", "/tasks"]) {
       expect(hasSidebarPanel(route)).toBe(true);
     }
     expect(hasSidebarPanel("/tasks-other")).toBe(false);
+    expect(hasSidebarPanel("/assistants-other")).toBe(false);
+    expect(shouldHideRightPanel("/assistants")).toBe(false);
+    expect(shouldHideWorkspacePanels("/assistants")).toBe(true);
   });
 
   it("keeps workspace tools out of the Atlas library and editor", () => {

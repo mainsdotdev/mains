@@ -6,7 +6,7 @@ import { getModeConfig, type ModeConfigDescriptor } from "@/lib/mode-config";
  * `useSpaceProviderVariant`. Components read capability flags off it
  * (showGitActions, showSources, showTerminal, ...) instead of branching on the mode id.
  */
-export function useModeConfig(): ModeConfigDescriptor {
+export function useModeConfig(mode?: ModeConfigDescriptor["mode"]): ModeConfigDescriptor {
   const { activeSpace } = useActiveSpace();
-  return getModeConfig(activeSpace?.mode);
+  return getModeConfig(mode ?? activeSpace?.mode);
 }

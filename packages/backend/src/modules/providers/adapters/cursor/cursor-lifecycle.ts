@@ -50,6 +50,7 @@ async function withSignal<T>(signal: AbortSignal, work: () => Promise<T>): Promi
 interface CursorPromptHandlers {
   onNotification(method: string, params: unknown): void;
   onRequest(id: number | string, method: string, params: unknown): void;
+  ownsToolCall?(id: string): boolean;
 }
 
 export class CursorCanceledError extends Error {}
@@ -213,10 +214,14 @@ export function createCursorLifecycle<S extends CursorServer>(options: {
       if (!record || record.phase !== "ready" || !server.isRunning) throw record?.controller.signal.reason ?? new Error("Cursor server closed");
     },
     ensure,
-    ownerFor(server: S, sessionId: unknown): CursorPromptHandlers | undefined {
+    ownerFor(server: S, sessionId: unknown, toolCallId?: unknown): CursorPromptHandlers | undefined {
       if (current?.server !== server || current.phase !== "ready" || !server.isRunning) return;
       const active = [...(prompts.get(server)?.entries() ?? [])].filter(([, entry]) => entry.owner.running);
       if (typeof sessionId === "string") return active.find(([id]) => id === sessionId)?.[1].handlers;
+      if (typeof toolCallId === "string") {
+        const owners = active.filter(([, entry]) => entry.handlers.ownsToolCall?.(toolCallId));
+        if (owners.length === 1) return owners[0][1].handlers;
+      }
       return active.length === 1 ? active[0][1].handlers : undefined;
     },
     async acquire<B extends CursorBridge, T>(runId: string, createBridge: () => B, work: (bridge: B, server: S, owner: CursorRunOwner<S>) => Promise<T>): Promise<T> {

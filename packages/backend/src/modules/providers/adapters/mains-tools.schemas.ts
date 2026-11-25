@@ -11,6 +11,15 @@
 
 import { z } from "zod";
 
+export const AskAssistantQuestionSchema = z.object({
+  question: z.string().trim().min(1).max(4000).describe("The required clarification. Closely related details may be asked together."),
+  header: z.string().trim().min(1).max(80).optional().describe("Optional short heading for the question form."),
+  options: z.array(z.object({
+    label: z.string().trim().min(1).max(200),
+    description: z.string().trim().min(1).max(1000).optional(),
+  }).strict()).min(2).max(5).optional().describe("Optional distinct choices. The user can always type a custom answer. Omit for free text."),
+}).strict();
+
 export const RegisterDeliverableSchema = z.object({
   path: z.string().trim().min(1).max(4096).describe("Existing file path, absolute or relative to this conversation's working directory"),
   role: z.enum(["deliverable", "working", "preview"]).optional().describe("Defaults to deliverable. Working material and render previews are excluded from final outputs."),
@@ -31,6 +40,25 @@ export const AtlasCreatePageSchema = z.object({ title: z.string().trim().min(1).
 export const AtlasUpdatePageSchema = z.object({ pageId: z.string().trim().min(1).max(100),
   expectedVersion: z.number().int().min(1).describe("Version returned by AtlasReadPage. A stale write is rejected; read again and reconcile."),
   title: z.string().trim().min(1).max(240).optional(), ...atlasContentFields, icon: atlasIconField, coverPreset: atlasCoverField });
+
+const routineFields = {
+  title: z.string().trim().min(1).max(200),
+  prompt: z.string().trim().min(1).max(24000).describe("Self-contained task for each future run, including constraints and completion criteria. Resolve 'this' from the user's request; do not include instructions to create another schedule."),
+  frequency: z.enum(["hourly", "daily", "weekdays", "weekly"]),
+  hour: z.number().int().min(0).max(23).describe("24-hour wall time. For hourly routines this field is unused; use 0."),
+  minute: z.number().int().min(0).max(59),
+  dayOfWeek: z.number().int().min(0).max(6).nullable().optional().describe("Weekly only: Sunday=0, Monday=1, ..., Saturday=6. Required for weekly schedules."),
+  timezone: z.string().trim().min(1).max(100).optional().describe("IANA timezone such as Europe/Istanbul. Omit at creation to use the defaultTimezone from ListAssistantRoutines. Omit on updates to retain the saved zone."),
+  isActive: z.boolean().optional().describe("Defaults to true at creation. Set false to pause or true to resume an existing routine."),
+};
+const routineId = z.string().trim().min(1).max(200).describe("Exact ID from ListAssistantRoutines or CreateAssistantRoutine; never guess an ID.");
+export const ListAssistantRoutinesSchema = z.object({ offset: z.number().int().min(0).max(10000).optional() }).strict();
+export const ReadAssistantRoutineSchema = z.object({ routineId }).strict();
+export const CreateAssistantRoutineSchema = z.object({ ...routineFields,
+  requestId: z.string().trim().min(1).max(200).describe("Stable key for this creation request. Reuse it on retries in this conversation to avoid a duplicate routine; use UpdateAssistantRoutine to change an existing routine."),
+}).strict();
+export const UpdateAssistantRoutineSchema = z.object(routineFields).partial().extend({ routineId }).strict();
+export const DeleteAssistantRoutineSchema = ReadAssistantRoutineSchema;
 
 const voiceRunId = z.string().trim().min(1).max(100).describe("Working chat ID returned by StartVoiceTask or ListVoiceTasks");
 export const StartVoiceTaskSchema = z.object({
@@ -105,27 +133,8 @@ export const SaveFindingsSchema = z.object({
     .describe("Array of findings to save"),
 });
 
-export const CheckPackageSchema = z.object({
-  packages: z
-    .array(
-      z.object({
-        name: z
-          .string()
-          .describe("Package name (e.g. 'axios', '@types/node')"),
-        version: z.string().optional().describe("Optional version"),
-        ecosystem: z
-          .enum(["npm", "pypi", "cargo", "go", "maven", "rubygems"])
-          .optional()
-          .describe("Package ecosystem (defaults to npm)"),
-      }),
-    )
-    .min(1)
-    .describe("Packages to check"),
-});
-
 // The registry parses every tool call against its schema before the handler
 // runs, so handlers receive the parsed (output) shape.
 export type SaveReviewArgs = z.infer<typeof SaveReviewSchema>;
 export type SaveFindingArgs = z.infer<typeof SaveFindingSchema>;
 export type SaveFindingsArgs = z.infer<typeof SaveFindingsSchema>;
-export type CheckPackageArgs = z.infer<typeof CheckPackageSchema>;

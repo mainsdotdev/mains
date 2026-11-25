@@ -13,6 +13,8 @@ import {
   Select,
   SegmentedTabs,
   HorizontalFadeScroller,
+  StatusBadge,
+  type StatusTone,
 } from "@/components/ui";
 import {
   useReadProviderPluginQuery,
@@ -38,7 +40,12 @@ import {
   Plus,
   ArrowUp,
   Close,
+  Download,
+  Lock,
+  Minus,
   Plugin,
+  Refresh,
+  Warning,
 } from "@/components/ui/icons";
 
 // ── Helpers ──
@@ -179,7 +186,7 @@ function InstalledPluginShelf({
           ? Array.from({ length: 7 }, (_, index) => (
               <div
                 key={index}
-                className="size-12 shrink-0 rounded-2xl glass-surface animate-pulse"
+                className="size-12 shrink-0 rounded-2xl button-neutral animate-pulse"
                 aria-hidden="true"
               />
             ))
@@ -194,7 +201,7 @@ function InstalledPluginShelf({
                   tooltipPosition="bottom"
                   aria-label={`Open ${name}`}
                   onClick={() => onSelect(plugin.id)}
-                  className={`size-12 shrink-0 snap-start rounded-2xl glass-surface flex items-center justify-center transition-[transform,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70 cursor-pointer ${
+                  className={`size-12 shrink-0 snap-start rounded-2xl button-neutral flex items-center justify-center focus-visible:ring-accent/70 ${
                     plugin.enabled ? "" : "opacity-55"
                   }`}
                 >
@@ -263,32 +270,33 @@ function AppIncludeIcon({
   );
 }
 
-function appConnectionState(app: PluginAppSummary): {
+type ConnectionStatus = {
   label: string;
-  tone: "success" | "warning" | "subtle";
-} {
-  if (app.callable) return { label: "Connected", tone: "success" };
+  tone: StatusTone;
+  icon?: typeof Check;
+};
+
+function appConnectionState(app: PluginAppSummary): ConnectionStatus {
+  if (app.callable) return { label: "Connected", tone: "success", icon: Check };
   if (app.runtimeEnabled === false || app.isEnabled === false) {
-    return { label: "Disabled", tone: "subtle" };
+    return { label: "Disabled", tone: "neutral", icon: Minus };
   }
-  if (app.installed) return { label: "Needs setup", tone: "warning" };
+  if (app.installed) return { label: "Needs setup", tone: "warning", icon: Warning };
   if (app.installed === false && app.needsAuth) {
-    return { label: "Not connected", tone: "warning" };
+    return { label: "Not connected", tone: "warning", icon: Warning };
   }
-  if (app.isAccessible) return { label: "Available", tone: "subtle" };
-  return { label: "Included", tone: "subtle" };
+  if (app.isAccessible) return { label: "Available", tone: "neutral" };
+  return { label: "Included", tone: "neutral" };
 }
 
-function mcpConnectionState(server: ConnectorMcpServerInfo): {
-  label: string;
-  tone: "success" | "warning" | "subtle";
+function mcpConnectionState(server: ConnectorMcpServerInfo): ConnectionStatus & {
   action: "Connect" | "Reconnect" | null;
 } {
   if (server.runtimeStatus === "connected") {
-    return { label: "Connected", tone: "success", action: null };
+    return { label: "Connected", tone: "success", icon: Check, action: null };
   }
   if (server.runtimeStatus === "starting") {
-    return { label: "Connecting", tone: "subtle", action: null };
+    return { label: "Connecting", tone: "info", icon: Refresh, action: null };
   }
   if (
     server.runtimeStatus === "authenticationRequired" ||
@@ -297,6 +305,7 @@ function mcpConnectionState(server: ConnectorMcpServerInfo): {
     return {
       label: "Authentication required",
       tone: "warning",
+      icon: Lock,
       action: "Connect",
     };
   }
@@ -304,41 +313,17 @@ function mcpConnectionState(server: ConnectorMcpServerInfo): {
     return {
       label: "Reconnect required",
       tone: "warning",
+      icon: Refresh,
       action: "Reconnect",
     };
   }
   if (server.runtimeStatus === "failed") {
-    return { label: "Connection failed", tone: "warning", action: null };
+    return { label: "Connection failed", tone: "danger", icon: Close, action: null };
   }
   if (server.runtimeStatus === "disabled") {
-    return { label: "Disabled", tone: "subtle", action: null };
+    return { label: "Disabled", tone: "neutral", icon: Minus, action: null };
   }
-  return { label: "Included", tone: "subtle", action: null };
-}
-
-function ConnectionBadge({
-  label,
-  tone,
-}: {
-  label: string;
-  tone: "success" | "warning" | "subtle";
-}) {
-  const background =
-    tone === "success"
-      ? "bg-success/15"
-      : tone === "warning"
-        ? "bg-warning/15"
-        : "bg-primary-200/60 dark:bg-primary/10";
-  return (
-    <Text
-      as="span"
-      size="xs"
-      tone={tone}
-      className={`shrink-0 rounded-full  px-2 py-0.5 ${background}`}
-    >
-      {label}
-    </Text>
-  );
+  return { label: "Included", tone: "neutral", action: null };
 }
 
 // ── Plugin Card (Connection-style) ──
@@ -379,39 +364,18 @@ function PluginCard({
     >
       <PluginLogo plugin={plugin} size="md" />
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
+        <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
           <Text as="span" weight="medium" className="truncate">
             {name}
           </Text>
           {plugin.installed && !plugin.enabled && (
-            <Text
-              as="span"
-              size="t"
-              tone="subtle"
-              className="shrink-0 px-1.5 py-0.5 rounded-full bg-primary-200 dark:bg-primary/10"
-            >
-              Disabled
-            </Text>
+            <StatusBadge tone="neutral" icon={Minus}>Disabled</StatusBadge>
           )}
           {plugin.updateAvailable && (
-            <Text
-              as="span"
-              size="t"
-              tone="warning"
-              className="shrink-0 px-1.5 py-0.5 rounded-full bg-warning/15"
-            >
-              Update
-            </Text>
+            <StatusBadge tone="info" icon={Download}>Update</StatusBadge>
           )}
           {installBlockReason && (
-            <Text
-              as="span"
-              size="t"
-              tone="warning"
-              className="shrink-0 px-1.5 py-0.5 rounded-full bg-warning/15"
-            >
-              Unavailable
-            </Text>
+            <StatusBadge tone="warning" icon={Warning}>Unavailable</StatusBadge>
           )}
         </div>
         <Text
@@ -431,7 +395,7 @@ function PluginCard({
       <Button
         type="button"
         className={`shrink-0 ${compact ? "size-7" : "size-8"} flex items-center justify-center rounded-full text-lg transition-colors cursor-pointer ${
-          plugin.installed
+          plugin.installed && plugin.enabled
             ? "bg-success/15 text-success"
             : "bg-primary-200/60 dark:bg-primary-800/20 text-primary-600 dark:text-primary-400 hover:bg-primary-300/60 dark:hover:bg-primary-700/30"
         }`}
@@ -615,53 +579,24 @@ function PluginDetail({
                   <Button
                     onClick={onInstall}
                     disabled={isBusy || Boolean(installBlockReason)}
+                    isLoading={isInstalling}
                     title={installBlockReason ?? undefined}
                     variant="primary"
                   >
-                    {isInstalling ? (
-                      <div className="px-1.5">
-                        <AsciiSpinner variant="null" />
-                      </div>
-                    ) : (
-                      "Add"
-                    )}
+                    Add
                   </Button>
                 </>
               ) : (
                 <>
                   {plugin.updateAvailable && (
-                    <Button onClick={onUpdate} disabled={isBusy} variant="primary">
-                      {isUpdating ? (
-                        <div className="px-1.5">
-                          <AsciiSpinner variant="null" />
-                        </div>
-                      ) : (
-                        "Update"
-                      )}
-                    </Button>
+                    <Button onClick={onUpdate} disabled={isBusy} isLoading={isUpdating} variant="primary">Update</Button>
                   )}
                   {supportsEnableToggle && (
-                    <Button onClick={onToggleEnabled} disabled={isBusy} variant="secondary">
-                      {isToggling ? (
-                        <div className="px-1.5">
-                          <AsciiSpinner variant="null" />
-                        </div>
-                      ) : plugin.enabled ? (
-                        "Disable"
-                      ) : (
-                        "Enable"
-                      )}
+                    <Button onClick={onToggleEnabled} disabled={isBusy} isLoading={isToggling} variant="secondary">
+                      {plugin.enabled ? "Disable" : "Enable"}
                     </Button>
                   )}
-                  <Button onClick={onUninstall} disabled={isBusy} variant="secondary">
-                    {isInstalling ? (
-                      <div className="px-1.5">
-                        <AsciiSpinner variant="null" />
-                      </div>
-                    ) : (
-                      "Uninstall"
-                    )}
-                  </Button>
+                  <Button onClick={onUninstall} disabled={isBusy} isLoading={isInstalling} variant="secondary">Uninstall</Button>
                 </>
               )}
             </div>
@@ -726,10 +661,10 @@ function PluginDetail({
                   return (
                     <div
                       key={app.id}
-                      className="flex items-center gap-3 px-4 py-3"
+                      className="flex flex-wrap items-center gap-3 px-4 py-3"
                     >
                       <AppIncludeIcon app={app} fallbackIcon={fallbackIcon} />
-                      <div className="min-w-0 flex-1">
+                      <div className="min-w-20 flex-1">
                         <IncludeText
                           name={app.name || name}
                           kind="App"
@@ -737,15 +672,15 @@ function PluginDetail({
                         />
                       </div>
                       {plugin.installed && state.label !== "Included" && (
-                        <ConnectionBadge {...state} />
+                        <StatusBadge tone={state.tone} icon={state.icon}>{state.label}</StatusBadge>
                       )}
                       {plugin.installed &&
                         !app.callable &&
                         app.isEnabled !== false &&
                         app.installUrl && (
                           <Button
-                            variant="submit"
-                            className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-0"
+                            variant="secondary"
+                            className="ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-0"
                             onClick={() =>
                               window.api.shell.openExternal(app.installUrl!)
                             }
@@ -780,14 +715,14 @@ function PluginDetail({
               return (
                 <div
                   key={server.name}
-                  className="flex items-center gap-3 px-4 py-3"
+                  className="flex flex-wrap items-center gap-3 px-4 py-3"
                 >
                   <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary-200/60 dark:bg-primary/10">
                     <Text as="span" size="xs" tone="subtle">
                       MCP
                     </Text>
                   </div>
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-20 flex-1">
                     <IncludeText
                       name={server.title || server.name}
                       kind="MCP Server"
@@ -795,21 +730,16 @@ function PluginDetail({
                     />
                   </div>
                   {plugin.installed && state.label !== "Included" && (
-                    <ConnectionBadge label={state.label} tone={state.tone} />
+                    <StatusBadge tone={state.tone} icon={state.icon}>{state.label}</StatusBadge>
                   )}
                   {plugin.installed && state.action && (
                     <Button
-                      variant={
-                        state.action === "Reconnect" ? "primary" : "secondary"
-                      }
-                      disabled={isOAuthPending(server.name)}
+                      className="ml-auto"
+                      variant="secondary"
+                      isLoading={isOAuthPending(server.name)}
                       onClick={() => startLogin(server.name)}
                     >
-                      {isOAuthPending(server.name) ? (
-                        <AsciiSpinner variant="null" />
-                      ) : (
-                        state.action
-                      )}
+                      {state.action}
                     </Button>
                   )}
                 </div>
@@ -1355,8 +1285,8 @@ function ProviderPluginCatalog({
               {(currentPage - 1) * PLUGIN_PAGE_SIZE + 1}–{Math.min(currentPage * PLUGIN_PAGE_SIZE, catalogPlugins.length)} of {catalogPlugins.length} · Page {currentPage} of {pageCount}
             </Text>
             <div className="flex items-center gap-2">
-              <Button variant="primary" disabled={currentPage === 1} onClick={() => changePage(currentPage - 1)}>Previous</Button>
-              <Button variant="primary" disabled={currentPage === pageCount} onClick={() => changePage(currentPage + 1)}>Next</Button>
+              <Button variant="ghost" disabled={currentPage === 1} onClick={() => changePage(currentPage - 1)}>Previous</Button>
+              <Button variant="ghost" disabled={currentPage === pageCount} onClick={() => changePage(currentPage + 1)}>Next</Button>
             </div>
           </nav>
         )}

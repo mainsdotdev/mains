@@ -1,15 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
-import { markdownComponents } from "@/components/markdown-components";
-import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
 import {
   useGetPrDetailQuery, useGetPrAvailabilityQuery,
   pullRequestsApi, pullRequestDetailTag,
-  type PrComment, type PrMergeMethod, type PrRefInput, type PullRequestSummary,
+  type PrMergeMethod, type PrRefInput, type PullRequestSummary,
 } from "@/lib/redux/api/pullRequestsApi";
 import {
   Body, Button, DropdownWrapper, getSegmentedTabId, Heading3,
@@ -18,39 +12,25 @@ import {
 import { Branch, ArrowUp, Check, External, Link, PullRequest, Refresh } from "@/components/ui/icons";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { proxiedImageSrc } from "@/lib/proxied-image-src";
 import { formatDate } from "@/lib/format-date";
 import { warmDiffHighlighter } from "@/lib/diff-highlighter";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { onTransportChange } from "@/lib/transport";
 import { canonicalPrRef, githubPullRequestUrl, pullRequestKey } from "../lib/pull-request-link";
 import { PrDiffView } from "./pr-diff-view";
+import { PullRequestMateAction, PullRequestMateReviews } from "./pr-mate-review";
+import { Avatar, Markdown } from "./pr-content";
+import { PrActivitySection } from "./pr-activity";
+import { PrChecksCard } from "./pr-checks-card";
 import { PullRequestActionsContext, usePrDraft, usePullRequestActions } from "../hooks/use-pull-request-actions";
+
+const SHOW_MATE_REVIEW_ACTION = false;
 
 const MERGE_METHODS: { value: PrMergeMethod; label: string }[] = [
   { value: "merge", label: "Merge" },
   { value: "squash", label: "Squash and merge" },
   { value: "rebase", label: "Rebase and merge" },
 ];
-const CHECK_DOT: Record<string, string> = {
-  passing: "bg-success", failing: "bg-danger", pending: "bg-warning", none: "bg-primary-400",
-};
-
-function Avatar({ author }: { author: PrComment["author"] }) {
-  const src = proxiedImageSrc(author?.avatarUrl);
-  if (!src) {
-    return (
-      <span className="size-6 rounded-full bg-primary/30 dark:bg-primary/10 shrink-0" />
-    );
-  }
-  return (
-    <img
-      src={src}
-      alt={author?.login ?? ""}
-      className="size-6 rounded-full shrink-0"
-    />
-  );
-}
 
 /** Heading over the review threads and activity sections. */
 function SectionHeading({ children }: { children: React.ReactNode }) {
@@ -60,43 +40,6 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
     </Body>
   );
 }
-
-function Markdown({ children }: { children: string }) {
-  return (
-    <Text
-      as="div"
-      size="s"
-      tone="secondary"
-      className="prose prose-sm dark:prose-invert max-w-none wrap-break-word"
-    >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]]}
-        components={markdownComponents}
-      >
-        {children}
-      </ReactMarkdown>
-    </Text>
-  );
-}
-
-function CommentCard({ comment }: { comment: PrComment }) {
-  return (
-    <div className="rounded-2xl border border-primary-200/60 dark:border-primary-800/70 px-4 py-3">
-      <div className="flex items-center gap-2 mb-1.5">
-        <Avatar author={comment.author} />
-        <Text as="span" size="s" weight="medium">
-          {comment.author?.login ?? "unknown"}
-        </Text>
-        <Text as="span" size="xs" tone="subtle" className="ml-auto">
-          {formatDate(comment.createdAt)}
-        </Text>
-      </div>
-      <Markdown>{comment.body}</Markdown>
-    </div>
-  );
-}
-
 
 export interface PullRequestViewProps {
   prRef: PrRefInput;
@@ -134,6 +77,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
   const url = detail?.url ?? suppliedUrl ?? initialPr?.url ?? githubPullRequestUrl(ref);
   const needsConnection = availability?.connected === false;
   const [tab, setTab] = useState<"summary" | "changes">("summary");
+  const [selectedReview, setSelectedReview] = useState<{ id: string; version: number }>();
   const [mergeMethod, setMergeMethod] = useState<PrMergeMethod>("merge");
   const [mergeMenuOpen, setMergeMenuOpen] = useState(false);
   const mergeMenuRef = useRef<HTMLDivElement>(null);
@@ -168,23 +112,10 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
     : current?.state === "closed" ? "text-danger" : "text-accent";
   const hasConflicts = detail?.mergeable === "CONFLICTING";
   const canMerge = actions.can({ kind: "merge", method: mergeMethod });
-  const checkCounts = { passing: 0, failing: 0, pending: 0 };
-  for (const check of detail?.checks ?? []) {
-    if (check.status === "passing") checkCounts.passing++;
-    else if (check.status === "failing") checkCounts.failing++;
-    else checkCounts.pending++;
-  }
-  const checksSummary = !detail?.checks.length ? "No checks" : [
-    checkCounts.passing > 0 && checkCounts.passing + " passing",
-    checkCounts.failing > 0 && checkCounts.failing + " failing",
-    checkCounts.pending > 0 && checkCounts.pending + " pending",
-  ].filter(Boolean).join(" · ");
-  const reviewers = detail?.latestReviews.map((review) => review.author).filter(Boolean) ?? [];
-  const comments = [...(detail?.comments ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
   return (
     <PullRequestActionsContext.Provider value={actions}>
-    <div className="flex h-full min-h-0 flex-col @container">
+    <div className="flex h-full min-h-0 flex-col text-primary-900 dark:text-primary-100 @container">
       <header className="shrink-0 border-b border-primary-200/60 dark:border-primary-800/60 px-5 @min-[560px]:px-8 pt-5 pb-3">
         <div className="flex items-center gap-2 text-xs">
           <Text as="span" size="xs" tone="subtle" className="truncate">{ref.owner}/{ref.repo}</Text>
@@ -196,6 +127,11 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
         <Heading3 size="base" weight="medium" className="mt-2 wrap-break-word">
           {current?.title ?? "Pull request #" + ref.number}
         </Heading3>
+        {current && <div className="mt-3 flex items-center gap-2 text-xs text-primary-500 dark:text-primary-400">
+          <Avatar author={current.author} />
+          <Text as="span" size="xs" weight="medium">{current.author?.login ?? "Unknown author"}</Text>
+          <time dateTime={current.createdAt} title={new Date(current.createdAt).toLocaleString()}>{formatDate(current.createdAt)}</time>
+        </div>}
         {current && <div className="mt-2 flex items-center gap-1.5 text-xs text-primary-500 dark:text-primary-400">
           <Branch className="size-3.5 shrink-0" />
           <span className="truncate" title={current.headRefName}>{current.headRefName}</span>
@@ -224,21 +160,26 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
             <Button variant="icon" onClick={() => { void window.api.shell.openExternal(url); }} tooltip="Open on GitHub" aria-label="Open on GitHub">
               <External className="size-3.5" />
             </Button>
+            {SHOW_MATE_REVIEW_ACTION && active && detail?.state === "open" && detail.revision && (
+              <PullRequestMateAction pr={ref} revision={detail.revision} disabled={isError || isFetching}
+                onReviewed={id => { setSelectedReview(previous => ({ id, version: (previous?.version ?? 0) + 1 })); setTab("summary"); }} />
+            )}
             {current?.state === "open" && (isDraft ? (
-              <Button variant="secondary" disabled={!actions.can({ kind: "ready" })}
+              <Button variant="secondary" disabled={!actions.can({ kind: "ready" })} isLoading={isMarkingReady}
                 onClick={handleMarkReady} className="ml-2">
-                {isMarkingReady ? "Working…" : "Ready for review"}
+                Ready for review
               </Button>
             ) : (
               <div className="relative ml-2" ref={mergeMenuRef}>
-                <div className="inline-flex overflow-hidden rounded-full bg-accent text-accent-foreground">
-                  <Button disabled={!canMerge || isMerging} onClick={handleMerge}
-                    className="px-3 py-1.5 text-xs font-medium text-accent-foreground hover:bg-accent-foreground/10 disabled:opacity-50">
-                    {isMerging ? "Merging…" : MERGE_METHODS.find((method) => method.value === mergeMethod)?.label}
+                <div className="inline-flex overflow-hidden rounded-full bg-action text-white">
+                  <Button disabled={!canMerge} isLoading={isMerging} onClick={handleMerge}
+                    aria-label={isMerging ? "Merging…" : undefined}
+                    className="px-3 py-1.5 text-xs font-medium enabled:hover:bg-white/12 enabled:active:bg-white/20 focus-visible:ring-white/85">
+                    {MERGE_METHODS.find((method) => method.value === mergeMethod)?.label}
                   </Button>
                   <Button disabled={!canMerge || isMerging} onClick={() => setMergeMenuOpen((open) => !open)}
                     aria-label="Choose merge method" aria-haspopup="menu" aria-expanded={mergeMenuOpen}
-                    className="border-l border-accent-foreground/20 px-2 text-accent-foreground hover:bg-accent-foreground/10 disabled:opacity-50">
+                    className="border-l border-white/20 px-2 enabled:hover:bg-white/12 enabled:active:bg-white/20 focus-visible:ring-white/85">
                     <ArrowUp className="size-3 rotate-180" />
                   </Button>
                 </div>
@@ -272,7 +213,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
               {needsConnection
                 ? <Button variant="secondary" onClick={() => { void navigate("/settings?section=connections"); }}>Connect GitHub</Button>
                 : <Button variant="secondary" onClick={refresh}>Try again</Button>}
-              <Button variant="subtle" onClick={() => { void window.api.shell.openExternal(url); }}>Open on GitHub</Button>
+              <Button variant="subtle" className="text-primary-700 dark:text-primary-300" onClick={() => { void window.api.shell.openExternal(url); }}>Open on GitHub</Button>
             </div>
           </div>
         ) : !detail ? (
@@ -282,25 +223,9 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
             {isError && <Text as="p" size="xs" tone="warning" className="mb-4">Unable to refresh. Showing the last loaded pull request.</Text>}
             {tab === "changes" ? (active && <PrDiffView prRef={ref} />) : (
               <div className="space-y-6">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-primary-600 dark:text-primary-400">
-                  <details className="relative">
-                    <summary className="flex cursor-pointer list-none items-center gap-1.5">
-                      <span className={"size-1.5 rounded-full " + CHECK_DOT[detail.ciStatus]} />
-                      {checksSummary}{detail.checks.length > 0 && <ArrowUp className="size-2.5 rotate-180" />}
-                    </summary>
-                    {detail.checks.length > 0 && <div className="absolute left-0 top-full z-10 mt-2 max-h-64 w-64 overflow-y-auto rounded-xl border border-primary-200 dark:border-primary-800 bg-primary dark:bg-primary-950 p-3 shadow-lg">
-                      {detail.checks.map((check, index) => <div key={check.name + index} className="flex items-center gap-2 py-1">
-                        <span className={"size-1.5 shrink-0 rounded-full " + CHECK_DOT[check.status]} />
-                        <span className="min-w-0 flex-1 wrap-break-word">{check.name}</span>
-                        <span className="sr-only">{check.status}</span>
-                      </div>)}
-                    </div>}
-                  </details>
-                  <span>{detail.reviewDecision ? detail.reviewDecision.replace(/_/g, " ").toLowerCase() : "No reviews"}
-                    {reviewers.length > 0 && <span title={reviewers.join(", ")}> · {reviewers.join(", ")}</span>}
-                  </span>
-                  {hasConflicts && <span className="text-danger">Merge conflicts</span>}
-                </div>
+                <PrChecksCard detail={detail} active={active} />
+                {active && detail.revision && <PullRequestMateReviews pr={ref} revision={detail.revision} selected={selectedReview} />}
+                {hasConflicts && <Text as="p" size="xs" tone="danger">This pull request has merge conflicts.</Text>}
                 <section aria-label="Pull request description" className="pb-2">
                   {detail.body.trim() ? <Markdown>{detail.body}</Markdown>
                     : <Text as="p" size="s" tone="subtle">No description provided.</Text>}
@@ -340,7 +265,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
                             onClick={() =>
                               handleResolveThread(thread.id, !thread.isResolved)
                             }
-                            className="ml-auto text-xxs px-2 py-0.5 rounded-lg hover:bg-primary/20 dark:hover:bg-primary/10 text-primary-700 dark:text-primary-300"
+                            className="ml-auto min-h-7 rounded-lg px-2 py-0.5 text-xxs text-primary-700 dark:text-primary-300"
                           >
                             {thread.isResolved ? "Unresolve" : "Resolve"}
                           </Button>
@@ -375,19 +300,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
             )}
 
 
-                <section className="border-t border-primary-200/60 dark:border-primary-800/60 pt-6" aria-label="Activity">
-                  <SectionHeading>Activity</SectionHeading>
-                  <div className="mb-3 flex items-center gap-2.5 rounded-xl border border-primary-200/60 dark:border-primary-800/70 px-4 py-3">
-                    <PullRequest className="size-4 shrink-0 text-success" />
-                    <Text as="span" size="s" className="min-w-0 flex-1 wrap-break-word">
-                      {detail.author?.login ?? "Someone"} opened this pull request
-                    </Text>
-                    <Text as="span" size="xxs" tone="subtle" className="shrink-0">{formatDate(detail.createdAt)}</Text>
-                  </div>
-                  <div className="space-y-3">
-                    {comments.map((comment) => <CommentCard key={comment.id} comment={comment} />)}
-                  </div>
-                </section>
+                <PrActivitySection prRef={ref} detail={detail} active={active} />
               </div>
             )}
           </>

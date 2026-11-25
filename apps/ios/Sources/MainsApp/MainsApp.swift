@@ -1,33 +1,71 @@
 import SwiftUI
 import Network
 
+enum AppFeatures {
+    // The v1 target never compiles or links the live voice module.
+    #if MAINS_GPT_LIVE
+    static let gptLiveEnabled = true
+    #else
+    static let gptLiveEnabled = false
+    #endif
+}
+
 @main
 struct MainsApp: App {
     @State private var session = BackendSession(storage: NativeStorage())
-    @AppStorage("appearancePreference") private var appearance = AppAppearance.system
+    @State private var showsLaunchIntro = true
     @Environment(\.scenePhase) private var scenePhase
     private let monitor = NWPathMonitor()
 
     var body: some Scene {
         WindowGroup {
-            RootView(session: session)
-                .preferredColorScheme(appearance.colorScheme)
-                .tint(.primary)
-                .task {
-                    session.restore()
-                    session.setActive(scenePhase == .active)
-                    monitor.pathUpdateHandler = { path in
-                        Task { @MainActor in session.setOnline(path.status == .satisfied) }
-                    }
-                    monitor.start(queue: DispatchQueue(label: "dev.mains.ios.network"))
-                }
-                .onChange(of: scenePhase) { _, phase in session.setActive(phase == .active) }
+            #if DEBUG && MAINS_GPT_LIVE
+            if CommandLine.arguments.contains("--voice-preview") { VoiceAppearancePreview() }
+            else { application }
+            #else
+            application
+            #endif
         }
+    }
+
+    private var application: some View {
+        RootView(session: session, showsLaunchIntro: $showsLaunchIntro)
+            .tint(.primary)
+            .task {
+#if MAINS_GPT_LIVE
+                if AppFeatures.gptLiveEnabled {
+                    session.voice.makeMedia = { NativeRealtimeVoiceMedia() }
+                    session.voice.onConnectedFeedback = VoiceCallSounds.playOpening
+                    session.voice.onClosing = VoiceCallSounds.playClosing
+                }
+#endif
+
+                session.restore()
+                session.setActive(scenePhase == .active)
+                monitor.pathUpdateHandler = { path in
+                    Task { @MainActor in session.setOnline(path.status == .satisfied) }
+                }
+                monitor.start(queue: DispatchQueue(label: "dev.mains.ios.network"))
+            }
+            .onChange(of: scenePhase) { _, phase in
+                // System alerts, including the app-icon confirmation, briefly make the scene inactive.
+                switch phase {
+                case .active: session.setActive(true)
+                case .inactive: break
+                case .background: session.setActive(false)
+                @unknown default: session.setActive(false)
+                }
+            }
     }
 }
 
 struct RootView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @Bindable var session: BackendSession
+    @Binding var showsLaunchIntro: Bool
+    @AppStorage("appearancePreference") private var appearance = AppAppearance.system
     @State private var incomingLink = ""
     @State private var showPairing = false
 
@@ -36,7 +74,16 @@ struct RootView: View {
             incomingLink = ""
             showPairing = true
         }).id(session.pairing?.deviceId)
+        .allowsHitTesting(!showsLaunchIntro)
+        .accessibilityHidden(showsLaunchIntro)
+        .overlay {
+            if showsLaunchIntro {
+                LaunchIntro(preferredScheme: appearance.colorScheme, finish: finishLaunchIntro)
+                    .transition(.opacity)
+            }
+        }
         .onOpenURL { url in
+            finishLaunchIntro(false)
             incomingLink = url.absoluteString
             showPairing = true
         }
@@ -46,10 +93,21 @@ struct RootView: View {
         .alert("Mains", isPresented: Binding(get: { session.actionError != nil }, set: { if !$0 { session.actionError = nil } })) {
             Button("OK", role: .cancel) { session.actionError = nil }
         } message: { Text(session.actionError ?? "") }
+        .preferredColorScheme(appearance.colorScheme)
+    }
+
+    private func finishLaunchIntro(_ animated: Bool) {
+        guard showsLaunchIntro else { return }
+        withAnimation(animated ? .easeOut(duration: 0.14) : nil) {
+            showsLaunchIntro = false
+        }
     }
 }
 
 struct ConnectionPill: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let action: () -> Void
     private var name: String { session.pairing?.descriptor.name ?? "Computer" }
@@ -73,36 +131,5 @@ struct ConnectionPill: View {
         .buttonStyle(ChatPressStyle())
         .accessibilityLabel("\(name): \(status)").accessibilityHint("Opens Settings")
         .accessibilityIdentifier("connectionPill")
-    }
-}
-
-struct ConnectionLabel: View {
-    let session: BackendSession
-    var body: some View {
-        HStack(spacing: 8) {
-            if session.connection.isBusy { ProgressView().controlSize(.mini) }
-            else { Circle().fill(session.isConnected ? Color.green : Color.secondary).frame(width: 6, height: 6) }
-            Text(session.connection.label).font(.caption).foregroundStyle(.secondary)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("connectionStatus")
-    }
-}
-
-struct ConnectionNotice: View {
-    let session: BackendSession
-    var body: some View {
-        if !session.isConnected {
-            HStack {
-                ConnectionLabel(session: session)
-                Spacer()
-                if !session.connection.isBusy && session.connection != .suspended {
-                    Button("Try again") { session.retry() }.font(.caption.weight(.semibold))
-                        .disabled(session.connection == .unauthorized || session.connection == .incompatible)
-                }
-            }
-            .padding(.horizontal, 20).padding(.vertical, 10)
-            .background(.bar)
-        }
     }
 }

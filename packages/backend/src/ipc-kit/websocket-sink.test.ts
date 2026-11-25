@@ -70,6 +70,17 @@ describe("WebSocketSink", () => {
 });
 
 describe("event allowlist", () => {
+  it("keeps host signaling away from phones and targets device signaling to its one owner", () => {
+    const sink = new WebSocketSink();
+    const first = fakeClient("first"), second = fakeClient("second"), host = fakeClient("host");
+    for (const client of [first, second]) sink.addClient({ ...client, eventChannels: new Set(["runs:realtimeEvent"]) });
+    sink.addClient(host);
+    sink.send("runs:realtimeEvent", { sdp: "host-offer" }, { excludeDevices: true });
+    sink.send("runs:realtimeEvent", { sdp: "phone-offer" }, { clientId: "first" });
+    expect(first.sent).toHaveLength(1); expect(first.sent[0]).toContain("phone-offer");
+    expect(second.sent).toHaveLength(0);
+    expect(host.sent).toHaveLength(1); expect(host.sent[0]).toContain("host-offer");
+  });
   it("keeps huge streaming events off phones while small status events continue", () => {
     const sink = new WebSocketSink();
     const device = fakeClient("phone"), owner = fakeClient("desktop");

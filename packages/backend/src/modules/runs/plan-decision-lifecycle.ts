@@ -1,4 +1,4 @@
-import { isPlanToolName, planDecisionMessageId, readPlanStatus, type PlanDecisionPayload, type PlanDecisionResult } from "@mains/contracts/plan-decision";
+import { isPlanToolName, planDecisionMessageId, readPlanStatus, PLAN_DECISION_UNCONFIRMED, type PlanDecisionPayload, type PlanDecisionResult } from "@mains/contracts/plan-decision";
 import { isRunInputDeliveryUncertain } from "@mains/contracts/run-input";
 import type { RunInputStatusPayload } from "@mains/contracts/runs";
 import type { ContinueRunPayload } from "./runs.dto";
@@ -23,15 +23,18 @@ const continuationOwners = new Map<string, () => void>();
 const continuationKey = (runId: string, messageId: string) => JSON.stringify([runId, messageId]);
 
 /** A high-level continuation may await attachments/settings before native send. */
-export function assertPlanContinuationCurrent(runId: string, messageId?: string): void {
-  if (messageId) continuationOwners.get(continuationKey(runId, messageId))?.();
+export function assertPlanContinuationCurrent(runId: string, messageId?: string): boolean {
+  const owner = messageId ? continuationOwners.get(continuationKey(runId, messageId)) : undefined;
+  owner?.();
+  return owner !== undefined;
 }
 
 /** Native acceptance precedes the durable marker. Retain the accepted
  * checkpoint on marker failure; retries finish persistence without re-sending. */
 export function decidePlan(payload: PlanDecisionPayload, operations: Operations): Promise<PlanDecisionResult> {
   return admitAnswer(payload.runId, -payload.toolCallId, async (assertCurrent) => {
-    if (!Number.isSafeInteger(payload.toolCallId) || payload.toolCallId <= 0 || !["apply", "dismiss"].includes(payload.decision)) throw new Error("Invalid plan decision");
+    if (!Number.isSafeInteger(payload.toolCallId) || payload.toolCallId <= 0 || !["apply", "dismiss"].includes(payload.decision) ||
+        (payload.checkOnly !== undefined && typeof payload.checkOnly !== "boolean")) throw new Error("Invalid plan decision");
     const run = await runsRepo.findRunById(payload.runId);
     if (!run || run.accountId !== payload.accountId) throw new Error("Plan does not belong to this account or conversation");
     if (run.isArchived || run.isReplica) throw new Error("Open an owned, unarchived conversation before deciding this plan");
@@ -40,9 +43,9 @@ export function decidePlan(payload: PlanDecisionPayload, operations: Operations)
     if (!plan || !isPlanToolName(plan.toolName) || plan.parentToolCallId || plan.metadata?.isFromSubagent === true) throw new Error("Plan not found in this conversation");
     const status = readPlanStatus(plan.metadata ?? undefined, plan.output && typeof plan.output === "object" ? plan.output as Record<string, unknown> : null);
     const desired = payload.decision === "apply" ? "applied" : "dismissed";
-    if (status === desired) return { status: desired };
+    if (status === desired || payload.checkOnly && (status === "applied" || status === "dismissed")) return { status };
     if (status !== "pending" || plan.status === "error") throw new Error("This plan has already been decided or failed");
-    if (calls.filter((call) => isPlanToolName(call.toolName) && !call.parentToolCallId && call.metadata?.isFromSubagent !== true).at(-1)?.id !== plan.id) throw new Error("A newer plan replaced this plan");
+    if (!payload.checkOnly && calls.filter((call) => isPlanToolName(call.toolName) && !call.parentToolCallId && call.metadata?.isFromSubagent !== true).at(-1)?.id !== plan.id) throw new Error("A newer plan replaced this plan");
     const key = JSON.stringify([run.id, plan.id]);
     const previous = decisions.get(key);
     if (previous && previous.action !== payload.decision) throw new Error("The previous plan decision is still being delivered. Retry that decision first.");
@@ -61,6 +64,7 @@ export function decidePlan(payload: PlanDecisionPayload, operations: Operations)
           }
         }
         if (!owner.accepted) {
+          if (payload.checkOnly) throw new Error(PLAN_DECISION_UNCONFIRMED);
           assertCurrent();
           const current = await runsRepo.findRunById(run.id);
           if (!current || current.isArchived) throw new Error("This conversation is no longer available");

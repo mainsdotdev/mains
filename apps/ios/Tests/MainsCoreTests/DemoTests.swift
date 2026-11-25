@@ -4,6 +4,71 @@ import Testing
 
 @Suite(.serialized)
 struct DemoTests {
+    @Test(arguments: ["codex", "claude_code"]) @MainActor
+    func steerAddsFilesAndContextToTheCurrentDemoTurnWithoutRestartingIt(providerID: String) async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(100), streamDelay: .milliseconds(5))
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        session.grantConsent(providerID: providerID, backendID: DemoBackend.backendID)
+        let space = try #require(session.spaces.first { $0.providerId == providerID })
+        let id = try await session.send("Review the sample workspace", spaceID: space.id, workspaceID: backend.defaultWorkspaceID)
+        await session.selectConversation(id)
+        try await eventually { session.pendingMessage == nil && session.conversations.first { $0.id == id }?.canSteer == true }
+        let turn = try #require(session.transcript.page?.turns.last)
+        session.setHistoryFollowing(false)
+        let scope = session.contextScope(providerID: providerID, workspaceID: session.conversations.first { $0.id == id }?.workspaceId)
+        let skill = ContextSkill(name: "review", displayName: "Review")
+        let file = PromptAttachment(name: "note.pdf", type: "document", mimeType: "application/pdf", bytes: DemoFile.pdf.bytes)
+        _ = try await session.send("Focus on " + ContextMentions.mention(skill), runID: id, attachments: [file], contextSkills: [skill], contextScope: scope, steering: true)
+        try await eventually { session.pendingMessage == nil }
+        #expect(!session.transcript.isFollowing)
+        #expect(session.transcript.page?.turns.map(\.id) == [turn.id])
+        await session.loadHistory(direction: "latest")
+        let steer = try #require(session.transcript.rows.last { $0.kind == .prompt })
+        #expect(steer.text == "Focus on $review" && steer.contextSkills == [skill] && steer.media.map(\.name) == [file.name])
+        let descriptor = try await session.describeAttachment(try #require(steer.media.first))
+        #expect(try await session.downloadAttachment(descriptor) == DemoFile.pdf.bytes)
+        try await session.stop(id)
+        try await eventually { session.conversations.first { $0.id == id }?.isActive == false }
+        await #expect(throws: MainsError.steerTurnEnded) { try await session.send("Keep this draft", runID: id, steering: true) }
+        await session.loadHistory(direction: "refresh")
+        #expect(session.transcript.rows.filter { $0.kind == .prompt }.count == 2)
+    }
+
+    @Test @MainActor func attachmentOnlyDemoMessagesKeepOnePromptAndDownloadableFiles() async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+        await session.selectConversation(DemoBackend.tourID)
+        let sampleImage = try #require(session.transcript.rows.flatMap(\.media).first { $0.image })
+        let image = try await session.readImage(sampleImage)
+        let imageBytes = try #require(image.data)
+        let photo = PromptAttachment(name: "photo.png", type: "image", mimeType: image.mime, bytes: imageBytes)
+        let pdf = PromptAttachment(name: "document.pdf", type: "document", mimeType: "application/pdf", bytes: DemoFile.pdf.bytes)
+
+        let id = try await session.send("", spaceID: "codex", workspaceID: session.homeTargets["codex"]?.workspaceID, attachments: [photo])
+        await session.selectConversation(id)
+        try await eventually { session.pendingMessage == nil && session.conversations.first { $0.id == id }?.isActive == false }
+        let first = try #require(session.transcript.rows.first { $0.kind == .prompt })
+        #expect(first.text.isEmpty && first.media.map(\.name) == [photo.name])
+        #expect(try await session.readImage(try #require(first.media.first)).data == imageBytes)
+
+        _ = try await session.send(" \n\t", runID: id, attachments: [pdf])
+        try await eventually { session.pendingMessage == nil && session.conversations.first { $0.id == id }?.isActive == false }
+        let prompts = session.transcript.rows.filter { $0.kind == .prompt }
+        #expect(prompts.count == 2 && prompts.allSatisfy { $0.text.isEmpty && $0.pendingAttachments.isEmpty })
+        #expect(prompts.flatMap(\.media).map(\.name) == [photo.name, pdf.name])
+        let file = try await session.describeAttachment(try #require(prompts.last?.media.first))
+        #expect(try await session.downloadAttachment(file) == DemoFile.pdf.bytes)
+        await #expect(throws: MainsError.self) { try await session.send(" \n\t", runID: id) }
+        await #expect(throws: MainsError.self) { try await session.send("", spaceID: "codex", workspaceID: session.homeTargets["codex"]?.workspaceID) }
+    }
+
     @Test @MainActor func subagentReplayUsesRealHistoryAndTransitionsWithoutLeakingChildMessages() async throws {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let transport = DemoTransport(backend: backend)
@@ -68,6 +133,216 @@ struct DemoTests {
         session.exitDemo()
         #expect(!session.isDemo && session.pairing == nil && !storage.demoEnabled)
         #expect(storage.consents == originalConsent && storage.snapshot?.backendID == "keep-real-cache")
+    }
+
+    @Test @MainActor func activitySamplesUseTheNormalDecisionAndQueueWhileOffline() async throws {
+        let storage = MemoryStorage()
+        let session = BackendSession(storage: storage)
+        session.restore(); session.setOnline(false); session.setActive(true)
+        try session.startDemo()
+        defer { session.exitDemo() }
+        try await eventually { session.isConnected }
+
+        let approvalID = DemoBackend.activityApprovalRunID
+        let queueID = DemoBackend.activityQueueRunID
+        await session.refreshWorkInbox()
+        let groups = session.workInbox.groups(live: session.workInboxIsCurrent)
+        #expect(groups.needsYou.map(\.id) == [approvalID])
+        #expect(groups.running.map(\.id) == [queueID])
+        #expect(session.viewingRunID == nil)
+
+        await session.selectConversation(approvalID)
+        let approval = try #require(session.pendingApprovals.first)
+        try await session.respondToApproval(approval, approved: true)
+        try await eventually { session.conversations.first { $0.id == approvalID }?.status == "succeeded" }
+        #expect(session.pendingApprovals.isEmpty)
+        #expect(session.transcript.rows.contains { $0.text == "Sample command approved. No command was executed." })
+        await session.refreshWorkInbox()
+        let updated = session.workInbox.groups(live: session.workInboxIsCurrent)
+        #expect(updated.needsYou.isEmpty && updated.finished.contains { $0.id == approvalID })
+        #expect(updated.running.map(\.id) == [queueID])
+
+        await session.selectConversation(queueID)
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+        let followUp = "Include a note about Atlas"
+        session.draft(for: queueID).text = followUp
+        try session.submitQueuedDraft(queueID)
+        let queue = session.messageQueue(for: queueID)
+        #expect(queue.messages.first?.input.text == followUp)
+        #expect(!session.transcript.rows.contains { $0.text == followUp })
+        try await eventually({
+            queue.messages.isEmpty && session.conversations.first { $0.id == queueID }?.status == "succeeded" &&
+                session.transcript.rows.contains { $0.kind == .prompt && $0.text == followUp }
+        }, seconds: 15)
+        #expect(session.transcript.rows.filter { $0.kind == .prompt && $0.text == followUp }.count == 1)
+        #expect(storage.pairing == nil && storage.snapshot == nil && storage.consents.isEmpty)
+    }
+
+    @Test @MainActor func launchBriefSavesTheWorkOutputToItsAtlasProjectOffline() async throws {
+        let session = BackendSession(storage: MemoryStorage())
+        session.restore(); session.setOnline(false); session.setActive(true)
+        try session.startDemo()
+        defer { session.exitDemo() }
+        try await eventually { session.isConnected }
+
+        let project = try #require(session.collections.first { $0.name == "Work" })
+        let runID = DemoBackend.launchBriefRunID
+        let run = try #require(session.conversations.first { $0.id == runID })
+        #expect(run.mode == "work" && run.status == "succeeded" && run.collectionId == project.id)
+        await session.selectConversation(runID)
+        let media = try #require(session.transcript.rows.flatMap(\.media).first)
+        let output = try #require(try await session.listOutputs(runID).items.first)
+        #expect(media.name == output.name && media.source == .artifact(output.artifactId))
+        #expect(output.name == "iphone-launch-brief.pdf" && output.previewType == "pdf")
+        let bytes = try await session.downloadOutput(output)
+        #expect(bytes == (try DemoFile.launchBrief()).bytes)
+
+        let source = AtlasSaveSource.output(output)
+        let owner = session.ownership
+        #expect(try await session.atlasSaveStatus(source, owner: owner) == false)
+        var wrongRun = source; wrongRun.runId = DemoBackend.tourID
+        await #expect(throws: MainsError.self) { try await session.atlasSaveStatus(wrongRun, owner: owner) }
+        var query = AtlasQuery(); query.collectionID = project.id; query.scope = "saved"
+        #expect(try await session.atlasLibrary(query).items.allSatisfy { $0.title != output.name })
+
+        let saved = try await session.saveAtlasFile(source, owner: owner)
+        #expect(try await session.atlasSaveStatus(source, owner: owner) == true)
+        #expect(try await session.saveAtlasFile(source, owner: owner).id == saved.id)
+        let entries = try await session.atlasLibrary(query).items.filter { $0.sourceRunId == runID }
+        let entry = try #require(entries.first)
+        #expect(entries.count == 1 && entry.savedIdentity == saved.id && entry.collectionId == project.id)
+        let file = try await session.describeAtlasFile(try #require(entry.file))
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try await session.downloadAtlasFile(file, owner: owner, to: url)
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+
+    @Test @MainActor func releaseMateHasAChatAndPreviewsItsChecklistOffline() async throws {
+        let storage = MemoryStorage()
+        let session = BackendSession(storage: storage)
+        session.restore(); session.setOnline(false); session.setActive(true)
+        try session.startDemo()
+        defer { session.exitDemo() }
+        try await eventually { session.isConnected }
+
+        let directory = try await session.loadMates()
+        let mate = try #require(directory.mates.first)
+        #expect(session.supportsMates && mate.ready && mate.id == DemoBackend.mateID)
+        #expect(directory.teams.contains { $0.id == mate.teamId })
+        #expect(try await session.loadMates(mateID: mate.id).mates.first?.details?.instructions.isEmpty == false)
+        let chats = try await session.loadMateChats(mate.id)
+        #expect(chats.map(\.id) == [DemoBackend.mateChatID])
+
+        await session.selectConversation(DemoBackend.mateChatID)
+        let document = try #require(session.transcript.rows.flatMap(\.media).first)
+        let output = try #require(try await session.listOutputs(DemoBackend.mateChatID).items.first)
+        #expect(document.source == .artifact(output.artifactId) && document.name == "release-checklist.md")
+        #expect(try await session.downloadOutput(output) == DemoFile.releaseChecklist.bytes)
+
+        let prompt = "Summarize the release checks"
+        await #expect(throws: MainsError.self) { try await session.send(prompt, mate: mate) }
+        session.grantConsent(providerID: mate.providerId, backendID: DemoBackend.backendID)
+        let runID = try await session.send(prompt, mate: mate)
+        await session.selectConversation(runID)
+        try await eventually {
+            session.conversations.first { $0.id == runID }?.status == "succeeded" &&
+                session.transcript.rows.contains { $0.text.contains("Sample release review") }
+        }
+        #expect(session.conversations.first { $0.id == runID }?.assistantId == mate.id)
+        #expect(try await session.loadMateChats(mate.id).map(\.id) == [runID, DemoBackend.mateChatID])
+        #expect(storage.pairing == nil && storage.snapshot == nil && storage.consents.isEmpty)
+    }
+
+    @Test @MainActor func demoMateCreationKeepsTheApprovedProfileAndFirstChatInMemory() async throws {
+        let storage = MemoryStorage()
+        let session = BackendSession(storage: storage)
+        session.restore(); session.setOnline(false); session.setActive(true)
+        try session.startDemo()
+        defer { session.exitDemo() }
+        try await eventually { session.isConnected }
+
+        let space = try #require(session.mateSpaces.first { $0.providerId == "claude_code" })
+        await session.loadModels(space.providerId)
+        let model = try #require(session.models[space.providerId]?.first)
+        let directory = try await session.loadMates()
+        let team = try #require(directory.teams.first)
+        let avatar = MateAvatar(shape: "terminal-amber", color: "amber")
+        let id = try await session.createMate(name: "Release Planner", space: space, model: model.id,
+                                              effort: "high", teamID: team.id, avatar: avatar)
+        let created = try #require(try await session.loadMates(mateID: id).mates.first)
+        #expect(created.needsSetup && created.avatar == avatar && created.teamId == team.id)
+        #expect(created.providerId == space.providerId && created.model == model.id)
+        await #expect(throws: MainsError.self) { try await session.send("Prepare the release", mate: created) }
+        try await session.answerMateSetup(id, step: 0, answer: "Help plan iPhone releases")
+        let candidate = try #require(try await session.loadMates(mateID: id).mates.first)
+        let setup = try #require(candidate.welcome?.question?.profileSetup)
+        let draft = try #require(setup.draft)
+        #expect(setup.turns.map(\.answer) == ["Help plan iPhone releases"] && draft.description == "Help plan iPhone releases")
+        let approved = MateProfile(description: "Plans iPhone releases", instructions: draft.instructions + "\nCheck the release notes.")
+        try await session.saveMateSetup(id, profile: approved)
+
+        let ready = try #require(try await session.loadMates(mateID: id).mates.first)
+        #expect(ready.ready && ready.description == approved.description && ready.details?.instructions == approved.instructions)
+        #expect(ready.details?.effort == "high" && ready.welcome?.question?.profileSetup?.saved == true)
+        session.grantConsent(providerID: ready.providerId, backendID: DemoBackend.backendID)
+        let runID = try await session.send("Prepare the release", mate: ready, useMateWelcome: true)
+        #expect(runID == ready.welcome?.runId)
+        await session.selectConversation(runID)
+        try await eventually { session.transcript.rows.contains { $0.text.contains(approved.description) } }
+        #expect(session.conversations.first { $0.id == runID }?.assistantId == id)
+        let chats = try await session.loadMateChats(id)
+        let current = try #require(try await session.loadMates(mateID: id).mates.first)
+        #expect(current.welcome == nil && chats.map(\.id) == [runID] && chats.allSatisfy { current.showsChat($0) })
+        #expect(storage.pairing == nil && storage.snapshot == nil && storage.consents.isEmpty)
+
+        session.exitDemo()
+        try session.startDemo()
+        try await eventually { session.isConnected }
+        #expect(try await session.loadMates().mates.map(\.id) == [DemoBackend.mateID])
+        #expect(session.conversations.allSatisfy { $0.id != runID })
+    }
+
+    @Test @MainActor func demoMateAssignmentsFinishAndPublishTheirOutputOffline() async throws {
+        let storage = MemoryStorage()
+        let session = BackendSession(storage: storage)
+        session.restore(); session.setOnline(false); session.setActive(true)
+        try session.startDemo()
+        defer { session.exitDemo() }
+        try await eventually { session.isConnected }
+
+        let mateID = DemoBackend.mateID
+        let title = "Review the release"
+        let brief = "Prepare an iPhone release handoff."
+        let assignment = MateChange.assign(title: title, prompt: brief)
+        let initial = try await session.loadMateTasks(mateID, offset: 0)
+        #expect(session.supportsMateAssignments && initial.items.isEmpty)
+        await #expect(throws: MateConsentRequired.self) { try await session.manageMate(mateID, change: assignment) }
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+        try await session.manageMate(mateID, change: assignment)
+
+        let list = try await session.loadMateTasks(mateID, offset: 0)
+        let task = try #require(list.items.first)
+        let runID = try #require(task.workerRunId)
+        #expect(list.activeCount == 1 && task.status == "running" && task.assignee?.id == mateID)
+        #expect(try await session.listOutputs(runID).items.isEmpty)
+        await session.selectConversation(runID)
+        try await eventually { session.conversations.first { $0.id == runID }?.status == "succeeded" }
+        let finished = try await session.readMateTask(task.id, mateID: mateID)
+        #expect(finished.status == "completed" && finished.brief == brief && finished.result != nil)
+        #expect(try await session.loadMateTasks(mateID, offset: 0).activeCount == 0)
+        let output = try #require(try await session.listOutputs(runID).items.first)
+        #expect(output.name == "mate-assignment-report.md")
+        #expect(try await session.downloadOutput(output) == DemoFile.assignmentReport(title: title, brief: brief).bytes)
+        await session.loadHistory(direction: "refresh")
+        #expect(session.transcript.rows.flatMap(\.media).contains { $0.source == .artifact(output.artifactId) })
+
+        try await session.manageMate(mateID, change: .assign(title: "Cancel this task", prompt: "Start a second handoff."))
+        let toCancel = try #require(try await session.loadMateTasks(mateID, offset: 0).items.first)
+        try await session.manageMate(mateID, change: .cancelTask(toCancel.id))
+        #expect(try await session.readMateTask(toCancel.id, mateID: mateID).status == "canceled")
+        #expect(try await session.listOutputs(try #require(toCancel.workerRunId)).items.isEmpty)
+        #expect(storage.pairing == nil && storage.snapshot == nil && storage.consents.isEmpty)
     }
 
     @Test @MainActor func replayAcknowledgesStreamsAndDeduplicatesCommands() async throws {

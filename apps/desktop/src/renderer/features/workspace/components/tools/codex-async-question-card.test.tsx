@@ -25,16 +25,17 @@ const questions = [{ title: "Which environment?", options: ["Staging", "Producti
 const props = { runId: "run", artifactId: 12, questions };
 const answer = { artifactId: 12, answers: ["Staging", "Check the logs"], clientUserMessageId: asyncQuestionMessageId(12) };
 function shell({ ownerKey = "local/run", runId = "run", storedAnswer, request, historical = false,
-  runStatus = "running", turnId = 1, activeTurnId = 1, state, extraEvents = [] }: {
+  runStatus = "running", turnId = 1, activeTurnId = 1, state, extraEvents = [], showReceipt = true }: {
   ownerKey?: string; runId?: string; storedAnswer?: typeof answer; request?: ToolApprovalRequest; historical?: boolean;
   runStatus?: Run["status"]; turnId?: number; activeTurnId?: number; state?: AsyncQuestionState; extraEvents?: RunEvent[];
+  showReceipt?: boolean;
 } = {}) {
   const event = mapArtifactToEvent({ id: 12, runId, kind: "report", content: "Questions",
     metadata: { source: "codex_async_questions", questions, turnId, asyncQuestionAnswer: storedAnswer, asyncQuestionState: state } });
   return <AsyncQuestionDialogProvider ownerKey={ownerKey} runId={runId} runStatus={runStatus}
     turns={[{ id: activeTurnId, status: runStatus === "running" ? "active" : "completed" }]}
     events={[event, ...extraEvents]} historical={historical}>
-    <CodexAsyncQuestionCard {...props} runId={runId} answer={storedAnswer} state={state} />
+    {showReceipt && <CodexAsyncQuestionCard {...props} runId={runId} answer={storedAnswer} state={state} />}
     <RunInputDialog request={request} onRespond={mocks.nativeRespond} variant="codex" />
   </AsyncQuestionDialogProvider>;
 }
@@ -43,6 +44,19 @@ function fill() {
   fireEvent.click(screen.getByRole("button", { name: "Next" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Custom answer" }), { target: { value: "Check the logs" } });
 }
+
+it("answers questions without a technical transcript card and leaves no receipt after delivery", async () => {
+  mocks.send.mockResolvedValue({ accepted: true, answer });
+  render(shell({ showReceipt: false }));
+  expect(screen.getByText("Question 1 of 2")).toBeTruthy();
+  fill();
+  fireEvent.change(screen.getByRole("textbox", { name: "Custom answer" }), { target: { value: "Check the logs" } });
+  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+  await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+  expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ runId: "run", artifactId: 12, answers: ["Staging", "Check the logs"] }));
+  expect(screen.queryByText("Answer sent")).toBeNull();
+  expect(screen.queryByText(/awaiting an answer|awaiting answers/)).toBeNull();
+});
 
 describe("Codex async questions in the existing approval dialog", () => {
   it("collects sequential answers and sends once only after the last question", async () => {

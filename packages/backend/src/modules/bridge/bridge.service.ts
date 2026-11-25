@@ -15,7 +15,7 @@ import type { BridgeFileTable } from "./bridge.blob-records";
 import { createBridgeIdentity, type BridgeIdentityClient } from "./bridge.identity";
 import type { BridgeDevConfig } from "./bridge.config";
 import { beginBridgeEnrollment, bindBridgeAccount, bridgeProjectScopes, includeBridgeLocalHistory, removeBridgeReplicas, setBridgeProjectScope } from "./bridge.product";
-import { installBridgeCapture } from "./bridge.capture";
+import { installBridgeCapture, scopeSql } from "./bridge.capture";
 import { importClaudeSessionMirror } from "./bridge.session-mirror";
 import { createBridgeServiceLifecycle, type BridgeServiceScope } from "./bridge.service-lifecycle";
 
@@ -221,6 +221,25 @@ export const bridgeService = {
     });
   },
   async syncNow(): Promise<void> { if (!lifecycle.active || !replicator) throw new Error(startupError ?? "Bridge is not configured"); await replicator.syncNow(true); },
+  storageOverview() {
+    if (!lifecycle.active || !replicator) throw new Error("Connect to Bridge to see storage usage");
+    return replicator.storageOverview();
+  },
+  async deleteStorageRun(runId: string) {
+    return exclusive(async () => {
+      if (!lifecycle.active || !replicator || logoutState()?.logout_pending) throw new Error("Connect to Bridge to delete synced conversations");
+      if (!replicator.getStatus().quota?.storageManagement) throw new Error("This Bridge hub does not support storage management");
+      const run = getSqlite().prepare(`SELECT owner_backend_id,(${scopeSql("runs", "runs")}) in_scope FROM runs WHERE id=?`)
+        .get(runId) as { owner_backend_id: string; in_scope: number } | undefined;
+      if (!run?.owner_backend_id) throw new Error("This conversation is no longer available");
+      if (run.owner_backend_id === getLocalBackendId()) {
+        if (!run.in_scope) throw new Error("Enable project sync before deleting this conversation from Bridge");
+        const { runsService } = await import("../runs");
+        await runsService.deleteRun(runId);
+        await replicator.syncNow(true);
+      } else await replicator.deleteRetiredRun(runId, run.owner_backend_id);
+    });
+  },
   resolveFile(table: BridgeFileTable, id: string | number, column?: string, sourcePath?: string): Promise<string> {
     if (!lifecycle.active || !replicator) throw new Error(startupError ?? "Bridge is not configured");
     return replicator.resolveFile(table, id, column, sourcePath);

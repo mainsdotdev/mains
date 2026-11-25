@@ -4,6 +4,9 @@ import Photos
 
 /// The attachment menu and media panels share one reversible, source-anchored surface.
 struct AttachmentPanel: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     enum Mode: String, Identifiable { case menu, camera, photos; var id: String { rawValue } }
     let sourceFrame: CGRect
     let accent: Color
@@ -67,15 +70,17 @@ struct AttachmentPanel: View {
         .task(id: "\(mode.rawValue):\(scenePhase == .active)") {
             if mode == .camera && scenePhase == .active { await camera.start() }
             else { camera.stop() }
-            if mode == .photos && scenePhase == .active { await library.load() }
         }
+        // The permission sheet can temporarily inactivate the scene. It must
+        // not cancel and restart the same photo authorization request.
+        .task(id: mode) { if mode == .photos { await library.load() } }
         .task {
             visible = true
             guard !appeared else { return }
             await Task.yield()
             guard !Task.isCancelled, !closing else { return }
             appeared = true
-            withAnimation(transition) { revealed = true }
+            withAnimation(reduceMotion ? transition : transition.speed(1.35)) { revealed = true }
         }
         .onDisappear { visible = false; closeTask?.cancel(); importGeneration += 1; camera.stop(); importTask?.cancel() }
         .onChange(of: scenePhase) { _, phase in
@@ -154,7 +159,11 @@ struct AttachmentPanel: View {
     private var cameraPanel: some View {
         ZStack(alignment: .bottom) {
             CameraPreview(camera: camera).background(.black)
-            if !camera.ready && camera.error == nil && !closing { ProgressView().tint(.white).frame(maxWidth: .infinity, maxHeight: .infinity) }
+            if !camera.ready && camera.error == nil && !closing {
+                MediaSkeleton(symbol: "camera").environment(\.colorScheme, .dark)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel("Opening camera")
+            }
             if let message = camera.error {
                 VStack(spacing: 12) {
                     Image(systemName: "camera").font(.largeTitle)
@@ -173,8 +182,7 @@ struct AttachmentPanel: View {
                 Button(action: capture) {
                     ZStack {
                         Circle().fill(.black.opacity(0.25)).overlay(Circle().strokeBorder(.white.opacity(0.4), lineWidth: 1))
-                        if importing { ProgressView().tint(.white) }
-                        else { Circle().fill(.white).padding(8) }
+                        Circle().fill(.white.opacity(importing ? 0.5 : 1)).padding(8)
                     }.frame(width: 76, height: 76)
                 }
                 .buttonStyle(ChatPressStyle()).disabled(!camera.ready || importing)
@@ -191,14 +199,21 @@ struct AttachmentPanel: View {
     }
     private var photosPanel: some View {
         GeometryReader { geometry in
-            let side = (geometry.size.width - 4) / 3
+            let side = max(0, (geometry.size.width - 4) / 3)
+            let columns = Array(repeating: GridItem(.fixed(side), spacing: 2), count: 3)
             ZStack {
-                if library.loading { ProgressView() }
+                if library.loading {
+                    LazyVGrid(columns: columns, spacing: 2) {
+                        ForEach(0..<9) { _ in Rectangle().fill(SkeletonLine.fill).frame(height: side) }
+                    }
+                    .frame(maxHeight: .infinity, alignment: .top).clipped().allowsHitTesting(false)
+                    .accessibilityElement(children: .ignore).accessibilityLabel("Loading photos…")
+                }
                 else if let message = library.message {
                     Text(message).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(32)
                 } else {
                     ScrollView {
-                        LazyVGrid(columns: Array(repeating: GridItem(.fixed(side), spacing: 2), count: 3), spacing: 2) {
+                        LazyVGrid(columns: columns, spacing: 2) {
                             ForEach(library.assets, id: \.localIdentifier) { asset in
                                 let order = selected.firstIndex(of: asset.localIdentifier)
                                 Button { toggle(asset.localIdentifier) } label: {
@@ -223,6 +238,7 @@ struct AttachmentPanel: View {
                     }.scrollIndicators(.hidden).accessibilityIdentifier("attachmentPhotoGrid")
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
             .overlay(alignment: .topTrailing) {
                 Button { systemPicker = true } label: {
                     Label("All Photos", systemImage: "photo.on.rectangle").font(.footnote)
@@ -236,10 +252,9 @@ struct AttachmentPanel: View {
                     Spacer()
                     if !selected.isEmpty {
                         Button { importLibrarySelection() } label: {
-                            Group {
-                                if importing { ProgressView().tint(.white) }
-                                else { Text("Add \(selected.count) photo\(selected.count == 1 ? "" : "s")").font(.headline) }
-                            }.foregroundStyle(.white).padding(.horizontal, 24).frame(height: 56).background(accent, in: .capsule)
+                            Text(importing ? "Adding photos…" : "Add \(selected.count) photo\(selected.count == 1 ? "" : "s")")
+                                .font(.headline).foregroundStyle(.white)
+                                .padding(.horizontal, 24).frame(height: 56).background(accent, in: .capsule)
                         }.buttonStyle(ChatPressStyle()).disabled(importing).accessibilityIdentifier("addSelectedPhotos")
                     } else {
                         panelControl("xmark", label: "Close photos", id: "closeAttachmentPanel") { requestClose() }

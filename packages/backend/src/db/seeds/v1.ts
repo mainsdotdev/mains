@@ -48,7 +48,6 @@ export async function run(db: DatabaseInstance): Promise<void> {
     { provider: "asana", displayName: "Asana" },
     { provider: "trello", displayName: "Trello" },
     { provider: "sentry", displayName: "Sentry" },
-    { provider: "socketdev", displayName: "Socket" },
   ];
 
   for (const cp of connectionProviders) {

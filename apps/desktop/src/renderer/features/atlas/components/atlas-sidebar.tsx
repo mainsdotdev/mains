@@ -13,6 +13,9 @@ import { Bookmark, Layers } from "@/components/ui/icons/space";
 import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
 import { ProjectIcon } from "@/components/layout/sidebar/project-icon";
 import { SidebarGroupSection } from "@/components/layout/sidebar/sidebar-group-section";
+import { SidebarTopRows } from "@/components/layout/sidebar/sidebar-top-rows";
+import { cn } from "@/lib/cn";
+import { SIDEBAR_PRIMARY_ACTION_CLASS } from "@/lib/sidebar-layout";
 import { useGetAccountQuery, useListCollectionsQuery } from "@/lib/redux/api";
 import {
   useCreateAtlasPageMutation,
@@ -78,17 +81,9 @@ export function AtlasSidebar() {
 
   return (
     <div className="flex h-full flex-col ">
-      <div className="flex flex-col items-start pt-12 px-5 md:pt-2">
-        <Text size="base" weight="medium" align="left">
-          Atlas
-        </Text>
-      </div>
-      <nav
-        className="shrink-0 space-y-0.5 py-3 px-3"
-        aria-label="Atlas content"
-      >
+      <SidebarTopRows header={<Text as="h2" size="base" weight="medium" className="px-2">Atlas</Text>}>
         <Button
-          className={`${itemClass(false)} mb-3`}
+          className={cn(itemClass(false), SIDEBAR_PRIMARY_ACTION_CLASS)}
           aria-label="New Atlas page"
           disabled={!account || creating.isLoading || !provider.supportsAtlas}
           onClick={() => void newPage()}
@@ -96,6 +91,11 @@ export function AtlasSidebar() {
           <New className="size-3.5 shrink-0" />
           New page
         </Button>
+      </SidebarTopRows>
+      <nav
+        className="shrink-0 space-y-0.5 px-3 pb-3"
+        aria-label="Atlas content"
+      >
         {ATLAS_TYPES.map(({ value, label }) => {
           const active = activeType === value;
           const Icon = typeIcons[value];

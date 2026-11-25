@@ -21,7 +21,11 @@ export function hubMaintenanceDeadline(deadlines: readonly (number | null)[], mo
 export function createHubCompactionLifecycle(storage: DurableObjectStorage) {
   const sql = storage.sql;
   storage.transactionSync(() => {
-    sql.exec(`CREATE TABLE IF NOT EXISTS compaction_jobs(kind TEXT NOT NULL,stream TEXT NOT NULL,register_key TEXT NOT NULL,
+    // Replace the legacy retention triggers without scanning the schema on startup.
+    sql.exec(`DROP TRIGGER IF EXISTS latest_retention_insert;
+      DROP TRIGGER IF EXISTS latest_retention_update;
+      DROP TRIGGER IF EXISTS activity_retention_update;
+      CREATE TABLE IF NOT EXISTS compaction_jobs(kind TEXT NOT NULL,stream TEXT NOT NULL,register_key TEXT NOT NULL,
         due_at INTEGER,after_rowid INTEGER NOT NULL DEFAULT 0,until_rowid INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(kind,stream,register_key));
       CREATE INDEX IF NOT EXISTS compaction_due ON compaction_jobs(due_at,kind,stream,register_key) WHERE due_at IS NOT NULL;
       CREATE INDEX IF NOT EXISTS log_register_seq ON log(stream,register_key,seq);
@@ -40,27 +44,28 @@ export function createHubCompactionLifecycle(storage: DurableObjectStorage) {
         INSERT INTO compaction_jobs(kind,stream,register_key,due_at) VALUES('run','run:'||NEW.run_id,'',0)
           ON CONFLICT(kind,stream,register_key) DO NOTHING;
       END;
-      CREATE TRIGGER IF NOT EXISTS latest_retention_insert AFTER INSERT ON latest
+      CREATE TRIGGER IF NOT EXISTS schedule_retention_on_insert AFTER INSERT ON latest
         WHEN json_extract(NEW.envelope,'$.header.retention')='30d-idle' BEGIN
         INSERT INTO compaction_jobs(kind,stream,register_key,due_at)
           SELECT 'retention',NEW.stream,'',last_activity+${BRIDGE_IDLE_RETENTION_MS} FROM stream_activity WHERE stream=NEW.stream
-          ON CONFLICT(kind,stream,register_key) DO UPDATE SET due_at=excluded.due_at;
+          ON CONFLICT(kind,stream,register_key) DO UPDATE SET due_at=excluded.due_at WHERE compaction_jobs.due_at IS NOT excluded.due_at;
       END;
-      CREATE TRIGGER IF NOT EXISTS latest_retention_update AFTER UPDATE OF envelope ON latest BEGIN
+      CREATE TRIGGER IF NOT EXISTS reschedule_retention_on_update AFTER UPDATE OF envelope ON latest BEGIN
         DELETE FROM compaction_jobs WHERE kind='retention' AND stream=OLD.stream AND NOT EXISTS(
           SELECT 1 FROM latest WHERE stream=OLD.stream AND json_extract(envelope,'$.header.retention')='30d-idle');
         INSERT INTO compaction_jobs(kind,stream,register_key,due_at)
           SELECT 'retention',NEW.stream,'',last_activity+${BRIDGE_IDLE_RETENTION_MS} FROM stream_activity
           WHERE stream=NEW.stream AND json_extract(NEW.envelope,'$.header.retention')='30d-idle'
-          ON CONFLICT(kind,stream,register_key) DO UPDATE SET due_at=excluded.due_at;
+          ON CONFLICT(kind,stream,register_key) DO UPDATE SET due_at=excluded.due_at WHERE compaction_jobs.due_at IS NOT excluded.due_at;
       END;
       CREATE TRIGGER IF NOT EXISTS latest_retention_delete AFTER DELETE ON latest
         WHEN json_extract(OLD.envelope,'$.header.retention')='30d-idle' BEGIN
         DELETE FROM compaction_jobs WHERE kind='retention' AND stream=OLD.stream AND NOT EXISTS(
           SELECT 1 FROM latest WHERE stream=OLD.stream AND json_extract(envelope,'$.header.retention')='30d-idle');
       END;
-      CREATE TRIGGER IF NOT EXISTS activity_retention_update AFTER UPDATE OF last_activity ON stream_activity BEGIN
-        UPDATE compaction_jobs SET due_at=NEW.last_activity+${BRIDGE_IDLE_RETENTION_MS} WHERE kind='retention' AND stream=NEW.stream;
+      CREATE TRIGGER IF NOT EXISTS reschedule_retention_on_activity AFTER UPDATE OF last_activity ON stream_activity BEGIN
+        UPDATE compaction_jobs SET due_at=NEW.last_activity+${BRIDGE_IDLE_RETENTION_MS}
+          WHERE kind='retention' AND stream=NEW.stream AND due_at IS NOT NEW.last_activity+${BRIDGE_IDLE_RETENTION_MS};
       END;`);
     if (!sql.exec("SELECT 1 FROM compaction_jobs WHERE kind='legacy' AND stream='' AND register_key=''").toArray().length) {
       const end = Number(sql.exec("SELECT coalesce(max(rowid),0) n FROM log").one().n);

@@ -2,7 +2,7 @@ import { createDecisionOwner } from "@mains/contracts/decision-owner";
 import { onTransportChange } from "@/lib/transport";
 import { useState, useCallback, useMemo, useLayoutEffect, useReducer } from "react";
 import { ArrowUp, ChevronLeft, Close, Question } from "@/components/ui/icons";
-import { Body, Button, Caption, Checkbox, Input, Text } from "@/components/ui";
+import { Body, Button, Caption, Checkbox, Input, StatusBadge, Text, type StatusTone } from "@/components/ui";
 import {
   ElicitationForm,
   buildElicitationContent,
@@ -35,6 +35,7 @@ interface ToolApprovalDialogProps {
     value: string;
     onChange: (value: string) => void;
     submitLabel?: string;
+    dismissLabel?: string;
     busy?: boolean;
     readOnly?: boolean;
     error?: string;
@@ -207,11 +208,11 @@ function findPluginLogo(
   return undefined;
 }
 
-const RISK_LEVEL_STYLES: Record<string, string> = {
-  high: "bg-danger/15 text-danger",
-  medium: "bg-warning/15 text-warning",
-  low: "bg-success/15 text-success",
-};
+const RISK_TONES = new Map<string, StatusTone>([
+  ["high", "danger"],
+  ["medium", "warning"],
+  ["low", "success"],
+]);
 
 /** The small uppercase line over a request's question. */
 function Eyebrow({ children }: { children: React.ReactNode }) {
@@ -351,7 +352,7 @@ function ToolApprovalDialogContents({
   // skipped outcome, which is approval with no answer. Claude and Copilot
   // dismissals are not skips, and an async question card only closes locally.
   const skipQuestion = request.kind === "ask_user" && !questionControls && (variant === "codex" || variant === "cursor");
-  const questionDismissLabel = skipQuestion ? "Skip" : "Dismiss";
+  const questionDismissLabel = questionControls?.dismissLabel ?? (skipQuestion ? "Skip" : "Dismiss");
   const handleQuestionDismiss = useCallback(() => {
     if (questionControls?.busy) return;
     if (variant === "cursor" && !questionControls) {
@@ -465,15 +466,15 @@ function ToolApprovalDialogContents({
               Cancel
             </Button>
             <Button
-              variant="primary"
-              className="min-w-18 text-primary-700 hover:bg-primary-200/40 dark:text-primary-300 dark:hover:bg-primary-800/50"
+              variant="secondary"
+              className="min-w-18"
               onClick={handleDeny}
               autoFocus={request.defaultToNo}
             >
               Decline
             </Button>
             <Button
-              variant="submit"
+              variant="primary"
               className="min-w-18 font-semibold shadow-sm disabled:opacity-45"
               onClick={isUrlMode ? handleElicitAcceptUrl : handleElicitSubmit}
               disabled={!isUrlMode && elicitSchema.unsupported.length > 0}
@@ -576,7 +577,7 @@ function ToolApprovalDialogContents({
 
           <div className="shrink-0 px-3.5 py-3 sm:px-4">
             <div
-              className={`flex flex-col gap-3 sm:flex-row sm:items-end ${isCursor ? "sm:justify-end" : ""}`}
+              className={`flex flex-col gap-3 sm:flex-row sm:items-center ${isCursor ? "sm:justify-end" : ""}`}
             >
               {!isCursor && (
                 <label className="min-w-0 flex-1">
@@ -597,17 +598,17 @@ function ToolApprovalDialogContents({
                       if (!request.defaultToNo) handleSubmitAnswer();
                     }}
                     placeholder="Type a custom answer…"
-                    className="w-full rounded-xl glass-input  px-3 py-2 text-xs text-primary-900 transition-colors placeholder:text-primary-500 focus:outline-none dark:bg-primary-800/50 dark:text-primary-100 dark:placeholder:text-primary-500"
+                    className="min-h-11 w-full rounded-xl glass-input px-3 py-2 text-xs text-primary-900 transition-colors placeholder:text-primary-500 focus:outline-none dark:bg-primary-800/50 dark:text-primary-100 dark:placeholder:text-primary-500"
                   />
                 </label>
               )}
-              <div className="flex shrink-0 items-center justify-end gap-2 sm:pb-px">
+              <div className="flex shrink-0 items-center justify-end gap-2">
                 {questionControls?.onPrevious && (
                   <Button variant="ghost" disabled={questionControls.busy || questionControls.readOnly} onClick={questionControls.onPrevious}>Back</Button>
                 )}
                 <Button
-                  variant="primary"
-                  className="min-w-18  text-primary-700 hover:bg-primary-200/40  dark:text-primary-300 dark:hover:bg-primary-800/50"
+                  variant="secondary"
+                  className="min-w-18"
                   onClick={handleQuestionDismiss}
                   autoFocus={request.defaultToNo}
                   disabled={questionControls?.busy}
@@ -616,7 +617,7 @@ function ToolApprovalDialogContents({
                 </Button>
                 {!(submitsOnChoose && isCursor) && (
                   <Button
-                    variant="submit"
+                    variant="primary"
                     className="min-w-18 font-semibold shadow-sm disabled:opacity-45"
                     onClick={handleSubmitAnswer}
                     disabled={!canSubmit || questionControls?.busy}
@@ -656,6 +657,7 @@ function ToolApprovalDialogContents({
     typeof meta?.riskLevel === "string"
       ? meta.riskLevel.toLowerCase()
       : undefined;
+  const riskTone = riskLevel ? RISK_TONES.get(riskLevel) : undefined;
   const message =
     request.question ??
     (typeof request.toolInput?.message === "string" ? request.toolInput.message : undefined) ??
@@ -684,14 +686,10 @@ function ToolApprovalDialogContents({
         <Text as="span" tone="muted" weight="medium">
           {request.header || header.label}
         </Text>
-        {riskLevel && RISK_LEVEL_STYLES[riskLevel] && (
-          <span
-            className={`ml-auto rounded-full px-2 py-0.5 text-xxs font-medium capitalize ${RISK_LEVEL_STYLES[riskLevel]}`}
-          >
-            {riskLevel} risk
-          </span>
+        {riskTone && (
+          <StatusBadge tone={riskTone} className="ml-auto capitalize">{riskLevel} risk</StatusBadge>
         )}
-        <CloseControl className={riskLevel && RISK_LEVEL_STYLES[riskLevel] ? undefined : "ml-auto"} onClick={handleDeny} />
+        <CloseControl className={riskTone ? undefined : "ml-auto"} onClick={handleDeny} />
       </div>
 
       <div className="shrink-0 px-4 pb-3 pt-0.5">
@@ -786,7 +784,7 @@ function ToolApprovalDialogContents({
           <Button variant="secondary" onClick={handleDeny} autoFocus={request.defaultToNo}>
             Cancel
           </Button>
-          <Button variant="submit" onClick={handleAllow}>
+          <Button variant="primary" onClick={handleAllow}>
             Allow
           </Button>
         </div>

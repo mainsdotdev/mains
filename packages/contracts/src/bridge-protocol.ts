@@ -23,6 +23,10 @@ export type BridgeHeader = BridgeHeaderBase & (
   | { op: "upsert"; registerKey: string; /** Authenticated, account-private liveness roots; absent on legacy records. */ blobs?: BridgeBlobIdentity[] }
   | { op: "delete"; registerKey?: never; blobs?: never }
 );
+/** Owners sign their own writes. Account members can sign only a root delete for a retired owner. */
+export function isBridgeRetiredRunDelete(header: BridgeHeader): boolean {
+  return header.op === "delete" && header.stream === "account" && !!header.runId && !!header.owner && header.owner !== header.origin;
+}
 export type BridgeValue = string | number | boolean | null;
 export interface BridgeUpsertBody {
   table: string;

@@ -5,14 +5,14 @@ import type { BridgeAuthStatus } from "@mains/contracts/bridge-auth";
 import type { BridgeStatus, BridgeProjectScope } from "@mains/contracts/bridge";
 import BridgeSettings from "./bridge";
 
-const fixture = vi.hoisted(() => ({ transportKind: "ws" as "ws" | "ipc", status: {} as BridgeAuthStatus, sync: undefined as BridgeStatus | undefined, projects: [] as BridgeProjectScope[], scope: vi.fn(), include: vi.fn(), approve: vi.fn(), confirmKey: vi.fn(), revoke: vi.fn(), recover: vi.fn(), take: vi.fn(), regenerate: vi.fn(), signIn: vi.fn(), signOut: vi.fn(), syncNow: vi.fn(), refetch: vi.fn() }));
+const fixture = vi.hoisted(() => ({ transportKind: "ws" as "ws" | "ipc", status: {} as BridgeAuthStatus, sync: undefined as BridgeStatus | undefined, projects: [] as BridgeProjectScope[], scope: vi.fn(), include: vi.fn(), approve: vi.fn(), confirmKey: vi.fn(), revoke: vi.fn(), recover: vi.fn(), take: vi.fn(), regenerate: vi.fn(), signIn: vi.fn(), signOut: vi.fn(), syncNow: vi.fn(), refetch: vi.fn(), storage: vi.fn(), deleteRun: vi.fn() }));
 vi.mock("@/lib/redux/api/bridgeApi", () => ({
   useGetBridgeAuthStatusQuery: () => ({ data: fixture.status, refetch: fixture.refetch }),
   useGetBridgeStatusQuery: () => ({ data: fixture.sync, refetch: fixture.refetch }),
   useGetBridgeProjectScopesQuery: () => ({ data: fixture.projects, refetch: fixture.refetch }),
   useSyncBridgeNowMutation: () => [fixture.syncNow],
 }));
-vi.mock("@/lib/transport", () => ({ getTransport: () => ({ kind: fixture.transportKind }), appApi: { bridge: { approveBackend: fixture.approve, confirmAccountKey: fixture.confirmKey, revokeBackend: fixture.revoke, enterRecoveryCode: fixture.recover, takeRecoveryCode: fixture.take, regenerateRecoveryCode: fixture.regenerate, signIn: fixture.signIn, signOut: fixture.signOut, setProjectLocalOnly: fixture.scope, includeLocalHistory: fixture.include } } }));
+vi.mock("@/lib/transport", () => ({ getTransport: () => ({ kind: fixture.transportKind }), appApi: { bridge: { approveBackend: fixture.approve, confirmAccountKey: fixture.confirmKey, revokeBackend: fixture.revoke, enterRecoveryCode: fixture.recover, takeRecoveryCode: fixture.take, regenerateRecoveryCode: fixture.regenerate, signIn: fixture.signIn, signOut: fixture.signOut, setProjectLocalOnly: fixture.scope, includeLocalHistory: fixture.include, storageOverview: fixture.storage, deleteStorageRun: fixture.deleteRun } } }));
 vi.mock("@/hooks/use-suppress-browser-view", () => ({ useSuppressBrowserView: () => {} }));
 
 beforeEach(() => {
@@ -31,6 +31,26 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("Bridge key management", () => {
+  it("shows estimated reclaimable storage and requires confirmation for a removed device's chat", async () => {
+    fixture.sync = { enabled: true, state: "connected", backendId: "A", label: "A", lastSyncedAt: null, error: null, pendingRecords: 0, backends: [], runs: [],
+      quota: { plan: "standard", usedBytes: 3072, limitBytes: 1024 ** 3, recordBytes: 1024, blobBytes: 2048, reservedBytes: 0, fileLimitBytes: 50 * 1024 ** 2, writesPerMinute: 600, storageManagement: true } };
+    const active = { id: "active", kind: "run", title: "Active chat", canDelete: false, recordBytes: 1024, blobBytes: 0, reclaimableBlobBytes: 0 };
+    fixture.storage.mockResolvedValueOnce({ success: true, data: { hasMore: false, items: [
+      { id: "retired", kind: "run", title: "Old laptop chat", ownerRetired: true, canDelete: true, recordBytes: 1024, blobBytes: 2048, reclaimableBlobBytes: 0 }, active,
+    ] } }).mockResolvedValueOnce({ success: true, data: { hasMore: false, items: [active] } });
+    fixture.deleteRun.mockResolvedValue({ success: true });
+    render(<BridgeSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "Manage storage" }));
+    const row = await screen.findByRole("row", { name: /Old laptop chat/ });
+    expect(within(row).getByText("3 KiB")).toBeTruthy();
+    expect(within(row).getByText("1 KiB")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Delete Active chat" })).toBeNull();
+    fireEvent.click(within(row).getByRole("button", { name: "Delete Old laptop chat" }));
+    expect(fixture.deleteRun).toHaveBeenCalledTimes(0);
+    fireEvent.click(screen.getByRole("button", { name: "Delete conversation" }));
+    await waitFor(() => expect(fixture.deleteRun).toHaveBeenCalledWith("retired"));
+    await waitFor(() => expect(screen.queryByText("Old laptop chat")).toBeNull());
+  });
   it("identifies blocked local changes and offers an explicit retry without a global sync error", async () => {
     fixture.sync = { enabled: true, state: "syncing", backendId: "A", label: "A", lastSyncedAt: null, error: null, pendingRecords: 1, backends: [], runs: [],
       blockedRecordCount: 1, blockedRecords: [{ table: "atlas_items", pk: "file-id", register: "content", stream: "account", label: "Trip notes", error: "Bridge source file integrity check failed", attempts: 2, retryAt: "2026-10-27T12:01:00Z" }] };

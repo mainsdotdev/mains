@@ -2,6 +2,61 @@ import Foundation
 import Testing
 @testable import MainsCore
 
+@Test func tableColumnsFillTheViewportWithoutClippingMeasuredHeaderText() {
+    // The semibold header's width is larger than a regular-font estimate.
+    let measured = [90.25, 120.1, 70.0]
+    let widths = MessageTableSizing.columnWidths(measured, proposedWidth: 340)
+    #expect(abs(widths.reduce(0, +) - 340) < 0.001)
+    #expect(zip(widths, measured).allSatisfy { $0 >= $1 })
+    #expect(widths.allSatisfy { $0 >= 86 })
+}
+
+@Test func wideTablesRetainReadableColumnsAndScaledTextCanScrollHorizontally() {
+    let measured = [205.2, 100.0, 130.8]
+    let widths = MessageTableSizing.columnWidths(measured, proposedWidth: 280)
+    #expect(widths.reduce(0, +) > 280)
+    #expect(zip(widths, measured).allSatisfy { $0 >= $1 })
+    let scaled = MessageTableSizing.columnWidths([300, 190, 210], proposedWidth: 340, minimum: 172, maximum: 520)
+    #expect(scaled.reduce(0, +) >= 700 && scaled[0] >= 300)
+    #expect(MessageTableSizing.columnWidths([10000], proposedWidth: nil) == [260])
+    #expect(MessageTableSizing.columnWidths([], proposedWidth: 340).isEmpty)
+}
+
+@Test func tableRowsGiveEveryColumnTheSameHeightEvenWithEmptyOrWrappedCells() {
+    let heights = MessageTableSizing.rowHeights([44, 68.2, 44, 44, 44, 44, 68.1, 44, 44], columns: 3)
+    #expect(heights == [69, 44, 69])
+    #expect(MessageTableSizing.rowHeights([], columns: 3).isEmpty)
+    #expect(MessageTableSizing.rowHeights([44], columns: 0).isEmpty)
+}
+
+@Test func atlasImagesRemainInPlaceBetweenUnmodifiedMarkdownSections() {
+    let before = "## Scope\n\nText with **bold**, $x^2$ and İstanbul 🌍.\n\n"
+    let after = "\n\n| Name | Value |\n|---|---|\n| A | B |"
+    let sections = AtlasPageSection.parse(before + "![Screenshot.png](atlas-file://image-123)" + after)
+    #expect(sections == [.markdown(before), .image(.init(fileId: "image-123", caption: "Screenshot.png")), .markdown(after)])
+    #expect(AtlasPageSection.parse("![](<atlas-file://second-image> \"Title\")") == [.image(.init(fileId: "second-image", caption: ""))])
+}
+
+@Test func atlasImageExamplesInCodeAndMathAndExternalPathsDoNotBecomeAutomaticReads() {
+    for source in ["```md\n![Example](atlas-file://not-a-file)\n```", "~~~\n![Example](atlas-file://not-a-file)\n~~~",
+                   "    ![Example](atlas-file://not-a-file)", "`![Example](atlas-file://not-a-file)`",
+                   "\\![Escaped](atlas-file://not-a-file)", "![Remote](https://example.com/photo.png)",
+                   "![Local](file:///private/photo.png)", "$$\n![Example](atlas-file://not-a-file)\n$$",
+                   "\\[\n![Example](atlas-file://not-a-file)\n\\]", "![Bad](atlas-file://../private)"] {
+        #expect(AtlasPageSection.parse(source) == [.markdown(source)])
+    }
+}
+
+@Test func atlasInlineImagesAndCaptionsAreBoundedWithoutChangingTablesOrOrdinaryProse() {
+    let source = "# Notes\n\n|A|B|\n|-|-|\n|1|2|\n\n$$x^2$$\n\n> quote"
+    #expect(AtlasPageSection.parse(source) == [.markdown(source)])
+    let images = (0..<25).map { "![\(String(repeating: "🌍", count: 300))](atlas-file://image-\($0))" }.joined(separator: "\n")
+    let selected = AtlasPageSection.parse(images).compactMap { section -> AtlasPageImageReference? in
+        if case .image(let reference) = section { return reference }; return nil
+    }
+    #expect(selected.count == 20 && selected.allSatisfy { $0.caption.count == 240 })
+}
+
 @Test func emailTableRendersAsATableWithInlineFormattingIntact() throws {
     let source = """
     You received **4 emails** today.

@@ -57,7 +57,7 @@ describe("Settings sections", () => {
     );
     expect(getSettingsSection("notifications").label).toBe("Notifications");
     expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).toContain("backends");
-    expect(getSettingsSection("backends").label).toBe("Mains Connect");
+    expect(getSettingsSection("backends").label).toBe("Connect");
     expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).not.toContain("bridge");
   });
 

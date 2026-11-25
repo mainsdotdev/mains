@@ -24,6 +24,18 @@ function Location() {
 }
 
 describe("PromptMarkdown", () => {
+  it("renders a saved assistant's exact token as its human name without a skill destination", () => {
+    render(createElement(MemoryRouter, null, createElement(PromptMarkdown, {
+      skills: [{ name: "123", token: "@assistant-123", displayName: "TestFlight", scope: "assistant", assistantAvatar: { shape: "cube", color: "mint" } }],
+    }, "@assistant-123 check build 42")));
+    expect(screen.getByText("TestFlight").parentElement?.style.color).toMatch(/#237d66 var\(--assistant-mention-ink\), #81cfb4/i);
+    expect(document.querySelector('[data-avatar-shape="cube"]')).toBeTruthy();
+    expect(screen.queryByText(/@assistant-123/)).toBeNull();
+    fireEvent.click(screen.getByText("TestFlight"));
+    expect(openDocument).not.toHaveBeenCalled();
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
   it("opens a sent skill mention's Markdown document through the composer navigation", async () => {
     const path = "/Users/user/.claude/skills/frontend-design/SKILL.md";
     const checkPath = vi.spyOn(appApi.fileExplorer, "getPathInfo").mockResolvedValue({

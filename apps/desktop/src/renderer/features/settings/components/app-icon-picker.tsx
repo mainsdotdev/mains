@@ -6,6 +6,7 @@ import {
   ATLAS_APP_ICON_ID,
   BRIDGE_APP_ICON_ID,
   DEFAULT_APP_ICON_ID,
+  MATE_APP_ICON_ID,
   type AppIconId,
 } from "../../../../shared/app-icons";
 import { SettingsRow, SettingsSection } from "./settings-layout";
@@ -89,7 +90,7 @@ export function AppIconPicker() {
         description="Customize how Mains appears in your Dock"
       >
         <div
-          className="flex items-center gap-3"
+          className="flex flex-wrap items-center gap-3"
           role="group"
           aria-label="Dock icon"
           aria-busy={loading || pending}
@@ -97,6 +98,7 @@ export function AppIconPicker() {
           {renderChoice(DEFAULT_APP_ICON_ID, "Default")}
           {renderChoice(ATLAS_APP_ICON_ID, "Atlas")}
           {renderChoice(BRIDGE_APP_ICON_ID, "Bridge")}
+          {renderChoice(MATE_APP_ICON_ID, "Mate")}
         </div>
       </SettingsRow>
     </SettingsSection>

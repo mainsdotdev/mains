@@ -8,8 +8,8 @@ import {
   useSyncExternalStore,
   type RefObject,
 } from "react";
-import { useNavigate } from "react-router-dom";
-import { Button, Heading3, Muted, Text, toast } from "@/components/ui";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Button, Heading3, Muted, SegmentedTabs, Text, toast } from "@/components/ui";
 // import { Plus } from "@/components/ui/icons";
 import { PageShell } from "@/components/layout/page-shell";
 import {
@@ -19,7 +19,7 @@ import {
   useAbortRunMutation,
   type Space,
 } from "@/lib/redux/api";
-import { useGetProviderSkillsQuery } from "@/lib/redux/api/providersApi";
+import { useGetProviderAccountInfoQuery, useGetProviderByIdQuery, useGetProviderSkillsQuery } from "@/lib/redux/api/providersApi";
 import { store } from "@/lib/redux";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import {
@@ -52,6 +52,10 @@ import {
 } from "../lib/atlas-navigation";
 import {
   findImageGenSkill,
+  IMAGE_PROVIDERS,
+  isImageGenSkill,
+  isImageProvider,
+  type ImageProvider,
   // IMAGE_TEMPLATES,
   imageGenContext,
   imagePrompt,
@@ -92,15 +96,43 @@ function ImageCreatorSetup({
   collectionId: string | null;
   runId?: string;
 }) {
-  const setup = useImageCreatorSetup(accountId, runId);
-  if (setup.error) return <PageShell>
+  const [params, setParams] = useSearchParams();
+  const requested = params.get("provider");
+  const selected = isImageProvider(requested) ? requested : "codex";
+  const setup = useImageCreatorSetup(accountId, runId, selected);
+  const providerId = setup.space && isImageProvider(setup.space.providerId) ? setup.space.providerId : selected;
+  const [transport] = useState(getTransport);
+  // A provider switch retires submission tickets even though both providers share the draft.
+  const lifecycle = useMemo(() => createImageCreatorLifecycle(() => getTransport() === transport, accountId),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [transport, accountId, providerId]);
+  const lifecycleState = useSyncExternalStore(lifecycle.subscribe, lifecycle.snapshot);
+  const changeProvider = (next: ImageProvider) => {
+    if (next === selected || lifecycle.snapshot().phase !== "idle") return;
+    setParams((current) => {
+      const updated = new URLSearchParams(current);
+      updated.set("provider", next);
+      return updated;
+    }, { replace: true });
+  };
+  const body = setup.error ? <>
     <Text role="alert">{setup.error}</Text>
     {setup.canRetry && <Button variant="ghost" onClick={setup.retry}>Retry</Button>}
-  </PageShell>;
-  if (!setup.space) return <PageShell><Muted>Opening image creator…</Muted></PageShell>;
-  return <ActiveSpaceOverrideProvider space={setup.space}>
-    <ImageComposer accountId={accountId} collectionId={setup.collectionId ?? collectionId} runId={runId} space={setup.space} />
-  </ActiveSpaceOverrideProvider>;
+  </> : setup.space ? <ActiveSpaceOverrideProvider space={setup.space}>
+    <ImageComposer key={setup.space.id} accountId={accountId} collectionId={runId ? setup.collectionId ?? null : collectionId} runId={runId}
+      space={setup.space} providerId={providerId} lifecycle={lifecycle} />
+  </ActiveSpaceOverrideProvider> : <Muted>Opening image creator…</Muted>;
+  if (runId) return setup.space ? body : <PageShell>{body}</PageShell>;
+  return (
+    <div className="flex h-full min-h-0 flex-col justify-center-safe overflow-y-auto noscrollbar px-5 py-12">
+      <div className="mx-auto w-full max-w-210 shrink-0">
+        <Heading3 className="mb-5 text-center text-3xl font-normal">What do you want to create?</Heading3>
+        <SegmentedTabs className="mx-auto mb-6 w-fit" semantics="radiogroup" aria-label="Image provider"
+          value={selected} options={IMAGE_PROVIDERS} onChange={changeProvider} disabled={lifecycleState.phase !== "idle"} />
+        {body}
+      </div>
+    </div>
+  );
 }
 
 function ImageComposer({
@@ -108,16 +140,18 @@ function ImageComposer({
   collectionId,
   runId,
   space,
+  providerId,
+  lifecycle,
 }: {
   accountId: string;
   collectionId: string | null;
   runId?: string;
   space: Space;
+  providerId: ImageProvider;
+  lifecycle: ReturnType<typeof createImageCreatorLifecycle>;
 }) {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
-  const [transport] = useState(getTransport);
-  const [lifecycle] = useState(() => createImageCreatorLifecycle(() => getTransport() === transport, accountId));
   const lifecycleState = useSyncExternalStore(lifecycle.subscribe, lifecycle.snapshot);
   useLayoutEffect(() => {
     const detach = lifecycle.attach();
@@ -129,7 +163,7 @@ function ImageComposer({
     backendId ?? "local",
     "atlas-image",
     accountId,
-    space.id,
+    runId ? space.id : null,
     runId ?? "new",
     collectionId,
   ]);
@@ -153,10 +187,18 @@ function ImageComposer({
     (text: string) => { lifecycle.editDraft(); dispatch(setDraftText({ key: composerKey, text })); },
     [dispatch, composerKey, lifecycle],
   );
+  const usesSkill = providerId === "codex";
   const skills = useGetProviderSkillsQuery({ id: "codex" }, {
+    skip: !usesSkill,
     refetchOnMountOrArgChange: true,
   });
-  const imageGen = findImageGenSkill(skills.data);
+  const cursor = useGetProviderByIdQuery("cursor", { skip: usesSkill });
+  const cursorAccount = useGetProviderAccountInfoQuery("cursor", { skip: usesSkill, refetchOnMountOrArgChange: true });
+  const cursorChecking = cursor.isLoading || cursorAccount.isFetching;
+  const cursorReady = !cursorChecking && !cursor.error && !cursorAccount.error &&
+    cursor.data?.isEnabled === true && cursorAccount.data?.cli?.compatibility !== "unsupported" &&
+    (cursorAccount.data?.account?.type === "cursor" || !!cursor.data.config?.apiKey);
+  const imageGen = usesSkill ? findImageGenSkill(skills.data) : undefined;
   const checkingSkill = skills.isLoading || skills.isFetching;
   const readySkill = availableImageSkill(imageGen, checkingSkill, skills.error);
   const skillContext = useMemo(
@@ -189,12 +231,24 @@ function ImageComposer({
     if (!text.includes(`$${readySkill.name}`))
       setDraft(imagePrompt(text, readySkill));
   }, [readySkill, selectSkill, setDraft, composerKey]);
+  useLayoutEffect(() => {
+    if (usesSkill || runId) return;
+    const state = store.getState().workspace;
+    const items = state.composerContextKey === composerKey ? state.contextItems : state.contextItemsByKey[composerKey] ?? EMPTY_CONTEXT;
+    const next = items.filter((item) => item.kind !== "skill" || !isImageGenSkill(item));
+    const tokens = new Set(items.flatMap((item) => item.kind === "skill" && isImageGenSkill(item) ? [`$${item.name}`] : []));
+    const text = state.draftTextByKey[composerKey] ?? "";
+    const cleaned = text.replace(/\$[\w-]+/g, (token) =>
+      tokens.has(token) || isImageGenSkill({ name: token.slice(1) }) ? "" : token);
+    if (text !== cleaned) setDraft(cleaned.trimStart());
+    if (items.length !== next.length) dispatch(setContextItemsForKey({ key: composerKey, items: next }));
+  }, [usesSkill, runId, composerKey, setDraft, dispatch]);
   const [files, setFiles] = useTransientUploads(composerKey);
   const uploadInputRef = useRef<HTMLInputElement>(null);
-  const selection = { ...LOCAL_SELECTION, operationIsCurrent: lifecycle.current };
+  const selection = { ...LOCAL_SELECTION, operationIsCurrent: lifecycle.current, atlasImage: true } as const;
   const ws = useWorkspaceRuns(
     undefined,
-    "codex",
+    providerId,
     "work",
     runId,
     NO_WORKSPACES,
@@ -203,8 +257,8 @@ function ImageComposer({
   const activeRun = ws.activeRun;
   const conversation = useConversationSettings({
     backendId,
-    providerId: "codex",
-    ownerKey: runId ? runOwnerKey(backendId, runId) : composerKey,
+    providerId,
+    ownerKey: runId ? runOwnerKey(backendId, runId) : usesSkill ? composerKey : JSON.stringify([composerKey, providerId]),
     runId: runId ?? null,
     run: activeRun,
     latestModel: [...ws.currentTurns].reverse().find((turn) => turn.model)
@@ -221,15 +275,10 @@ function ImageComposer({
   const activity =
     activeRun?.status === "running" || activeRun?.status === "queued";
   useLayoutEffect(() => { lifecycle.observeRun(activeRun); }, [lifecycle, activeRun]);
-  const canSubmit = allowsImageSubmission({ skill: readySkill, prompt: draft, runsLoaded: ws.runsLoaded,
-    settingsReady: conversation.ready, loading: ws.isLoading, runId, activeRun });
+  const canSubmit = allowsImageSubmission({ providerId, skill: readySkill, prompt: draft, runsLoaded: ws.runsLoaded,
+    settingsReady: conversation.ready && (usesSkill || cursorReady), loading: ws.isLoading, runId, activeRun });
   useLayoutEffect(() => { lifecycle.observeEligibility(canSubmit, readySkill); }, [lifecycle, canSubmit, readySkill]);
   const submit = async () => {
-    if (
-      !skillContext ||
-      !readySkill
-    )
-      return;
     const ticket = lifecycle.beginSubmission(canSubmit);
     if (!ticket) return;
     const settings = conversation.settings;
@@ -237,18 +286,18 @@ function ImageComposer({
     const uploadSubmission = createUploadSubmission(files);
     ticket.own(() => uploadSubmission.close());
     const submittedFiles = uploadSubmission.files;
-    const submittedContext = [
+    const submittedContext = skillContext ? [
       ...contextItems.filter(
         (item) => item.kind !== "skill" || item.name !== skillContext.name,
       ),
       skillContext,
-    ];
+    ] : contextItems;
     try {
       const uploads = submittedFiles.length
         ? await serializeAttachments(submittedFiles)
         : undefined;
       if (!ticket.submit()) return;
-      const message = draft.includes(`$${readySkill.name}`)
+      const message = !readySkill || draft.includes(`$${readySkill.name}`)
         ? draft
         : imagePrompt(draft, readySkill);
       const accepted = runId
@@ -264,7 +313,7 @@ function ImageComposer({
         : await ws.executeRun(
             message,
             undefined,
-            "codex",
+            providerId,
             settings.model,
             uploads,
             submittedContext,
@@ -293,7 +342,7 @@ function ImageComposer({
           key: composerKey,
           items: latestContext.filter(
             (item) =>
-              (item.kind === "skill" && item.name === skillContext.name) ||
+              (item.kind === "skill" && item.name === skillContext?.name) ||
               !submittedContext.includes(item),
           ),
         }),
@@ -341,7 +390,7 @@ function ImageComposer({
       allowVoice={false}
       showGoalButton={false}
       showPluginsButton={false}
-      providerId="codex"
+      providerId={providerId}
       selectedModel={conversation.settings.model}
       onModelChange={conversation.changeModel}
       settingsConfig={conversation.settings.config}
@@ -359,7 +408,7 @@ function ImageComposer({
       sendLabel="Create image"
     />
   );
-  const skillNotice = !readySkill && (
+  const skillNotice = usesSkill && !readySkill && (
     <div className="mx-auto mb-5 flex w-full max-w-210 flex-wrap items-center justify-between gap-3 rounded-2xl glass-card px-4 py-3">
       <Text size="s">
         {checkingSkill
@@ -377,26 +426,42 @@ function ImageComposer({
       )}
     </div>
   );
+  const cursorNotice = !usesSkill && (
+    cursorChecking ? <Muted className="mb-3">Checking Cursor…</Muted> :
+    cursor.data?.isEnabled === false ? <Text role="alert" className="mb-3">Enable Cursor in Settings to create images.</Text> :
+    cursor.error || cursorAccount.error ? <div className="mb-3 flex items-center gap-3">
+      <Text role="alert">Could not check Cursor.</Text>
+      <Button variant="ghost" onClick={() => { void cursor.refetch(); void cursorAccount.refetch(); }}>Retry</Button>
+    </div> : null
+  );
+  const composerBody = <>
+    {skillNotice}
+    {cursorNotice}
+    {ws.error && <Text role="alert" className="mb-3">{ws.error}</Text>}
+    <ComposerSlot request={approval} onRespond={respond} variant={providerId} maxHeight="30dvh">
+      {composer}
+    </ComposerSlot>
+    {cancelPreparation}
+  </>;
   return (
-    <PluginLogoProvider providerId="codex">
+    <PluginLogoProvider providerId={providerId}>
     <AsyncQuestionDialogProvider ownerKey={runOwnerKey(backendId, ws.activeRunId ?? runId ?? "new")}
       runId={ws.activeRunId} runStatus={ws.activeRun?.status} turns={ws.currentTurns}
       events={ws.currentEvents} historical={ws.history?.historical}>
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-3">
-          {runId && (
-            <Button
-              variant="ghost"
-              onClick={() =>
-                navigate(atlasImageCreatorHref(collectionId ?? ""))
-              }
-            >
-              New image
-            </Button>
-          )}
-        </div>
         {runId ? (
           <>
+            <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-3">
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  navigate(atlasImageCreatorHref(collectionId ?? "", undefined, providerId))
+                }
+              >
+                New image
+              </Button>
+              <Muted>{IMAGE_PROVIDERS.find((option) => option.value === providerId)?.label}</Muted>
+            </div>
             <div className="min-h-0 flex-1 overflow-hidden">
               <WorkspaceEvents
                 runs={ws.runs}
@@ -408,32 +473,16 @@ function ImageComposer({
                 issueTabs={[]}
                 eventsEndRef={ws.eventsEndRef as RefObject<HTMLDivElement>}
                 isSubmitting={busy}
-                variant="codex"
+                variant={providerId}
               />
             </div>
             <div className="shrink-0 px-5 pb-4">
-              {skillNotice}
-              {ws.error && <Text role="alert">{ws.error}</Text>}
-              <ComposerSlot request={approval} onRespond={respond} variant="codex" maxHeight="30dvh">
-                {composer}
-              </ComposerSlot>
-              {cancelPreparation}
+              {composerBody}
             </div>
           </>
         ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto noscrollbar px-5 pb-12">
-            <div className="mx-auto w-full max-w-210 pt-[min(24dvh,240px)]">
-              <Heading3 className="mb-8 text-center text-3xl font-normal">
-                What do you want to create?
-              </Heading3>
-              {skillNotice}
-              {ws.error && (
-                <Text role="alert" className="mb-3">
-                  {ws.error}
-                </Text>
-              )}
-              {composer}
-              {cancelPreparation}
+          <>
+              {composerBody}
               {/* Templates are temporarily hidden until this section is revisited.
               <section className="mt-10" aria-label="Image templates">
                 <Text className="mb-4" weight="medium">
@@ -465,8 +514,7 @@ function ImageComposer({
                 </div>
               </section>
               */}
-            </div>
-          </div>
+          </>
         )}
       </div>
     </AsyncQuestionDialogProvider>

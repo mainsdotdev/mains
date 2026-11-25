@@ -27,6 +27,176 @@ describe("conversation history pages", () => {
   beforeEach(() => { ({ db, cleanup } = createTestDb()); createRun(db, { id: "r" }); });
   afterEach(() => cleanup());
 
+  it("keeps twenty conversation blocks visible despite hundreds of hidden child events", () => {
+    for (let i = 0; i < 45; i++) turn(i);
+    for (let i = 0; i < 450; i++) {
+      createRunArtifact(db, { runId: "r", kind: "report", content: "Child output", createdAt: at(45, i), metadata: JSON.stringify({ isFromSubagent: true }) });
+      createToolCall(db, { runId: "r", parentToolCallId: "child-root", createdAt: at(45, i), output: JSON.stringify({ stdout: "x".repeat(128_000) }) });
+    }
+    const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    expect(prompts(page)).toEqual(Array.from({ length: 20 }, (_, i) => `prompt-${i + 25}`));
+    expect(page.artifacts.filter(row => row.content?.startsWith("reply-"))).toHaveLength(20);
+    expect(page.artifacts.length + page.toolCalls.length).toBe(400);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(page.activity?.omittedCount).toBeGreaterThan(0);
+    expect(page.hasOlder).toBe(true);
+    expect(page.hasNewer).toBe(false);
+  });
+
+  it.each(["rows", "bytes"])("retains the newest dialogue when the native window runs out of %s", (limit) => {
+    turn(0);
+    const prompt = createRunArtifact(db, { runId: "r", kind: "user-prompt" as "report", content: "Latest prompt", createdAt: at(1) });
+    const replies = Array.from({ length: 410 }, (_, index) => createRunArtifact(db, {
+      runId: "r", kind: "report", content: limit === "bytes" ? "x".repeat(7900) : `reply ${index}`,
+      createdAt: at(2, index),
+    }).id);
+
+    const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    const bytes = Buffer.byteLength(JSON.stringify(page));
+    expect(page.artifacts.map(row => row.id)).toEqual([prompt.id, ...replies.slice(1 - page.artifacts.length)]);
+    if (limit === "rows") {
+      expect(page.artifacts).toHaveLength(400);
+    } else {
+      expect(page.artifacts.length).toBeLessThan(400);
+      expect(bytes).toBeGreaterThan(1024 * 1024);
+      expect(bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    }
+    expect(page.activity).toMatchObject({ start: page.start, omittedCount: replies.length + 4 - page.artifacts.length - page.toolCalls.length });
+  });
+
+  it("rejects malformed native window and activity range options", () => {
+    const start: RunHistoryCursor = { timestamp: 1, source: "artifact", id: 1 };
+    const end: RunHistoryCursor = { timestamp: 2, source: "tool", id: 2 };
+    expect(() => validateHistoryRequest({ runId: "r", conversationWindow: true })).toThrow("Invalid conversation window");
+    expect(() => validateHistoryRequest({ runId: "r", profile: "mobile", conversationWindow: true, range: { start, end } })).toThrow("Invalid activity range");
+    expect(() => validateHistoryRequest({ runId: "r", profile: "mobile", range: { start: end, end: start } })).toThrow("Invalid activity range");
+    expect(() => validateHistoryRequest({ runId: "r", profile: "mobile", range: { start, end: { ...end, id: Infinity } } })).toThrow("Invalid history cursor");
+    expect(() => validateHistoryRequest({ runId: "r", profile: "mobile", range: { start, end } })).not.toThrow();
+  });
+
+  it("keeps the latest question and live thought without presenting hidden thinking as missing activity", () => {
+    const prompt = createRunArtifact(db, { runId: "r", kind: "user-prompt" as "report", content: "Check", createdAt: at(0) });
+    for (let i = 0; i < 240; i++) createRunArtifact(db, { runId: "r", kind: "report", content: "Thought", createdAt: at(0, i + 1), metadata: JSON.stringify({ source: "agent_thinking_streaming" }) });
+    const question = createRunArtifact(db, { runId: "r", kind: "report", content: "Choose", createdAt: at(0, 250), metadata: JSON.stringify({ source: "codex_async_questions", questions: [{ title: "Which?", options: ["A", "B"] }] }) });
+    const thought = createRunArtifact(db, { runId: "r", kind: "report", content: "Verifying", createdAt: at(0, 251), metadata: JSON.stringify({ source: "agent_thinking_streaming" }) });
+    const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    expect(page.artifacts.map(row => row.id)).toEqual(expect.arrayContaining([prompt.id, question.id, thought.id]));
+    expect(page.activity).toBeUndefined();
+  });
+
+  it("preserves child/thought ownership and stream identity when oversized metadata is projected", () => {
+    turn(0);
+    const padding = "private-padding".repeat(3000);
+    const child = createRunArtifact(db, { runId: "r", kind: "report", content: "Child reply", createdAt: at(1), metadata: JSON.stringify({ agentId: "child", parentToolCallId: "root", streamId: "child-stream", padding }) });
+    const thought = createRunArtifact(db, { runId: "r", kind: "report", content: "Thinking", createdAt: at(2), metadata: JSON.stringify({ kind: "thinking", streamId: "thought-stream", padding }) });
+    const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    expect(page.artifacts.find(row => row.id === child.id)?.metadata).toMatchObject({ agentId: "child", parentToolCallId: "root", streamId: "child-stream" });
+    expect(page.artifacts.find(row => row.id === thought.id)?.metadata).toMatchObject({ kind: "thinking", streamId: "thought-stream" });
+    expect(JSON.stringify(page)).not.toContain("private-padding");
+  });
+
+  it("retains bounded file and folder mentions in compact mobile prompt metadata", () => {
+    const files = [{ path: "src/app.ts", type: "file" }, { path: "docs", type: "directory" }];
+    const prompt = createRunArtifact(db, {
+      runId: "r", kind: "user-prompt" as "report", content: "Compare @src/app.ts and @docs", createdAt: at(0),
+      metadata: JSON.stringify({ files, skills: [{ iconSmall: "a".repeat(17000) }] }),
+    });
+    const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    expect(page.artifacts.find(row => row.id === prompt.id)?.metadata).toMatchObject({ files });
+  });
+
+  it("retains a plan card and pages only its decoded Markdown inside the owning conversation", () => {
+    turn(0);
+    const body = "## Plan\n\n" + "Line with é and 💡.\n".repeat(1400);
+    const plan = createToolCall(db, { runId: "r", toolName: "Plan", createdAt: at(0, 4000),
+      input: JSON.stringify({ plan: body, secret: "other arguments" }), metadata: JSON.stringify({ planStatus: "applied" }) });
+    for (let index = 0; index < 205; index++) createToolCall(db, { runId: "r", toolName: "Read", createdAt: at(0, 5000 + index) });
+    const history = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    expect(history.toolCalls.find(call => call.id === plan.id)).toMatchObject({
+      input: { type: "mains/deferred-plan", preview: Array.from(body).slice(0, 4096).join("") }, metadata: { planStatus: "applied" },
+    });
+    const pages: string[] = [];
+    let offset: number | null = 0;
+    while (offset !== null) {
+      const page = runsRepo.findHistoryContent({ runId: "r", id: plan.id, source: "plan", offset });
+      expect(page).not.toBeNull();
+      pages.push(page!.text);
+      offset = page!.nextOffset;
+    }
+    expect(pages.join("")).toBe(body);
+    expect(runsRepo.findHistoryContent({ runId: "other", id: plan.id, source: "plan" })).toBeNull();
+  });
+
+  it("uses desktop prompt boundaries and stable overlapping windows on native phones", () => {
+    for (let i = 0; i < 85; i++) turn(i);
+    let page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    const seen = new Set(prompts(page));
+    while (page.hasOlder) {
+      page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true, direction: "older", cursor: page.start! });
+      expect(prompts(page).length).toBeLessThanOrEqual(60);
+      prompts(page).forEach(prompt => seen.add(prompt));
+    }
+    expect(seen.size).toBe(85);
+    while (page.hasNewer) page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true, direction: "newer", cursor: page.end! });
+    expect(prompts(page).at(-1)).toBe("prompt-84");
+  });
+
+  it("retains the opening prompt and answer while all omitted activity stays traversable in a frozen bounded range", () => {
+    const prompt = createRunArtifact(db, { runId: "r", kind: "user-prompt" as "report", content: "Review", createdAt: at(0) });
+    const reply = createRunArtifact(db, { runId: "r", kind: "report", content: "I will check", createdAt: at(0, 1) });
+    const ids = new Set([`artifact:${prompt.id}`, `artifact:${reply.id}`]);
+    for (let i = 0; i < 450; i++) {
+      const call = createToolCall(db, { runId: "r", createdAt: at(0, i + 2), output: JSON.stringify({ stdout: "\u0001".repeat(8000) }) });
+      ids.add(`tool:${call.id}`);
+    }
+    const main = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    expect(main.artifacts.map(row => row.id)).toEqual([prompt.id, reply.id]);
+    const range = main.activity!;
+    expect(range).toBeDefined();
+    const future = createRunArtifact(db, { runId: "r", kind: "report", content: "Future", createdAt: at(1) });
+    let page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", range, direction: "refresh", cursor: range.start, end: range.end });
+    const seen = new Set<string>();
+    let pages = 0;
+    do {
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(1024 * 1024);
+      expect(page.artifacts.some(row => row.id === future.id)).toBe(false);
+      page.artifacts.forEach(row => seen.add(`artifact:${row.id}`));
+      page.toolCalls.forEach(row => seen.add(`tool:${row.id}`));
+      if (!page.hasOlder) break;
+      page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", range, direction: "older", cursor: page.start! });
+    } while (++pages < 30);
+    expect(seen).toEqual(ids);
+    while (page.hasNewer) page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", range, direction: "newer", cursor: page.end! });
+    expect(page.artifacts.some(row => row.id === future.id)).toBe(false);
+    expect(page.toolCalls.at(-1)?.id).toBe(Number([...ids].at(-1)!.split(":")[1]));
+  });
+
+  it("prioritizes an exact searched message and keeps a frozen conversation refresh out of future turns", () => {
+    for (let i = 0; i < 45; i++) turn(i);
+    const match = createRunArtifact(db, { runId: "r", kind: "report", content: "Searched message", createdAt: at(26, 1500) });
+    const found = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true, direction: "newer", cursor: { timestamp: at(26, 1500).getTime(), source: "artifact", id: match.id } });
+    expect(found.artifacts.some(row => row.id === match.id)).toBe(true);
+    const latest = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    const end = historyEndAfter(latest.last!);
+    turn(46);
+    const frozen = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true, direction: "refresh", cursor: latest.start!, end });
+    expect(prompts(frozen)).not.toContain("prompt-46");
+    expect(frozen.end).toEqual(end);
+    expect(frozen.hasNewer).toBe(true);
+  });
+
+  it("tolerates a deleted search match and never injects another run's cursor into the native window", () => {
+    turn(0);
+    const foreign = createRunArtifact(db, { runId: "other", kind: "report", content: "Private foreign reply", createdAt: at(0, 1500) });
+    for (const id of [foreign.id, 999999]) {
+      const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true, direction: "newer",
+        cursor: { timestamp: at(0, 1500).getTime(), source: "artifact", id } });
+      expect(prompts(page)).toEqual(["prompt-0"]);
+      expect(page.artifacts.every(row => row.runId === "r")).toBe(true);
+      expect(page.artifacts.map(row => row.id)).not.toContain(id);
+    }
+  });
+
   it("bounds a phone page even when one prompt produces hundreds of large tool results", () => {
     createRunArtifact(db, { runId: "r", kind: "user-prompt" as "report", content: "one long-running prompt", createdAt: at(0) });
     const output = JSON.stringify({ stdout: "x".repeat(128 * 1024) });
@@ -183,6 +353,23 @@ describe("conversation history pages", () => {
     expect(latest.artifacts.map((a) => a.id)).not.toContain(voice.id);
     const old = runsRepo.findHistoryPage({ runId: "r", direction: "older", cursor: latest.start! });
     expect(old.artifacts.map((a) => a.id)).toContain(voice.id);
+  });
+
+  it("includes both voice speakers and bounded work provenance in the phone conversation window", () => {
+    const prompt = createRunArtifact(db, { runId: "r", kind: "user-prompt" as "report", content: "Spoken request", createdAt: at(10),
+      metadata: JSON.stringify({ voice: true, voiceStartedAt: at(1).getTime(), streamId: "voice-user" }) });
+    const reply = createRunArtifact(db, { runId: "r", kind: "report", content: "Spoken answer", createdAt: at(11),
+      metadata: JSON.stringify({ voice: true, voiceStartedAt: at(2).getTime(), streamId: "voice-assistant" }) });
+    const native = createRunTurn(db, { runId: "r", turnIndex: 1, startedAt: at(1), createdAt: at(1), metadata: JSON.stringify({
+      inputSource: "voice", providerTurnId: "native-work", realtimeSessionId: "voice-call", secret: "must-not-project",
+    }) });
+    const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    expect(page.artifacts.map(a => a.id)).toEqual([prompt.id, reply.id]);
+    expect(page.artifacts.map(a => a.metadata?.streamId)).toEqual(["voice-user", "voice-assistant"]);
+    expect(page.turns.find(t => t.id === native.id)?.metadata).toEqual({
+      inputSource: "voice", providerTurnId: "native-work", realtimeSessionId: "voice-call",
+    });
+    expect(JSON.stringify(page)).not.toContain("must-not-project");
   });
 
   it("loads complete promptless histories and handles empty conversations", () => {

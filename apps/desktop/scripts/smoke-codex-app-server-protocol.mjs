@@ -294,6 +294,19 @@ try {
     assertContains("v2/UserInput.ts", ['"type": "audio", } & ({ url: string, } | { fileId: string, })']);
     assertContains("ContentItem.ts", ['"type": "input_audio", } & ({ audio_url: string, } | { file_id: string, })']);
   }
+  if (compareVersions(versionOutput, "0.169.0") >= 0) {
+    assertContains("v2/ThreadItem.ts", ['"type": "agentMessage", moderation: AgentMessageModeration | null']);
+  }
+  if (compareVersions(versionOutput, "0.170.0") >= 0) {
+    assertContains("v2/AgentMessageDisplay.ts", [
+      '"mode": "show", version: 1', '"mode": "hide", version: 1', '"mode": "block", version: 1',
+    ]);
+  }
+  if (compareVersions(versionOutput, "0.171.0") >= 0) {
+    assertContains("ClientRequest.ts", ['"method": "thread/realtime/list"']);
+    assertContains("v2/ThreadRealtimeListResponse.ts", ["nextCursor: string | null", "coverage: ThreadRealtimeCoverage"]);
+    assertContains("v2/ThreadRealtimeItem.ts", ['"type": "frame"', "observedAtMs?: number"]);
+  }
   assertContains("v2/McpResourceReadParams.ts", [
     "threadId?: string | null",
     "originCallId?: string | null",

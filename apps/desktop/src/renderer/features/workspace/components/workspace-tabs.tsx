@@ -87,7 +87,7 @@ export function WorkspaceTabs({
   const showDraftTab = showConversationTabs && showNewRunTab;
   const conversation = showNewRunTab ? undefined : runs[0];
   const conversationTab = !showConversationTabs && <ConversationTab
-    title={conversation ? getTabTitle(conversation) : "New chat"}
+    title={conversation ? getTabTitle(conversation) : "New run"}
     run={conversation}
     variant={variant ?? "codex"}
     isActive={conversation ? activeTab === conversation.id : activeTab === "new-run"}
@@ -164,7 +164,7 @@ export function WorkspaceTabs({
     if (showNewRunTab || (!showConversationTabs && !conversation)) {
       mobileTabs.push({
         id: "new-run",
-        label: showConversationTabs ? "New Run" : "New chat",
+        label: showConversationTabs ? "New Run" : "New run",
         icon: providerIcon,
         group: "Runs",
         onSelect: () => onSelectNewRunTab?.(),

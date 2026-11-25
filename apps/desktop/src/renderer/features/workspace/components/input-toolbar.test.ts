@@ -36,6 +36,20 @@ function nativeToolbarProps(): Parameters<typeof InputToolbar>[0] {
 beforeEach(() => { mocks.mode = "developer"; mocks.requiresNamedProfile = false; });
 
 describe("floating composer controls", () => {
+  it("distinguishes Claude Auto from Accept edits in the composer", () => {
+    const props = { ...nativeToolbarProps(), variant: "claude" as const, permissionMode: "auto" };
+    const { rerender } = render(createElement(InputToolbar, props));
+    const permission = screen.getByRole("button", { name: "Permission mode" });
+
+    fireEvent.click(permission);
+    expect(screen.getByRole("menuitemradio", { name: /^Auto\s*Claude decides when to ask$/ }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Accept edits\s*Accept all edits$/ }));
+    expect(props.onPermissionModeChange).toHaveBeenCalledExactlyOnceWith("acceptEdits");
+
+    rerender(createElement(InputToolbar, { ...props, permissionMode: "acceptEdits" }));
+    expect(permission.textContent).toBe("Accept edits");
+  });
+
   it("does not duplicate built-in permissions returned as native profiles", () => {
     render(createElement(InputToolbar, nativeToolbarProps()));
     fireEvent.click(screen.getByRole("button", { name: "Permission mode" }));
@@ -202,8 +216,8 @@ const idleComposer = {
 };
 
 describe("single primary composer button", () => {
-  it.each(["new", "existing"])("switches the %s chat between microphone and Send for text or attachments, without an extra voice button", (kind) => {
-    const props = nativeToolbarProps();
+  it.each(["new", "existing", "Mate"])("switches the %s chat between microphone and Send for text or attachments, without an extra voice button", (kind) => {
+    const props = { ...nativeToolbarProps(), assistantComposer: kind === "Mate" };
     const onStart = vi.fn();
     const onSubmit = vi.fn();
     const primaryAction = (text: string, attachments = 0) => {
@@ -238,8 +252,8 @@ describe("single primary composer button", () => {
     expect(screen.queryByRole("button", { name: /mute microphone/i })).toBeNull();
   });
 
-  it("puts mute immediately before the call's Stop and changes its icon when muted", () => {
-    const props = nativeToolbarProps();
+  it.each([false, true])("puts mute immediately before Stop and changes its icon when muted (assistant=%s)", (assistantComposer) => {
+    const props = { ...nativeToolbarProps(), assistantComposer };
     const onMute = vi.fn();
     const controls = (muted: boolean) => {
       const value = composerControls({ ...idleComposer, state: { phase: "connected", runId: "chat", muted }, hasMessage: true });
@@ -254,7 +268,8 @@ describe("single primary composer button", () => {
     const unmutedIcon = mute.querySelector("svg")?.innerHTML;
     expect(mute.querySelector("rect")).not.toBeNull();
     expect(mute.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(Array.from(end.parentElement!.closest(".shrink-0")!.querySelectorAll("button"))).toEqual([mute, end]);
+    const group = end.parentElement!.closest(assistantComposer ? ".col-start-3" : ".shrink-0")!;
+    expect(Array.from(group.querySelectorAll("button"))).toEqual([mute, end]);
     fireEvent.click(mute);
     expect(onMute).toHaveBeenCalledOnce();
     fireEvent.click(end);
@@ -322,5 +337,20 @@ describe("single primary composer button", () => {
     rerender(createElement(InputToolbar, { ...props, variant: "claude", primaryAction: action(false) }));
     expect(screen.queryByRole("button", { name: "Start voice chat" })).toBeNull();
     expect((screen.getByRole("button", { name: "Send prompt" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+
+describe("frozen assistant composer", () => {
+  it("keeps uploads and Send while removing profile-changing controls", () => {
+    const props = { ...nativeToolbarProps(), assistantComposer: true };
+    render(createElement(InputToolbar, props));
+    expect(screen.queryByText("Release model · high effort")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Permission mode" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Select model/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send prompt" }));
+    expect(props.primaryAction.onClick).toHaveBeenCalledOnce();
+    expect(props.onModelChange).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Upload files")).toBeTruthy();
   });
 });

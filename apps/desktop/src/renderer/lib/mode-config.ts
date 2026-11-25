@@ -59,7 +59,7 @@ export interface ModeConfigDescriptor {
   showSources: boolean;
   /** Files/media produced by the active run, kept separate from its sources. */
   showDeliverables: boolean;
-  /** Terminal section + the right-panel terminal toggle. */
+  /** Workspace terminal drawer and its toggle. */
   showTerminal: boolean;
   /** The right panel's Changes (git diff) tab. */
   showChangesTab: boolean;

@@ -22,6 +22,7 @@ vi.mock("../../db/client", () => ({
 }));
 
 import { runsRepo } from "./runs.repo";
+import { assistants, assistantTeams } from "../../db/schema";
 
 describe("runsRepo", () => {
   beforeEach(() => {
@@ -119,6 +120,16 @@ describe("runsRepo", () => {
   });
 
   describe("findRunsByWorkspace", () => {
+    it("hides assistant conversations before limiting workspace chats while retaining their repo and lifecycle identity", async () => {
+      const ws = createWorkspace(db, { id: "assistant-workspace" });
+      db.insert(assistantTeams).values({ id: "team", accountId: "default", name: "Mains" }).run();
+      db.insert(assistants).values({ id: "assistant", accountId: "default", teamId: "team", name: "TestFlight", instructions: "Check releases", spaceId: "codex", providerId: "copilot_cli", mode: "work", model: "model", effort: "high", settings: "{}", spaceSnapshot: "{}" }).run();
+      createRun(db, { id: "source-chat", workspaceId: ws.id, createdAt: new Date("2026-11-01") });
+      createRun(db, { id: "assistant-chat", assistantId: "assistant", workspaceId: ws.id, createdAt: new Date("2026-11-15") });
+      expect((await runsRepo.findRunsByWorkspace(ws.id, { limit: 1 })).map(run => run.id)).toEqual(["source-chat"]);
+      expect(await runsRepo.findRunById("assistant-chat")).toMatchObject({ assistantId: "assistant", workspaceId: ws.id });
+      expect(await runsRepo.findRunIdsByWorkspaceId(ws.id)).toEqual(expect.arrayContaining(["source-chat", "assistant-chat"]));
+    });
     it("returns runs for workspace", async () => {
       const ws = createWorkspace(db, { id: "ws1" });
       createRun(db, { id: "r1", workspaceId: ws.id });

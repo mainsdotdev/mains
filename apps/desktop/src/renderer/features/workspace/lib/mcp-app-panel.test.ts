@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { mcpAppConversationPath, mcpAppToolName, sameMcpApp } from "./mcp-app-panel";
+import { mcpAppConversationPath, mcpAppToolName, sameMcpApp, sameMcpAppScope } from "./mcp-app-panel";
+import { composerOwnerKey, mcpAppConversationKey } from "./ui-context";
+import { previewOwnerKey } from "./preview-tabs";
 describe("MCP App panel routing", () => {
+  it("keeps assistant previews and app conversation identities separate from Code and other assistants", () => {
+    const scope = { backendId: null, spaceId: "space", providerId: "codex", mode: "developer", workspaceId: "repo", assistantId: "gezici" };
+    expect(mcpAppConversationPath(scope, "run")).toBe("/assistants?assistant=gezici&run=run");
+    expect(mcpAppConversationPath(scope)).toBe("/assistants?assistant=gezici&run=new");
+    const owner = composerOwnerKey(scope, "run");
+    expect(previewOwnerKey(scope, owner)).toBe(owner);
+    expect(composerOwnerKey(scope, null)).toBe("local:assistant:gezici:draft");
+    const other = { ...scope, assistantId: "testflight" };
+    expect(sameMcpAppScope(scope, other)).toBe(false);
+    expect(mcpAppConversationKey(scope, "app")).not.toBe(mcpAppConversationKey(other, "app"));
+    expect(mcpAppConversationKey(scope, "app")).not.toBe(mcpAppConversationKey({ ...scope, assistantId: undefined }, "app"));
+  });
+
   it("qualifies UI tool names using the actual connector namespace", () => {
     expect(mcpAppToolName("codex_apps", "magicpath.open_magicpath_canvas", "create_canvas_app_session")).toBe("magicpath.create_canvas_app_session");
     expect(mcpAppToolName("codex_apps", "magicpath.open_magicpath_canvas", "magicpath.create_canvas_app_session")).toBe("magicpath.create_canvas_app_session");

@@ -81,6 +81,22 @@ export const atlasItems = sqliteTable("atlas_items", {
   check("check_atlas_items_bookmark_job_json", sql`json_valid(${t.bookmarkJob}) OR ${t.bookmarkJob} IS NULL`),
 ]);
 
+export const atlasSourceRemovals = sqliteTable("atlas_source_removals", {
+  id: text("id").primaryKey().notNull(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  sourceKey: text("source_key").notNull(),
+  kind: text("kind", { enum: ["file", "image"] }).notNull(),
+  title: text("title").notNull(),
+  contentHash: text("content_hash"),
+  // A null date keeps the source hidden after its Trash entry is cleared.
+  trashedAt: integer("trashed_at", { mode: "timestamp" }),
+}, (t) => [
+  uniqueIndex("uniq_atlas_source_removals_source").on(t.accountId, t.sourceKey),
+  index("idx_atlas_source_removals_hash").on(t.accountId, t.kind, t.contentHash),
+  index("idx_atlas_source_removals_trash").on(t.accountId, t.trashedAt),
+  check("check_atlas_source_removals_kind", sql`${t.kind} IN ('file', 'image')`),
+]);
+
 export const atlasTags = sqliteTable("atlas_tags", {
   id: text("id").primaryKey().notNull(),
   accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
@@ -541,6 +557,9 @@ export const runs = sqliteTable(
       onDelete: "set null",
     }),
 
+    // Local assistant identity; intentionally no FK because run replicas may omit profiles.
+    assistantId: text("assistant_id"),
+
     // optional: which space/profile initiated this run (tool policies etc.)
     spaceId: text("space_id").references(() => spaces.id, {
       onDelete: "set null",
@@ -550,8 +569,8 @@ export const runs = sqliteTable(
       .notNull()
       .references(() => providers.id, { onDelete: "restrict" }),
 
-    // experience mode snapshot from the space at run start — the run keeps
-    // rendering/resuming under its original mode even if the space changes
+    // Execution mode snapshot: ordinary runs use the Space, assistant runs use
+    // the task. Rendering/resume retain it even if the Space later changes.
     mode: text("mode", { enum: MODE_IDS }).notNull().default(DEFAULT_MODE_ID),
 
     model: text("model"), // snapshot
@@ -1661,6 +1680,10 @@ export const pulses = sqliteTable(
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
 
+    // Assistant identities and assignments stay local to the owning backend.
+    assistantId: text("assistant_id"),
+    lastAssignmentId: text("last_assignment_id"),
+
     // Developer pulses run in a workspace; work/chat pulses run workspace-less
     // (managed execution dir) and may target a collection instead.
     workspaceId: text("workspace_id").references(() => workspaces.id, {
@@ -1717,6 +1740,7 @@ export const pulses = sqliteTable(
   },
   (t) => [
     index("idx_pulses_account").on(t.accountId),
+    index("idx_pulses_assistant").on(t.assistantId),
     index("idx_pulses_workspace").on(t.workspaceId),
     index("idx_pulses_active_next_run").on(t.isActive, t.nextRunAt),
     check(
@@ -1830,3 +1854,86 @@ export const bridgeExclusions = sqliteTable("bridge_exclusions", {
   tableName: text("table_name").notNull(), pk: text("pk").notNull(),
   reason: text("reason").notNull().default("manual"),
 }, (t) => [primaryKey({ columns: [t.tableName, t.pk] })]);
+
+/* Assistants are local-backend identities; provider Spaces remain independent. */
+export const assistantTeams = sqliteTable("assistant_teams", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, (t) => [index("idx_assistant_teams_account").on(t.accountId)]);
+
+export const assistants = sqliteTable("assistants", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  teamId: text("team_id").references(() => assistantTeams.id, { onDelete: "restrict" }),
+  name: text("name").notNull(), description: text("description").notNull().default(""),
+  instructions: text("instructions").notNull(),
+  spaceId: text("space_id").notNull(), providerId: text("provider_id").notNull(),
+  // Legacy profile execution columns remain for migration compatibility only;
+  // new executions use the run/assignment snapshot and DTOs omit these values.
+  mode: text("mode", { enum: MODE_IDS }).notNull(), model: text("model").notNull(), effort: text("effort").notNull(),
+  // Retain the original SQLite default; DTOs normalize legacy circle/square settings.
+  avatar: text("avatar").notNull().default('{"shape":"circle","color":"blue"}'),
+  settings: text("settings").notNull(), spaceSnapshot: text("space_snapshot").notNull(),
+  workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "set null" }),
+  isArchived: integer("is_archived", { mode: "boolean" }).notNull().default(false),
+  pinnedAt: integer("pinned_at", { mode: "timestamp_ms" }),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, (t) => [index("idx_assistants_account_team").on(t.accountId, t.teamId), check("check_assistants_avatar_json", sql`json_valid(${t.avatar})`), check("check_assistants_settings_json", sql`json_valid(${t.settings})`), check("check_assistants_space_json", sql`json_valid(${t.spaceSnapshot})`)]);
+
+export const assistantWelcomes = sqliteTable("assistant_welcomes", {
+  assistantId: text("assistant_id").primaryKey().references(() => assistants.id, { onDelete: "cascade" }),
+  runId: text("run_id").notNull(),
+  state: text("state", { enum: ["pending", "generating", "ready", "skipped", "starting", "started", "failed"] }).notNull().default("pending"),
+  wasSkipped: integer("was_skipped", { mode: "boolean" }).notNull().default(false),
+  question: text("question"), setupPrompt: text("setup_prompt"), answer: text("answer"), error: text("error"),
+  execution: text("execution").notNull().default('{"mode":"work"}'),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, (t) => [uniqueIndex("uniq_assistant_welcomes_run").on(t.runId), check("check_assistant_welcome_question_json", sql`json_valid(${t.question}) OR ${t.question} IS NULL`)]);
+
+export const assistantMemories = sqliteTable("assistant_memories", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  teamId: text("team_id").references(() => assistantTeams.id, { onDelete: "cascade" }),
+  assistantId: text("assistant_id").references(() => assistants.id, { onDelete: "cascade" }),
+  title: text("title").notNull(), content: text("content").notNull(),
+  pinned: integer("pinned", { mode: "boolean" }).notNull().default(false), revision: integer("revision").notNull().default(1),
+  sourceRunId: text("source_run_id"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, (t) => [
+  index("idx_assistant_memories_scope").on(t.accountId, t.teamId, t.assistantId),
+  check("check_assistant_memory_owner", sql`${t.teamId} IS NOT NULL OR ${t.assistantId} IS NOT NULL`),
+]);
+
+export const assistantAssignments = sqliteTable("assistant_assignments", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  teamId: text("team_id").references(() => assistantTeams.id, { onDelete: "restrict" }),
+  fromAssistantId: text("from_assistant_id").references(() => assistants.id),
+  toAssistantId: text("to_assistant_id").notNull().references(() => assistants.id),
+  fromRunId: text("from_run_id"), parentId: text("parent_id"),
+  execution: text("execution").notNull().default('{"mode":"work"}'),
+  sourcePromptId: text("source_prompt_id"),
+  sourceContextId: integer("source_context_id"),
+  context: text("context").notNull().default('{}'),
+  taskKey: text("task_key").notNull(), dedupeKey: text("dedupe_key").notNull(),
+  title: text("title").notNull(), prompt: text("prompt").notNull(),
+  status: text("status", { enum: ["queued", "running", "blocked", "completed", "failed", "canceled", "uncertain"] }).notNull().default("queued"),
+  workerRunId: text("worker_run_id"), result: text("result"), evidence: text("evidence").notNull().default("[]"), error: text("error"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, (t) => [uniqueIndex("uniq_assistant_assignments_context").on(t.sourceContextId), uniqueIndex("uniq_assistant_assignments_key").on(t.accountId, t.dedupeKey), index("idx_assistant_assignments_team").on(t.teamId, t.createdAt), check("check_assistant_execution_json", sql`json_valid(${t.execution})`), check("check_assistant_task_context_json", sql`json_valid(${t.context})`), check("check_assistant_evidence_json", sql`json_valid(${t.evidence})`)]);
+
+export const assistantMessages = sqliteTable("assistant_messages", {
+  id: text("id").primaryKey(), assignmentId: text("assignment_id").notNull().references(() => assistantAssignments.id, { onDelete: "cascade" }),
+  kind: text("kind", { enum: ["request", "followup", "result"] }).notNull(),
+  targetRunId: text("target_run_id"), content: text("content").notNull(),
+  status: text("status", { enum: ["queued", "dispatching", "delivered", "uncertain", "canceled"] }).notNull().default("queued"),
+  error: text("error"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, (t) => [index("idx_assistant_messages_pending").on(t.status, t.createdAt)]);

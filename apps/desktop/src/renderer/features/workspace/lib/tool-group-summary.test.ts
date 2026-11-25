@@ -13,6 +13,16 @@ function call(id: string, content: string): RunEvent {
 }
 
 describe("summarizeToolCalls", () => {
+  it("uses Mate labels for assistant tools across providers", () => {
+    for (const prefix of ["", "mcp__mains__"]) {
+      expect(summarizeToolCalls([call("list", `${prefix}ListAssistants: {}`)])).toBe("Listed mates");
+      expect(summarizeToolCalls([
+        call("list", `${prefix}ListAssistantTasks: {}`),
+        call("read", `${prefix}ReadAssistantTask: {}`),
+      ])).toBe("Listed mate assignments, read mate assignment");
+    }
+  });
+
   it("names Atlas page actions consistently across providers", () => {
     for (const prefix of ["", "mcp__mains__"]) {
       expect(summarizeToolCalls([
@@ -34,10 +44,12 @@ describe("summarizeToolCalls", () => {
       content: [{ type: "text", text: "Page changed elsewhere" }] }) };
     expect(summarizeToolCalls([failed])).toBe("Tried to update an Atlas page");
   });
-  it("counts inspected images in their own tool group", () => {
+  it("counts inspected images in both image-only and mixed groups", () => {
     const first = { ...call("v1", "ImageView: {}"), metadata: { codexItemType: "imageView" } };
     const second = { ...call("v2", "ImageView: {}"), metadata: { codexItemType: "imageView" } };
     expect(summarizeToolCalls([first, second])).toBe("Viewed 2 images");
+    expect(summarizeToolCalls([call("b", "Bash: {}"), first, call("e", "Edit: {}"), second]))
+      .toBe("Edited a file, viewed 2 images, ran a command");
   });
 
   it("counts each kind of work once, in sentence form", () => {

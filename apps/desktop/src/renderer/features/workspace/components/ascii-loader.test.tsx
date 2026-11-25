@@ -13,11 +13,14 @@ function tool(toolName: string, input: unknown): RunEvent {
 }
 
 describe("AsciiLoader activity", () => {
-  it("shows the active file read ahead of thinking, then falls back when the call completes", () => {
+  it("shows thoughts independently of an active tool, then restores tool activity when cleared", () => {
     const active = tool("Read", { file_path: "/Users/example/project/AGENTS.md" });
     const view = render(<AsciiLoader activeTool={selectActiveTool([active])} thinkingText="**Analyzing requirements**" />);
+    expect(screen.queryByText("Reading AGENTS.md")).toBeNull();
+    expect(screen.getByText("Analyzing requirements")).toBeTruthy();
+
+    view.rerender(<AsciiLoader activeTool={active} />);
     expect(screen.getByText("Reading AGENTS.md")).toBeTruthy();
-    expect(screen.queryByText("Analyzing requirements")).toBeNull();
 
     const completed = { ...active, metadata: { ...active.metadata, status: "done" } };
     view.rerender(<AsciiLoader activeTool={selectActiveTool([completed])} thinkingText="**Analyzing requirements**" />);

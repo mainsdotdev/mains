@@ -1,4 +1,5 @@
 import { CursorAcpServer } from "./cursor-acp";
+import { captureCursorImage } from "./cursor-images";
 import { createCursorLifecycle, CursorCanceledError, type CursorRunOwner, type CursorPromptOwner } from "./cursor-lifecycle";
 import { providerProcessPath, providerLoginCommand } from "../../providers.utils";
 // ─────────────────────────────────────────────────────────────
@@ -82,6 +83,7 @@ interface CursorToolCall {
 interface CursorSession {
   runId: string;
   sessionId: string;
+  cwd: string;
   agentMessage: CursorMessageStream;
   agentMessageIndex: number;
   agentMessageStreamId: string;
@@ -491,11 +493,20 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
   }
 
   function wireServer(server: CursorAcpServer): void {
-    const ownerFor = (params: unknown) => lifecycle.ownerFor(server, (params as { sessionId?: unknown } | null)?.sessionId);
-    server.setNotificationHandler((method, params) => ownerFor(params)?.onNotification(method, params));
+    const ownerFor = (method: string, params: unknown) => {
+      const call = params as { sessionId?: unknown; toolCallId?: unknown } | null;
+      return lifecycle.ownerFor(server, call?.sessionId, method === "cursor/generate_image" ? call?.toolCallId : undefined);
+    };
+    server.setNotificationHandler((method, params) => ownerFor(method, params)?.onNotification(method, params));
     server.setServerRequestHandler((id, method, params) => {
-      const owner = ownerFor(params);
-      if (owner) owner.onRequest(id, method, params);
+      const owner = ownerFor(method, params);
+      // Some Cursor builds send this fire-and-forget extension via extMethod,
+      // which still needs a JSON-RPC acknowledgement. Both forms share the
+      // owning prompt's ordered projection and finalization barrier.
+      if (owner && method === "cursor/generate_image") {
+        owner.onNotification(method, params);
+        server.respondToRequest(id, {});
+      } else if (owner) owner.onRequest(id, method, params);
       else server.respondToRequestError(id, -32000, "No active Cursor session for this request");
     });
 
@@ -816,25 +827,6 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           model,
           agentId,
           durationMs,
-        },
-      });
-      return events;
-    }
-
-    if (method === "cursor/generate_image") {
-      const description = (p?.description as string) ?? "Generated image";
-      const filePath = p?.filePath as string | undefined;
-      const referenceImagePaths = p?.referenceImagePaths as string[] | undefined;
-
-      events.push({
-        type: "artifact",
-        kind: "file",
-        path: filePath,
-        content: description,
-        metadata: {
-          cursorExtension: "generate_image",
-          filePath,
-          referenceImagePaths,
         },
       });
       return events;
@@ -1318,6 +1310,17 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
   // Prompt building
   // ─────────────────────────────────────────────────────────────
 
+  function atlasImageInstructions(request: { mode?: ModeId; configSnapshot?: Record<string, unknown> | null }): string {
+    return request.mode === "work" && request.configSnapshot?.atlasImage === true
+      ? "This is an Atlas image conversation. Use Cursor’s built-in image generation tool to create or revise the requested image. Use supplied image attachments as references when relevant.\n\n"
+      : "";
+  }
+
+  function sessionMode(mode: ModeId | undefined, overrides: Record<string, unknown>): string | undefined {
+    if (mode === "work" && overrides.atlasImage === true) return "agent";
+    return (typeof overrides.mode === "string" && overrides.mode) || config.mode;
+  }
+
   function buildStartPrompt(request: WorkRunRequest): string {
     // Cursor's ACP surface has no system-prompt slot, so the mode/space
     // instruction delta rides the first prompt; the session transcript
@@ -1352,7 +1355,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       }
     }
 
-    return prompt;
+    return atlasImageInstructions(request) + prompt;
   }
 
   function buildContinuePrompt(request: WorkRunContinueRequest): string {
@@ -1374,7 +1377,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       }
     }
 
-    return prompt;
+    return atlasImageInstructions(request) + prompt;
   }
 
   /**
@@ -1443,7 +1446,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         prompt = `${prompt}\n\n---\n\nAttached files:\n${savedPaths.map((p) => `- ${p}`).join("\n")}`;
       }
     }
-    return prompt;
+    return atlasImageInstructions(request) + prompt;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -1588,9 +1591,6 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       const { runId } = request;
       const resolvedModel = request.model || config.defaultModel || undefined;
       const overrides = (request.configSnapshot ?? {}) as Record<string, unknown>;
-      const overrideMode = overrides.mode;
-      const effectiveMode =
-        (typeof overrideMode === "string" && overrideMode) || config.mode;
       const selection = resolveCursorSelection(overrides, config);
 
       const mainsCtx: MainsToolContext = {
@@ -1620,7 +1620,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           server,
           sessionId,
           resolvedModel,
-          effectiveMode,
+          sessionMode(request.mode, overrides),
           sessionConfigOptions,
           selection,
         );
@@ -1628,6 +1628,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         const session: CursorSession = {
           runId,
           sessionId,
+          cwd: request.execution.cwd,
           agentMessage: new CursorMessageStream(),
           agentMessageIndex: 0,
           agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
@@ -1701,8 +1702,6 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         // Same precedence as createSession: the run's config snapshot beats the
         // provider config, so a resumed chat run stays in "ask" mode.
         const resumeOverrides = (request.configSnapshot ?? {}) as Record<string, unknown>;
-        const resumeMode =
-          (typeof resumeOverrides.mode === "string" && resumeOverrides.mode) || config.mode;
         const sessionConfigOptions = loadResult?.configOptions as
           | CursorConfigOption[]
           | undefined;
@@ -1710,7 +1709,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           server,
           sessionId,
           resolvedModel,
-          resumeMode,
+          sessionMode(request.mode, resumeOverrides),
           sessionConfigOptions,
           resolveCursorSelection(resumeOverrides, config),
         );
@@ -1718,6 +1717,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         const session: CursorSession = {
           runId,
           sessionId,
+          cwd: request.execution.cwd,
           agentMessage: new CursorMessageStream(),
           agentMessageIndex: 0,
           agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
@@ -1765,8 +1765,6 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
 
         // The fork inherits the source run's harness snapshot.
         const forkOverrides = (request.configSnapshot ?? {}) as Record<string, unknown>;
-        const forkMode =
-          (typeof forkOverrides.mode === "string" && forkOverrides.mode) || config.mode;
         const sessionConfigOptions = sessionResult?.configOptions as
           | CursorConfigOption[]
           | undefined;
@@ -1774,7 +1772,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           server,
           sessionId,
           resolvedModel,
-          forkMode,
+          sessionMode(request.mode, forkOverrides),
           sessionConfigOptions,
           resolveCursorSelection(forkOverrides, config),
         );
@@ -1782,6 +1780,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         const session: CursorSession = {
           runId,
           sessionId,
+          cwd: request.execution.cwd,
           agentMessage: new CursorMessageStream(),
           agentMessageIndex: 0,
           agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
@@ -1833,10 +1832,22 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         execution.cancel(); sendCancel();
       };
       const emitQueued: WorkRunEventHandler = (event) => execution.project(() => onEvent(event));
+      const toolCalls = new Set<string>();
       try {
         execution = cs.owner.begin(cs.sessionId, {
+          ownsToolCall: (id) => toolCalls.has(id),
           onNotification(method, params) {
-            const p = params as { update?: { sessionUpdate?: string; title?: unknown } } | undefined;
+            if (method === "cursor/generate_image") {
+              void execution.project(async () => {
+                const event = await captureCursorImage(cs.runId, cs.cwd, params);
+                if (event) await onEvent(event);
+              });
+              return;
+            }
+            const p = params as { update?: { sessionUpdate?: string; title?: unknown; toolCallId?: unknown } } | undefined;
+            if (method === "session/update" && p?.update?.sessionUpdate === "tool_call" && typeof p.update.toolCallId === "string") {
+              toolCalls.add(p.update.toolCallId);
+            }
             if (method === "session/update" && p?.update?.sessionUpdate === "session_info_update") {
               const title = typeof p.update.title === "string"
                 ? p.update.title.replace(/(?:<\|eos\|>)+\s*$/, "").trim() : "";

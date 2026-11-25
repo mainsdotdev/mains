@@ -10,6 +10,15 @@ import Testing
     var delaySkills = false
     var failSendAfter = false
     var overrideSkills: JSONValue?
+    var pluginIcons: JSONValue?
+    var supportsMates = false
+    var supportsMateInfo = false
+    var mateTaskPages: [Double: JSONValue] = [:]
+    var mateTaskAssignee: JSONValue = .object([
+        "id": .string("reviewer"), "name": .string("Reviewer"), "isArchived": .bool(false),
+        "avatar": .object(["shape": .string("sphere"), "color": .string("mint")]),
+    ])
+    var loseMateCreation = false
     var emit: ((String, JSONValue) -> Void)?
 }
 
@@ -26,6 +35,29 @@ import Testing
     func close() { base.close() }
     func perform(_ channel: String, args: [JSONValue], commandId: String?, timeout: TimeInterval) async throws -> JSONValue {
         faults.calls.append(.init(channel: channel, args: args, id: commandId))
+        if channel == "assistants:create", faults.supportsMates {
+            if faults.loseMateCreation { faults.loseMateCreation = false; throw MainsError.timeout }
+            return .object(["id": .string("release")])
+        }
+        if faults.supportsMateInfo {
+            switch channel {
+            case "assistants:mobileDirectory":
+                let id = args.dropFirst().first?.string ?? "release"
+                let provider = id == "reviewer" ? "claude_code" : "codex"
+                return .object(["teams": .array([]), "mates": .array([.object([
+                    "id": .string(id), "name": .string(id), "description": .string(""), "providerId": .string(provider),
+                    "model": .string("test-model"), "needsSetup": .bool(false),
+                    "avatar": .object(["shape": .string("sphere"), "color": .string("mint")]),
+                ])])])
+            case "assistants:mobileAssignments":
+                if let offset = args.last?.number, let page = faults.mateTaskPages[offset] { return page }
+                return .object(["id": .string("review"), "title": .string("Review"), "status": .string("blocked"),
+                                "brief": .string("Review the sample"), "evidence": .array([]), "assignee": faults.mateTaskAssignee])
+            case "assistants:mobileManage":
+                return .object(["accepted": .bool(true)])
+            default: break
+            }
+        }
         if channel == "providers:getSkills" {
             let value = faults.overrideSkills
             if faults.delaySkills { faults.delaySkills = false; try await Task.sleep(for: .milliseconds(100)) }
@@ -33,13 +65,199 @@ import Testing
             if let value { return value }
         }
         if channel == "providers:getCommands" && faults.failCommands { throw MainsError.server("Commands unavailable") }
+        if channel == "providers:getMobilePluginIcons", let icons = faults.pluginIcons { return icons }
         let value = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
+        if channel == "backend:describe" {
+            var descriptor = value.objectValue
+            var capabilities = value["capabilities"].array
+            if faults.supportsMates { capabilities.append(.string("assistants")) }
+            if faults.supportsMateInfo { capabilities.append(.string("mateInfo")) }
+            if faults.pluginIcons != nil { capabilities.append(.string("mobilePluginIcons")) }
+            descriptor["capabilities"] = .array(capabilities)
+            return .object(descriptor)
+        }
         if channel == "runs:execute" && faults.failSendAfter { faults.failSendAfter = false; throw MainsError.timeout }
         return value
     }
 }
 
 @Suite(.serialized) struct ContextTests {
+    @Test func robotCatalogueKeepsSavedPresetsAndGivesLegacyMatesStableVariedAvatars() throws {
+        let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let data = try Data(contentsOf: app.appendingPathComponent("Resources/RobotAvatars/presets.json"))
+        let catalogue = try JSONDecoder().decode(MateRobotCatalogue.self, from: data)
+        #expect(catalogue.styles.map(\.presets.count) == [7, 7, 7])
+        #expect(catalogue.defaultPreset?.avatar == MateAvatar(shape: "terminal-amber", color: "amber"))
+        let saved = MateAvatar(shape: "metal-silver", color: "mint")
+        #expect(catalogue.preset(for: saved, mateID: "one")?.avatar == saved)
+        #expect(catalogue.preset(for: saved, mateID: "two")?.avatar == saved)
+
+        let legacy = MateAvatar(shape: "sphere", color: "blue")
+        let identities = (0..<30).map { "legacy-mate-\($0)" }
+        let selected = identities.compactMap { catalogue.preset(for: legacy, mateID: $0)?.id }
+        let reopened = try JSONDecoder().decode(MateRobotCatalogue.self, from: data)
+        #expect(selected == identities.compactMap { reopened.preset(for: legacy, mateID: $0)?.id })
+        #expect(Set(selected).count > 7)
+    }
+
+    @Test @MainActor func aPairedSessionRecoversMateCreationAndSendsCodeMentionsAsExplicitContext() async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+        let faults = ContextFaults(), storage = MemoryStorage()
+        faults.supportsMates = true; faults.loseMateCreation = true
+        storage.pairing = backend.pairing
+        let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        try await eventually { session.isConnected && session.supportsMates }
+        let space = try #require(session.mateSpaces.first { $0.providerId == "codex" && $0.mode == "developer" })
+        let workspace = try #require(backend.defaultWorkspaceID)
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+
+        let avatar = MateAvatar(shape: "sphere", color: "mint")
+        await #expect(throws: MainsError.timeout) {
+            _ = try await session.createMate(name: "Release", space: space, model: "test-model", effort: "medium", teamID: nil, avatar: avatar)
+        }
+        #expect(session.mateCommandUncertain)
+        #expect(try await session.checkMateCommand() == "release")
+        let writes = faults.calls.filter { $0.channel == "assistants:create" }
+        #expect(writes.count == 2 && writes[0].id == writes[1].id && writes[0].args == writes[1].args)
+        #expect(writes[0].args.first?["profileSetup"] == .bool(true))
+        #expect(!session.mateCommandPending)
+
+        let mate = ContextSkill.mate(id: "release", name: "Release", providerID: "codex")
+        let scope = session.contextScope(providerID: "codex", workspaceID: workspace)
+        _ = try await session.send(ContextMentions.mention(mate) + " Check the sample", spaceID: space.id,
+                                   workspaceID: workspace, contextSkills: [mate], contextScope: scope)
+        let call = try #require(faults.calls.last { $0.channel == "runs:execute" })
+        let payload = try #require(call.args.first)
+        #expect(payload["goal"].string == "@assistant-release Check the sample")
+        #expect(payload["initialContext"].array == [try #require(mate.mateContext)])
+        #expect(payload["contextSkills"] == .null)
+        #expect(payload["clientPromptId"].string == call.id)
+    }
+
+    @Test @MainActor func aPairedSessionSendsMateMentionsFromWorkWithoutAWorkspace() async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+        let faults = ContextFaults(), storage = MemoryStorage()
+        faults.supportsMates = true
+        storage.pairing = backend.pairing
+        let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        try await eventually { session.isConnected && session.supportsMates }
+        let codex = try #require(session.spaces.first { $0.providerId == "codex" })
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+
+        let mate = ContextSkill.mate(id: "release", name: "Release", providerID: "codex")
+        let scope = session.contextScope(providerID: "codex", workspaceID: nil)
+        let text = ContextMentions.mention(mate) + " Compare routes"
+        try await session.setSpaceMode("chat", spaceID: codex.id)
+        await #expect(throws: MainsError.server("Call Mates from a standard Code or Work conversation.")) {
+            _ = try await session.send(text, spaceID: codex.id, contextSkills: [mate], contextScope: scope)
+        }
+        try await session.setSpaceMode("work", spaceID: codex.id)
+        _ = try await session.send(text, spaceID: codex.id, contextSkills: [mate], contextScope: scope)
+        let sends = faults.calls.filter { $0.channel == "runs:execute" }
+        #expect(sends.count == 1)
+        let call = try #require(sends.first)
+        let payload = try #require(call.args.first)
+        #expect(payload["initialContext"].array == [try #require(mate.mateContext)])
+        #expect(payload["workspaceId"] == .null)
+        #expect(payload["clientPromptId"].string == call.id)
+        #expect(!Experience.allowsMateMentions("work", isMateConversation: true, hasLocalWorkspace: false))
+    }
+
+    @Test @MainActor func mateAssignmentPagesFilterLegacyTeamRowsAndCountOnlyTheSelectedMate() async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+        let faults = ContextFaults(), storage = MemoryStorage()
+        faults.supportsMates = true
+        faults.supportsMateInfo = true
+        storage.pairing = backend.pairing
+        let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        try await eventually { session.isConnected && session.supportsMateInfo }
+
+        func task(_ id: String, for mate: String, status: String) -> JSONValue {
+            .object(["id": .string(id), "title": .string(id), "status": .string(status), "brief": .string("Review the sample"),
+                     "evidence": .array([]), "assignee": .object(["id": .string(mate), "name": .string(mate), "isArchived": .bool(false),
+                        "avatar": .object(["shape": .string("sphere"), "color": .string("mint")])])])
+        }
+        faults.mateTaskPages[0] = .object(["items": .array([task("own", for: "release", status: "blocked"),
+            task("teammate", for: "reviewer", status: "running")]), "activeCount": .number(2), "hasMore": .bool(true)])
+        faults.mateTaskPages[100] = .object(["items": .array([task("older-teammate", for: "reviewer", status: "completed")]),
+            "activeCount": .number(2), "hasMore": .bool(true)])
+        faults.mateTaskPages[200] = .object(["items": .array([task("own-history", for: "release", status: "completed")]),
+            "activeCount": .number(2), "hasMore": .bool(false)])
+
+        let first = try await session.loadMateTasks("release", offset: 0)
+        #expect(first.items.map(\.id) == ["own"])
+        #expect(first.activeCount == 1 && first.hasMore)
+        let empty = try await session.loadMateTasks("release", offset: 100)
+        #expect(empty.items.isEmpty && empty.hasMore)
+        let history = try await session.loadMateTasks("release", offset: 200)
+        #expect(history.items.map(\.id) == ["own-history"])
+    }
+
+    @Test @MainActor func newAssignmentsFollowupsAndManualRoutinesRequireTheWorkerProvidersConsent() async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+        let faults = ContextFaults(), storage = MemoryStorage()
+        faults.supportsMates = true
+        faults.supportsMateInfo = true
+        storage.pairing = backend.pairing
+        let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        try await eventually { session.isConnected && session.supportsMateInfo }
+
+        let assignment = MateChange.assign(title: "Release", prompt: "Check the sample")
+        let manualRun = MateChange.runRoutine("release-check")
+        let followup = MateChange.followup(id: "review", message: "Use the updated sample")
+        let codexConsent = MateConsentRequired(owner: session.ownership, backendID: DemoBackend.backendID, providerID: "codex")
+        for change in [assignment, manualRun] {
+            await #expect(throws: codexConsent) { try await session.manageMate("release", change: change) }
+        }
+        #expect(!session.mateCommandPending)
+        #expect(!faults.calls.contains { $0.channel == "assistants:mobileManage" })
+        try await session.manageMate("release", change: .toggleRoutine(id: "release-check", isActive: false))
+
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+        try await session.manageMate("release", change: assignment)
+        try await session.manageMate("release", change: manualRun)
+        let claudeConsent = MateConsentRequired(owner: session.ownership, backendID: DemoBackend.backendID, providerID: "claude_code")
+        await #expect(throws: claudeConsent) { try await session.manageMate("release", change: followup) }
+        #expect(!session.mateCommandPending)
+        #expect(faults.calls.filter { $0.channel == "assistants:mobileManage" }.count == 3)
+
+        session.grantConsent(providerID: "claude_code", backendID: DemoBackend.backendID)
+        try await session.manageMate("release", change: followup)
+        faults.mateTaskAssignee = .null
+        await #expect(throws: MainsError.server("The Mate assigned to this task is unavailable.")) {
+            try await session.manageMate("release", change: followup)
+        }
+        let writes = faults.calls.filter { $0.channel == "assistants:mobileManage" }
+        #expect(writes.compactMap { $0.args[2]["action"].string } == ["toggleRoutine", "assign", "runRoutine", "followup"])
+        #expect(writes.last?.args[2]["message"].string == "Use the updated sample")
+        #expect(faults.calls.contains { $0.channel == "assistants:mobileDirectory" && $0.args.last?.string == "reviewer" })
+    }
+
+    @Test @MainActor func mateSelectionsKeepTheirIdentityWithDuplicateNamesAndPlainSavedDrafts() throws {
+        let scope = ContextScope(providerID: "codex", workspaceID: "repo")
+        let first = ContextSkill.mate(id: "release-one", name: "Release", providerID: "codex")
+        let second = ContextSkill.mate(id: "release-two", name: "Release", providerID: "codex")
+        let draft = ConversationDraft()
+        var saved = ""
+        draft.textChanged = { saved = $0 }
+        draft.text = "@"; draft.insert(first, scope: scope)
+        draft.text += "@"; draft.insert(second, scope: scope)
+        #expect(saved == "@Release @Release ")
+        let submission = draft.snapshot()
+        let message = ContextMentions.goal(submission.text, skills: submission.contextSkills)
+        #expect(message == "@assistant-release-one @assistant-release-two")
+        #expect(ContextText(message, skills: submission.contextSkills, canonical: true).readable == "Release Release")
+        #expect(submission.contextSkills.compactMap(\.mateContext).map { $0["metadata"]["assistantId"].string } == ["release-one", "release-two"])
+    }
+
     @Test func triggersRespectUnicodeWhitespaceAndTokenBoundaries() throws {
         for (text, trigger, query) in [("@", "@", ""), ("şunu /rev", "/", "rev"), ("👋\n$yazı", "$", "yazı")] {
             let match = try #require(ContextMentions.detect(text))
@@ -164,6 +382,32 @@ import Testing
         #expect(refreshed.skills.isEmpty && refreshed.error == nil)
     }
 
+    @Test @MainActor func transcriptPluginIconsCacheHitsAndMissesUntilCodexSkillsChange() async throws {
+        let (session, _, faults) = try setup()
+        defer { session.exitDemo() }
+        let image = Data([1, 2, 3])
+        faults.pluginIcons = .array([.object(["vendorId": .string("github"), "label": .string("GitHub"),
+                                             "imageBase64": .string(image.base64EncodedString())])])
+        try await eventually { session.isConnected && session.supportsPluginIcons }
+        let run = try #require(session.conversations.first { $0.providerId == "codex" })
+        await session.selectConversation(run.id)
+        let channel = "providers:getMobilePluginIcons"
+        await session.loadToolPluginIcons(["github", "missing"], runID: "another-run")
+        #expect(!faults.calls.contains { $0.channel == channel })
+        await session.loadToolPluginIcons(["github", "missing"], runID: run.id)
+        #expect(session.toolPluginIcon("github")?.image == image)
+        #expect(session.toolPluginIcon("missing") == nil)
+        await session.loadToolPluginIcons(["github", "missing"], runID: run.id)
+        #expect(faults.calls.filter { $0.channel == channel }.map(\.args) == [[.array([.string("github"), .string("missing")])]])
+
+        faults.emit?("providers:skillsUpdated", .object(["providerId": .string("codex")]))
+        #expect(session.toolPluginIcon("github") == nil)
+        faults.pluginIcons = .array([])
+        await session.loadToolPluginIcons(["github"], runID: run.id)
+        #expect(faults.calls.filter { $0.channel == channel }.count == 2)
+        #expect(session.toolPluginIcon("github") == nil)
+    }
+
     @Test @MainActor func executeContinueAndReceiptChecksKeepCanonicalContextAndDemoHistory() async throws {
         let (session, backend, faults) = try setup(); defer { session.exitDemo() }
         try await eventually { session.isConnected }
@@ -192,6 +436,57 @@ import Testing
         let second = ContextMentions.mention(skill) + " again"
         _ = try await session.send(second, runID: id, contextSkills: [skill], contextScope: scope)
         #expect(faults.calls.last { $0.channel == "runs:continue" }?.args[0]["contextSkills"].array == [skill.wire])
+    }
+
+    @Test @MainActor func workspaceFileSearchKeepsAFileMentionThroughSendAndHistory() async throws {
+        let (session, backend, faults) = try setup()
+        defer { session.setActive(false) }
+        try await eventually { session.isConnected && session.supportsWorkspaceFileSearch }
+        let workspace = try #require(backend.defaultWorkspaceID)
+        let scope = session.contextScope(providerID: "codex", workspaceID: workspace)
+        let matches = try await session.searchWorkspaceFiles("docs/release", scope: scope)
+        let file = try #require(matches.first)
+        #expect(matches.count == 1 && file.path == "docs/Release Notes.md")
+        let folder = try #require(try await session.searchWorkspaceFiles("docs", scope: scope).first { $0.kind == .directory })
+        #expect(folder.path == "docs")
+        #expect(faults.calls.last { $0.channel == "search:workspaceFiles" }?.args == [
+            .object(["workspaceId": .string(workspace), "query": .string("docs"), "includeDirectories": .bool(true)])
+        ])
+        for invalid in ["", "../notes.md", "docs/../notes.md", "/tmp/notes.md", "C:/notes.md"] {
+            #expect(WorkspaceFileMatch(path: invalid) == nil)
+        }
+
+        let draft = ConversationDraft(); draft.text = "👋 Compare @docs/release"
+        draft.insert(.workspaceFile(file), scope: scope)
+        draft.text += "and @docs"
+        draft.insert(.workspaceFile(folder), scope: scope)
+        let submission = try #require(draft.begin())
+        let editing = ContextText(submission.text, skills: submission.contextSkills)
+        #expect(editing.mentions.map { $0.skill.workspaceFile?.kind } == [.file, .directory])
+        #expect(editing.readable == "👋 Compare Release Notes.md and docs ")
+        let id = try await session.send(submission.text, spaceID: "codex", workspaceID: workspace,
+                                        contextSkills: submission.contextSkills, contextScope: submission.contextScope)
+        let sent = try #require(faults.calls.last { $0.channel == "runs:execute" }?.args.first)
+        #expect(sent["goal"].string == "👋 Compare @docs/Release Notes.md and @docs")
+        #expect(sent["contextFiles"].array == [file.wire, folder.wire] && sent["contextSkills"].array.isEmpty)
+        await session.selectConversation(id)
+        try await eventually { session.transcript.rows.contains { $0.kind == .prompt && !$0.contextSkills.isEmpty } }
+        let prompt = try #require(session.transcript.rows.first { $0.kind == .prompt })
+        let sentText = ContextText(prompt.text, skills: prompt.contextSkills, canonical: true)
+        #expect(sentText.mentions.map { $0.skill.workspaceFile?.kind } == [.file, .directory])
+        #expect(sentText.readable == "👋 Compare Release Notes.md and docs")
+    }
+
+    @Test func oldDesktopPathMentionsKeepTheirTypeWhenProjectedForDisplay() throws {
+        let unix: JSONValue = .object(["path": .string("/Users/test/project/src"), "type": .string("directory")])
+        let windows: JSONValue = .object(["path": .string(#"C:\project\src\app.ts"#)])
+        #expect(WorkspaceFileMatch.read(unix) == nil && WorkspaceFileMatch.read(windows) == nil)
+        let folder = try #require(WorkspaceFileMatch.read(unix, history: true))
+        let file = try #require(WorkspaceFileMatch.read(windows, history: true))
+        let text = "Open @\(folder.path) and @\(file.path)"
+        let projection = ContextText(text, skills: [.workspaceFile(folder), .workspaceFile(file)], canonical: true)
+        #expect(projection.mentions.map { $0.skill.workspaceFile?.kind } == [.directory, .file])
+        #expect(projection.readable == "Open src and app.ts")
     }
 
     @MainActor private func setup() throws -> (BackendSession, DemoBackend, ContextFaults) {

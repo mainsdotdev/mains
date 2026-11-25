@@ -1,8 +1,8 @@
-import { BRIDGE_BLOB_MAX_BYTES } from "@mains/contracts/bridge-blobs";
 import type { BridgeQuota } from "@mains/contracts/bridge";
 import type { BridgeIdentity, DevAuthEnv } from "./auth";
 import { identityIsActive } from "./auth";
 import { createBridgeSubscriptions } from "./subscriptions";
+import { readBridgeQuota, type QuotaUsage } from "./quota-status";
 import { installBlobInventory } from "./blob-gc";
 import { createBlobLifecycle, bridgeAccountPrefix, BridgeQuotaError, type BlobReservation } from "./blob-lifecycle";
 export { bridgeAccountPrefix, BridgeQuotaError, type BlobReservation } from "./blob-lifecycle";
@@ -17,7 +17,8 @@ export interface QuotaEnv extends DevAuthEnv {
 }
 /** Quota decisions and receipts use the account gate. Immutable PUT I/O runs
  * outside it, pinned by a durable intent until completion or restart recovery. */
-export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, recordBytes: () => number, subscriptions = createBridgeSubscriptions(env), limits = createBridgeLimits(env)) {
+export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, recordBytes: () => number, subscriptions = createBridgeSubscriptions(env),
+  limits = createBridgeLimits(env), retainedBlobBytes = () => 0) {
   const sql = storage.sql;
   sql.exec(`CREATE TABLE IF NOT EXISTS quota_chunks(key TEXT PRIMARY KEY,bytes INTEGER NOT NULL,stored INTEGER NOT NULL,expires_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS quota_state(id INTEGER PRIMARY KEY,initialized INTEGER NOT NULL);`);
@@ -46,9 +47,10 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
     authorize: (identity) => identityIsActive(identity, env),
     canUpload: async (accountId) => (await subscriptions.status(accountId)).subscription.canUpload,
   });
-  function usage() {
-    const row = sql.exec<{ blobBytes: number; reservedBytes: number }>("SELECT blob_bytes AS blobBytes,reserved_bytes AS reservedBytes FROM quota_usage WHERE id=1").toArray()[0];
-    return row;
+  function readUsage(): QuotaUsage {
+    const blobs = sql.exec<{ blobBytes: number; reservedBytes: number }>("SELECT blob_bytes AS blobBytes,reserved_bytes AS reservedBytes FROM quota_usage WHERE id=1").one();
+    const retained = retainedBlobBytes();
+    return { blobBytes: blobs.blobBytes - retained, reservedBytes: blobs.reservedBytes, recordBytes: recordBytes(), retainedBlobBytes: retained };
   }
   const api = {
     invalidateLimits: limits.invalidate,
@@ -57,19 +59,10 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
     hasBlobs: lifecycle.hasBlobs,
     protectReads: lifecycle.protectReads,
     put: lifecycle.put,
+    readStatus(accountId: string) { return readBridgeQuota(accountId, subscriptions, limits, readUsage); },
     async status(accountId: string): Promise<BridgeQuota> {
       await lifecycle.reconcile(accountId);
-      let subscription = await subscriptions.status(accountId);
-      for (;;) {
-        const plan = subscription.subscription.planId;
-        const policy = await limits.get(accountId, plan ?? undefined);
-        // Policy I/O may span expiry or a committed grant change. Reacquire
-        // entitlement after it, and keep policy tied to the current plan.
-        subscription = await subscriptions.status(accountId);
-        if (subscription.subscription.planId !== plan) continue;
-        const bytes = usage(), records = recordBytes();
-        return { ...policy, ...bytes, recordBytes: records, usedBytes: records + bytes.blobBytes + bytes.reservedBytes, fileLimitBytes: BRIDGE_BLOB_MAX_BYTES, ...subscription };
-      }
+      return api.readStatus(accountId);
     },
     async reserve(identity: BridgeIdentity, entries: BlobReservation[], expiresAt: number) {
       if (!await identityIsActive(identity, env)) throw new BridgeQuotaError(403, "Backend access revoked");

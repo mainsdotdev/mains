@@ -1,8 +1,9 @@
-import type { MouseEvent, ReactNode } from "react";
+import { useId, useState, type MouseEvent, type ReactNode } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setWorkspaceGroupExpanded } from "@/lib/redux/slices/appSettingsSlice";
 import { Button, Text, type SortableHandle } from "@/components/ui";
 import { ArrowUp, New } from "@/components/ui/icons";
+import { cn } from "@/lib/cn";
 
 /** Shared by the header's own glyph and any a caller supplies in its place. */
 export const SIDEBAR_ACTION_ICON =
@@ -12,7 +13,7 @@ export const SIDEBAR_ACTION_ICON =
  * A collapsible sidebar section: header row (label, count, hover "+" action)
  * over an animated children well. Extracted from the workspace list so the
  * chat list's "Projects" tree can share it — it is agnostic about what the
- * children are. Expand state persists per `groupKey` in appSettings.
+ * children are. A `groupKey` persists expansion in appSettings.
  */
 export function SidebarGroupSection({
   groupKey,
@@ -26,7 +27,7 @@ export function SidebarGroupSection({
   sortHandle,
   children,
 }: {
-  groupKey: string;
+  groupKey?: string;
   label: string;
   /**
    * Optional text colour class for a quieter section heading.
@@ -58,6 +59,8 @@ export function SidebarGroupSection({
     onClick: (event: MouseEvent<HTMLElement>) => void;
     icon: ReactNode;
     menuOpen?: boolean;
+    fadeOnHover?: boolean;
+    current?: boolean;
   };
   /**
    * Makes the header the handle of a `SortableItem`: dragging it, or Alt+Arrow
@@ -67,12 +70,16 @@ export function SidebarGroupSection({
   children: ReactNode;
 }) {
   const dispatch = useAppDispatch();
+  const contentId = useId();
+  const [localExpanded, setLocalExpanded] = useState(true);
   // Absent means expanded — a group the user has never touched starts open.
-  const expanded = useAppSelector(
-    (state) => state.appSettings.workspaceGroupExpanded[groupKey] ?? true,
+  const savedExpanded = useAppSelector(
+    (state) => groupKey === undefined ? undefined : state.appSettings.workspaceGroupExpanded[groupKey],
   );
+  const expanded = groupKey === undefined ? localExpanded : savedExpanded ?? true;
   const toggleExpanded = () => {
-    dispatch(setWorkspaceGroupExpanded({ groupKey, expanded: !expanded }));
+    if (groupKey === undefined) setLocalExpanded(current => !current);
+    else dispatch(setWorkspaceGroupExpanded({ groupKey, expanded: !expanded }));
   };
   const isSortable = !!sortHandle?.listeners;
 
@@ -82,7 +89,9 @@ export function SidebarGroupSection({
         ref={sortHandle?.ref}
         role="button"
         tabIndex={0}
+        aria-label={label}
         aria-expanded={expanded}
+        aria-controls={contentId}
         onPointerDown={(event) => {
           // A press on one of the header's own buttons is a click on that
           // button, never the start of a drag.
@@ -94,6 +103,7 @@ export function SidebarGroupSection({
           toggleExpanded();
         }}
         onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
           sortHandle?.onKeyDown?.(e);
           if (e.defaultPrevented) return;
           if (e.key === "Enter" || e.key === " ") {
@@ -137,8 +147,17 @@ export function SidebarGroupSection({
                 e.stopPropagation();
                 secondaryAction.onClick(e);
               }}
-              className={`${secondaryAction.menuOpen ? "flex" : "hidden group-hover/section:flex group-focus-within/section:flex"} items-center p-0.5 cursor-pointer rounded-md`}
+              className={cn(
+                "items-center rounded-md p-0.5 aria-current:bg-primary-950/8 dark:aria-current:bg-primary/10",
+                secondaryAction.menuOpen ? "flex" : secondaryAction.fadeOnHover ? [
+                  "pointer-events-none flex opacity-0 transition-opacity duration-200 motion-reduce:transition-none",
+                  "group-hover/section:pointer-events-auto group-hover/section:opacity-100",
+                  "group-focus-visible/section:pointer-events-auto group-focus-visible/section:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+                  "[@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+                ] : "hidden group-hover/section:flex group-focus-within/section:flex",
+              )}
               aria-label={secondaryAction.label}
+              aria-current={secondaryAction.current ? "page" : undefined}
               aria-haspopup={secondaryAction.menuOpen !== undefined ? "menu" : undefined}
               aria-expanded={secondaryAction.menuOpen}
             >
@@ -161,14 +180,18 @@ export function SidebarGroupSection({
             </Button>
           )}
           <ArrowUp
-            className={`w-3 h-3 -mr-1 text-primary-800 dark:text-primary-200 transition-transform duration-200 hidden group-hover/section:block ${
+            aria-hidden="true"
+            className={`-mr-1 size-3 text-primary-800 opacity-0 transition-[opacity,rotate] duration-200 group-hover/section:opacity-100 group-focus-visible/section:opacity-100 dark:text-primary-200 motion-reduce:transition-none [@media(hover:none)]:opacity-100 ${
               expanded ? "rotate-180" : "rotate-90"
             }`}
           />
         </div>
       </div>
       <div
-        className={`grid transition-[grid-template-rows] duration-300 ease-out ${
+        id={contentId}
+        inert={!expanded}
+        aria-hidden={!expanded}
+        className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${
           expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
         }`}
       >

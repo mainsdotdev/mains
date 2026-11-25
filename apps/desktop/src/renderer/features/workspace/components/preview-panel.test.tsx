@@ -23,14 +23,14 @@ import { PreviewPanel } from "./preview-panel";
 import { PreviewTabLifecycleProvider, usePreviewTabLifecycle } from "@/hooks/use-preview-tab-lifecycle";
 const key = workspaceBrowserExpansionKey(null, "ws");
 const file: PreviewTab = { kind: "document", id: "pdf", doc: { path: "/tmp/a.pdf", fileName: "Report.pdf", docType: "pdf" } };
-function harness(tabs: PreviewTab[] = [file]) {
+function harness(tabs: PreviewTab[] = [file], skipCloseAnimation = false) {
   const state = configureStore({ reducer: { appSettings: settings, workspace, preview, backends: () => ({ activeBackendId: null }) } });
   state.dispatch(activateWorkspaceView({ key: "ws", workspaceId: "ws", providerId: "codex" }));
   state.dispatch(setComposerContextKey("chat"));
   tabs.forEach((tab) => state.dispatch(openPreviewTab({ ownerKey: key, tab })));
   let lifecycle!: ReturnType<typeof usePreviewTabLifecycle>;
   function Consumer() { lifecycle = usePreviewTabLifecycle(); return null; }
-  render(<Provider store={state}><MemoryRouter><PreviewTabLifecycleProvider><Consumer /><PreviewPanel /></PreviewTabLifecycleProvider></MemoryRouter></Provider>);
+  render(<Provider store={state}><MemoryRouter><PreviewTabLifecycleProvider><Consumer /><PreviewPanel skipCloseAnimation={skipCloseAnimation} /></PreviewTabLifecycleProvider></MemoryRouter></Provider>);
   return { state, prepare: (id: string, callback: () => Promise<void>) => lifecycle.register(id, callback) };
 }
 beforeEach(() => { vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} }); });
@@ -85,6 +85,13 @@ describe("shared preview shell", () => {
     expect(h.state.getState().preview.byOwner[key].tabs).toHaveLength(1);
     act(() => h.state.dispatch(setPreviewOpen({ ownerKey: key, open: true })));
     expect(screen.getByRole("tab", { name: "Report.pdf" })).toBeTruthy();
+  });
+  it("hides immediately when another panel takes the lane", () => {
+    const h = harness([file], true);
+    const panel = screen.getByRole("complementary", { name: "Preview panel" });
+    act(() => h.state.dispatch(setPreviewOpen({ ownerKey: key, open: false })));
+    expect(panel.style.display).toBe("none");
+    expect(h.state.getState().preview.byOwner[key].tabs).toEqual([file]);
   });
   it("waits for an app's save barrier before closing that tab", async () => {
     const h = harness([{ kind: "app", id: "app", title: "Canvas" }]);

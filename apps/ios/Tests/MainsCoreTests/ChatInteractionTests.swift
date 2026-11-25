@@ -14,6 +14,80 @@ import Testing
     #expect(!draft.isSending)
 }
 
+@Test @MainActor func steerDraftClearsOnlyItsUnchangedSourceAfterAcceptance() throws {
+    let draft = ConversationDraft()
+    draft.text = "Focus on the tests"
+    let first = try #require(draft.begin(retainingContent: true))
+    #expect(draft.text == first.text && draft.isSending)
+    #expect(draft.begin(retainingContent: true) == nil)
+    draft.accept(first)
+    #expect(!draft.hasContent && !draft.isSending)
+    draft.text = "Look at the server"
+    let next = try #require(draft.begin(retainingContent: true))
+    draft.text = "A newer thought"
+    draft.accept(first)
+    #expect(draft.isSending && draft.text == "A newer thought")
+    draft.accept(next)
+    #expect(!draft.isSending && draft.text == "A newer thought")
+}
+
+@Test @MainActor func refusedSteerPreservesItsFilesAndMentionsWhileUncertainSteerBelongsToItsReceipt() throws {
+    let draft = ConversationDraft()
+    let scope = ContextScope(providerID: "codex")
+    let skill = ContextSkill(name: "review", displayName: "Review")
+    let file = PromptAttachment(name: "notes.txt", type: "document", mimeType: "text/plain", bytes: Data("Context".utf8))
+    draft.insert(skill, scope: scope); draft.attachments = [file]
+    let refused = try #require(draft.begin(retainingContent: true))
+    draft.reject(refused, message: MainsError.steerTurnEnded.localizedDescription, uncertain: false)
+    #expect(draft.text == refused.text && draft.attachments == [file] && draft.contextSkills == [skill])
+    #expect(draft.unsentText == nil && !draft.isSending)
+    let uncertain = try #require(draft.begin(retainingContent: true))
+    draft.reject(uncertain, message: "Unknown outcome", uncertain: true)
+    #expect(!draft.hasContent && draft.contextSkills.isEmpty && draft.unsentText == nil)
+    draft.text = "Another request"
+    let edited = try #require(draft.begin(retainingContent: true))
+    draft.text = "Keep my edits"
+    draft.reject(edited, message: "Unknown outcome", uncertain: true)
+    #expect(draft.text == "Keep my edits")
+}
+
+@Test func steerSupportRequiresARunningLocalCodexOrClaudeConversation() {
+    for provider in ["codex", "claude_code", "copilot_cli", "cursor", "opencode"] {
+        for status in ["queued", "running", "succeeded", "canceled", "failed"] {
+            var run = Conversation(id: "run", accountId: "account", providerId: provider, mode: "developer", spaceId: nil,
+                                   title: nil, status: status, model: nil, isArchived: false, isReplica: false, lastError: nil,
+                                   createdAt: Date(), updatedAt: Date())
+            #expect(run.canSteer == (status == "running" && ["codex", "claude_code"].contains(provider)))
+            run = Conversation(id: "run", accountId: "account", providerId: provider, mode: "developer", spaceId: nil,
+                               title: nil, status: status, model: nil, isArchived: false, isReplica: true, lastError: nil,
+                               createdAt: Date(), updatedAt: Date())
+            #expect(!run.canSteer)
+        }
+    }
+}
+
+@Test func steerWaitsForItsDurableMessageIdentityWithoutAnOptimisticTurn() throws {
+    let at = Date()
+    var pending = PendingMessage(runID: "run", text: "Same message", date: at, status: .sending, commandID: "steer-command",
+                                 channel: "runs:steer", payload: .object(["clientUserMessageId": .string("steer-input")]),
+                                 backendID: "computer", owner: 1, previousArtifactID: 0)
+    func prompt(_ messageID: String) -> Artifact {
+        Artifact(id: 1, runId: "run", kind: "user-prompt", content: pending.text,
+                 metadata: .object(["clientUserMessageId": .string(messageID)]), createdAt: at)
+    }
+    var transcript = Transcript()
+    #expect(!pending.matches(prompt("another-input")))
+    #expect(pending.matches(prompt("steer-input")))
+    for status in [PendingMessage.Status.sending, .accepted, .uncertain] {
+        pending.status = status
+        #expect(transcript.rows(pending: pending, runID: "run").isEmpty)
+    }
+    transcript.replace(HistoryPage(artifacts: [prompt("steer-input")], toolCalls: [], turns: [], start: nil, end: nil, last: nil, hasOlder: false, hasNewer: false), pending: pending)
+    let row = try #require(transcript.rows(pending: pending, runID: "run").first)
+    #expect(row.id == "artifact:1" && row.delivery == nil)
+    #expect(transcript.rows(pending: pending, runID: "run").count == 1)
+}
+
 @Test @MainActor func aFailedSendRestoresTextWithoutOverwritingNewInput() {
     let draft = ConversationDraft()
     draft.text = "Original message"
@@ -52,6 +126,45 @@ import Testing
     draft.restoreUnsent()
     #expect(draft.text == "Read this file" && draft.attachments == [attachment])
     #expect(draft.unsentText == "An unrelated next thought")
+}
+
+@Test @MainActor func emptyDraftsCannotSendAfterTheLastAttachmentIsRemoved() {
+    let draft = ConversationDraft()
+    for text in ["", " \n\t"] {
+        draft.text = text
+        #expect(!draft.hasContent && draft.begin() == nil)
+    }
+    draft.attachments = [PromptAttachment(name: "note.pdf", type: "document", mimeType: "application/pdf", bytes: Data("PDF".utf8))]
+    #expect(draft.hasContent)
+    draft.attachments.removeAll()
+    #expect(!draft.hasContent && draft.begin() == nil)
+}
+
+@Test(arguments: ["image", "document"]) @MainActor
+func attachmentOnlyDraftsPreserveFilesAcrossRefusalRecoveryAndUncertainDelivery(type: String) throws {
+    let draft = ConversationDraft()
+    let first = PromptAttachment(name: "first", type: type, mimeType: "application/octet-stream", bytes: Data([1]))
+    let next = PromptAttachment(name: "next", type: type, mimeType: "application/octet-stream", bytes: Data([2]))
+    draft.attachments = [first]
+    let sent = try #require(draft.begin())
+    #expect(sent.text.isEmpty && sent.attachments == [first])
+    #expect(draft.attachments.isEmpty && draft.isSending && draft.begin() == nil)
+    draft.reject(sent, message: "Refused", uncertain: false)
+    #expect(draft.text.isEmpty && draft.attachments == [first])
+
+    draft.text = " \n\t"
+    let retry = try #require(draft.begin())
+    draft.attachments = [next]
+    draft.reject(retry, message: "Refused", uncertain: false)
+    #expect(draft.attachments == [next] && draft.unsentAttachments == [first])
+    draft.restoreUnsent()
+    #expect(draft.text == retry.text && draft.attachments == [first])
+    draft.restoreUnsent()
+    #expect(draft.text.isEmpty && draft.attachments == [next], "Restoring the failed files must also preserve a newer attachment-only draft.")
+
+    let uncertain = try #require(draft.begin())
+    draft.reject(uncertain, message: "Unknown outcome", uncertain: true)
+    #expect(!draft.hasContent && draft.unsentText == nil && draft.unsentAttachments.isEmpty)
 }
 
 @Test func contentGrowthAndKeyboardChangesNeverBecomeUserIntent() {
@@ -209,6 +322,7 @@ import Testing
     let page = try samplePage(artifacts: #"[{"id":1,"runId":"run","kind":"user-prompt","content":"Hi","metadata":{},"createdAt":{"$date":"1970-01-01T00:00:02Z"}},{"id":2,"runId":"run","kind":"report","content":"A response already streaming","metadata":{"streamId":"answer-1"},"createdAt":{"$date":"1970-01-01T00:00:03Z"}}]"#)
     transcript.replace(page, pending: pending)
     let confirmed = transcript.rows(pending: nil, runID: "run")
+    #expect(page.artifacts.map { transcript.rowID(for: $0) } == confirmed.map(\.id), "Artifact navigation uses the same pending/stream aliases as the displayed messages.")
     #expect(confirmed.map(\.id) == before.map(\.id))
     #expect(confirmed.map(\.date) == before.map(\.date))
     #expect(confirmed.first?.delivery == .accepted)
@@ -218,6 +332,28 @@ import Testing
     transcript.replace(try samplePage())
     transcript.replace(page)
     #expect(transcript.rows.first?.id == "artifact:1", "Presentation aliases leave memory with their bounded history page.")
+}
+
+@Test(arguments: [10.5, 80.0, 2.0])
+func mateRequestFollowsItsSavedPromptWhenDeviceTimeDiffers(_ phoneTime: Double) throws {
+    let pending = PendingMessage(runID: "run", text: "Ask Kitchen Mate", date: Date(timeIntervalSince1970: phoneTime),
+                                 status: .sending, commandID: "mate-send", channel: "runs:continue",
+                                 payload: .object(["clientPromptId": .string("mate-send")]), backendID: "computer", owner: 1,
+                                 previousArtifactID: 1, contextSkills: [.mate(id: "kitchen", name: "Kitchen Mate")])
+    let page = try samplePage(artifacts: """
+        [{"id":1,"runId":"run","kind":"user-prompt","content":"Earlier prompt","createdAt":{"$date":"1970-01-01T00:00:05Z"}},
+         {"id":2,"runId":"run","kind":"user-prompt","content":"Ask Kitchen Mate","metadata":{"clientPromptId":"mate-send"},"createdAt":{"$date":"1970-01-01T00:00:10Z"}},
+         {"id":3,"runId":"run","kind":"report","content":"Mate request","metadata":{"source":"assistant_assignment","assignmentId":"kitchen-task"},"createdAt":{"$date":"1970-01-01T00:00:10Z"}},
+         {"id":4,"runId":"run","kind":"report","content":"Request sent","createdAt":{"$date":"1970-01-01T00:00:11Z"}}]
+        """)
+    var transcript = Transcript()
+    #expect(transcript.rows(pending: pending, runID: "run").map(\.id) == ["pending:mate-send"])
+    transcript.replace(page, pending: pending)
+    #expect(transcript.rows(pending: pending, runID: "run").map(\.id) == ["artifact:1", "pending:mate-send", "artifact:3", "artifact:4"])
+    #expect(transcript.rows.first(where: { $0.id == "pending:mate-send" })?.delivery == .accepted)
+    #expect(transcript.rows.first(where: { $0.id == "artifact:3" })?.mateTask?.id == "kitchen-task")
+    transcript.replace(page)
+    #expect(transcript.rows.map(\.id) == ["artifact:1", "pending:mate-send", "artifact:3", "artifact:4"])
 }
 
 @Test func durableResponseAcknowledgementDoesNotMoveItPastFollowingToolActivity() throws {
@@ -293,4 +429,25 @@ import Testing
     transport.release?.resume(); transport.release = nil
     let retired = await pending.value
     #expect(!retired && session.transcript.page == nil && !session.historyLoading)
+}
+
+@Test @MainActor func activityReadersCannotPublishIntoAnotherConversation() async throws {
+    let backend = try DemoBackend(), transport = HistoryReaderTransport(backend)
+    let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in transport })
+    session.restore(); session.setActive(true); try session.startDemo()
+    defer { session.exitDemo(); backend.shutdown() }
+    try await eventually { session.isConnected }
+    let id = try #require(session.conversations.first?.id)
+    await session.selectConversation(id)
+    let main = try #require(session.transcript.page)
+    let range = HistoryActivityRange(start: try #require(main.start), end: try #require(main.last).exclusiveEnd, omittedCount: 1)
+    let detail = try await session.readHistoryActivity(runID: id, range: range)
+    #expect(detail.artifacts.count + detail.toolCalls.count <= 200 && session.transcript.page == main)
+    transport.hold = true
+    let task = Task { try await session.readHistoryActivity(runID: id, range: range) }
+    try await eventually { transport.release != nil }
+    session.leaveConversation(id)
+    transport.release?.resume(); transport.release = nil
+    await #expect(throws: MainsError.changedBackend) { try await task.value }
+    #expect(session.transcript.page == nil)
 }

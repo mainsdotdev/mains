@@ -302,6 +302,62 @@
       "when": 1794049872903,
       "tag": "0042_atlas_bookmarks",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1794690803311,
+      "tag": "0043_assistants",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1794727510593,
+      "tag": "0044_assistant_welcome",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1794732556571,
+      "tag": "0045_assistant_execution_avatar",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1794769762117,
+      "tag": "0046_assistant_welcome_execution",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1794777784919,
+      "tag": "0047_assistant_routines",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1794950076682,
+      "tag": "0048_assistant_optional_teams",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1795436979574,
+      "tag": "0049_assistant_pins",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "6",
+      "when": 1795470111862,
+      "tag": "0050_atlas_source_removals",
+      "breakpoints": true
     }
   ]
 }

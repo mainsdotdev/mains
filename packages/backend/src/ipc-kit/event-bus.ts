@@ -20,6 +20,8 @@ export interface EventScope {
   workspaceId?: string;
   /** A specific connected client; used by the WebSocket sink, ignored locally. */
   clientId?: string;
+  /** Keep host-owned signaling and context off paired-device connections. */
+  excludeDevices?: boolean;
 }
 
 export interface EventSink {

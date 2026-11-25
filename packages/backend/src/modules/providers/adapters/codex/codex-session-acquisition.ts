@@ -415,7 +415,7 @@ export function createCodexSessionAcquisition(
       ...settings,
       ...(model ? { model } : {}),
       ...buildDeveloperInstructionsParam(request.extraInstructions),
-      dynamicTools: toCodexDynamicTools(request.mode),
+      dynamicTools: toCodexDynamicTools(request.mode, !!request.configSnapshot?.assistantId),
     };
 
     logger.info(
@@ -444,6 +444,7 @@ export function createCodexSessionAcquisition(
       threadId: threadId ?? null,
       mode: request.mode,
       mainsCtx: mainsContext(runId, request.execution),
+      assistantId: typeof request.configSnapshot?.assistantId === "string" ? request.configSnapshot.assistantId : null,
     });
 
     const { effort, serviceTier } = turnSettingsFor(overrides);
@@ -517,7 +518,7 @@ export function createCodexSessionAcquisition(
         throw normalizeCodexResumeError(resumeError);
       }
       if (!isCodexMissingThreadError(resumeError)) {
-        throw resumeError;
+        throw normalizeCodexResumeError(resumeError);
       }
       logger.warn(
         `Thread resume failed (${codexErrorMessage(resumeError)}), starting new thread`,
@@ -527,7 +528,7 @@ export function createCodexSessionAcquisition(
         ...settings,
         ...(model ? { model } : {}),
         ...buildDeveloperInstructionsParam(request.extraInstructions),
-        dynamicTools: toCodexDynamicTools(request.mode),
+        dynamicTools: toCodexDynamicTools(request.mode, !!request.configSnapshot?.assistantId),
       };
       const threadResult = await server.sendRequest(
         "thread/start",
@@ -551,6 +552,7 @@ export function createCodexSessionAcquisition(
       threadId,
       mode: request.mode,
       mainsCtx: mainsContext(runId, request.execution),
+      assistantId: typeof request.configSnapshot?.assistantId === "string" ? request.configSnapshot.assistantId : null,
       subAgents: persistedSubAgents,
     });
     const interruptedSubAgents =
@@ -660,6 +662,7 @@ export function createCodexSessionAcquisition(
       threadId: forkedThreadId,
       mode: request.mode,
       mainsCtx: mainsContext(runId, request.execution),
+      assistantId: typeof request.configSnapshot?.assistantId === "string" ? request.configSnapshot.assistantId : null,
     });
 
     const { effort, serviceTier } = turnSettingsFor(forkOverrides);
@@ -806,7 +809,7 @@ export function createCodexSessionAcquisition(
           model = resolveSessionModel(model, resumed.model, "thread/resume");
         } catch (error) { throw normalizeCodexResumeError(error); }
       } else {
-        const started = await server.sendRequest("thread/start", { ...params, dynamicTools: toCodexDynamicTools(request.mode) });
+        const started = await server.sendRequest("thread/start", { ...params, dynamicTools: toCodexDynamicTools(request.mode, !!request.configSnapshot?.assistantId) });
         model = resolveSessionModel(model, started.model, "thread/start");
         threadId = started.thread.id;
         if (!threadId) throw new Error("Codex did not create a conversation for voice chat.");
@@ -817,6 +820,7 @@ export function createCodexSessionAcquisition(
         runId: request.runId, threadId,
         mode: request.mode,
         mainsCtx: { workspaceId: request.execution.workspaceId, rootPath: request.execution.cwd, runId: request.runId },
+        assistantId: typeof request.configSnapshot?.assistantId === "string" ? request.configSnapshot.assistantId : null,
         subAgents: !runCoordinator.hasSessionSubAgentState(request.runId)
           ? await findPersistedSubAgents?.(request.runId)
           : [],

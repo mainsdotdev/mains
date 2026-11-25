@@ -1,13 +1,14 @@
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { pulseService } from "./pulse.service";
-import type { CreatePulseInput, UpdatePulseInput } from "./pulse.dto";
+import type { CreatePulseInput, CreateAssistantRoutineInput, UpdatePulseInput } from "./pulse.dto";
 import { CHANNELS } from "@mains/contracts/channels";
 
 export function registerPulseIpc() {
   ipcMain.handle(CHANNELS.pulse.getAll, handle(() => pulseService.getAll()));
 
   ipcMain.handle(CHANNELS.pulse.getById, handle((id: string) => pulseService.getById(id)));
+  ipcMain.handle(CHANNELS.pulse.createRoutine, handle((accountId: string, assistantId: string, input: CreateAssistantRoutineInput) => pulseService.createRoutine(accountId, assistantId, input)));
 
   ipcMain.handle(
     CHANNELS.pulse.create,
@@ -37,6 +38,7 @@ export function unregisterPulseIpc() {
   ipcMain.removeHandler(CHANNELS.pulse.getAll);
   ipcMain.removeHandler(CHANNELS.pulse.getById);
   ipcMain.removeHandler(CHANNELS.pulse.create);
+  ipcMain.removeHandler(CHANNELS.pulse.createRoutine);
   ipcMain.removeHandler(CHANNELS.pulse.update);
   ipcMain.removeHandler(CHANNELS.pulse.delete);
   ipcMain.removeHandler(CHANNELS.pulse.toggle);

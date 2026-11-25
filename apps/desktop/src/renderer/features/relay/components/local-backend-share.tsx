@@ -254,12 +254,12 @@ export function LocalBackendShare() {
               }
               onSecondary={() => setConfirmRotate(false)}
             />
-            {!status.webUiAvailable && (
+            {/* {!status.webUiAvailable && (
               <Caption tone="warning" className="block">
                 Web UI not built — run <code>npm run build:web</code> once so
                 browsers can load the interface.
               </Caption>
-            )}
+            )} */}
 
             {/* Network access (LAN) — requires remote access */}
             <div className="flex items-center justify-between pt-3">
@@ -315,7 +315,7 @@ export function LocalBackendShare() {
         )}
       </SettingsSection>
 
-      <DevicePairing canPair={lanOn || tailscaleOn} />
+      <DevicePairing canPair={lanOn || tailscaleOn} remoteAccess={remoteOn} />
     </>
   );
 }

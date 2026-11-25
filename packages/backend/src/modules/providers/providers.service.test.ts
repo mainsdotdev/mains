@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createTestDb } from "../../../test/setup-db";
-import { createAccount, createProvider } from "../../../test/factories";
+import { createAccount, createProvider, createRun, createWorkspace } from "../../../test/factories";
 import type { DatabaseInstance } from "../../db/types";
 import type Database from "better-sqlite3";
 import { promises as fs } from "node:fs";
@@ -41,6 +41,7 @@ vi.mock("./adapters", () => ({
     featuredPluginIds: [],
   }),
   refreshWorkAdapterConfig: vi.fn(),
+  setGoalForProvider: vi.fn(),
 }));
 
 import { providersService, providerForPairedDevice } from "./providers.service";
@@ -51,8 +52,58 @@ describe("providersService", () => {
     createAccount(db, { id: "default" });
   });
 
+  describe("changeMobileGoal", () => {
+    it("admits only the mobile actions and checks the objective revision without fencing usage updates", async () => {
+      createProvider(db, { id: "codex", isEnabled: true });
+      const run = createRun(db, { providerId: "codex", mode: "developer", sessionId: "thread-1" });
+      const current = { threadId: "thread-1", objective: "Keep the tests green", status: "active", tokensUsed: 1 };
+      vi.spyOn(providersService, "getGoal").mockResolvedValue(current);
+      const revision = (await providersService.getMobileGoalSummary(run.id))!.revision;
+      const { setGoalForProvider } = await import("./adapters");
+      vi.mocked(setGoalForProvider).mockImplementationOnce(async (_provider, id, params, guard) => {
+        expect(id).toBe(run.id);
+        expect(params).toEqual({ status: "paused", origin: "user" });
+        expect(await guard?.ownsRun()).toBe(true);
+        expect(guard?.matches({ ...current, tokensUsed: 100 })).toBe(true);
+        expect(guard?.matches({ ...current, objective: "Different objective" })).toBe(false);
+        return { ...current, status: "paused" };
+      });
+      await expect(providersService.changeMobileGoal(run.id, { action: "pause", expectedRevision: revision, origin: "automatic" })).rejects.toThrow("Invalid goal change");
+      await expect(providersService.changeMobileGoal(run.id, { action: "pause", expectedRevision: revision })).resolves.toEqual({ applied: true });
+    });
+  });
+
   afterEach(() => {
+    vi.restoreAllMocks();
     cleanup();
+  });
+
+  describe("getMobileGoalSummary", () => {
+    it("projects only a bounded objective, status and usage from a local Codex thread", async () => {
+      const workspace = createWorkspace(db, { rootPath: "/private/example/mains" });
+      const run = createRun(db, { providerId: "codex", mode: "developer", workspaceId: workspace.id, sessionId: "thread-1" });
+      vi.spyOn(providersService, "getGoal").mockResolvedValue({
+        threadId: "thread-1", objective: "Update @/private/example/mains/src/Hero.tsx " + "🚀".repeat(3000),
+        status: "active", tokensUsed: 26438, timeUsedSeconds: 14, tokenBudget: 99999, createdAt: 1,
+      });
+      const result = await providersService.getMobileGoalSummary(run.id);
+      expect(result).toEqual({
+        objective: expect.stringMatching(/^Update @src\/Hero\.tsx /), status: "active", tokensUsed: 26438, timeUsedSeconds: 14,
+        objectiveTruncated: true, revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      expect(Array.from(result!.objective)).toHaveLength(2048);
+    });
+
+    it("never reads a goal for a foreign, replica, archived or non-Codex run", async () => {
+      const read = vi.spyOn(providersService, "getGoal");
+      for (const run of [
+        createRun(db, { providerId: "codex", accountId: "another-account" }),
+        createRun(db, { providerId: "codex", ownerBackendId: "another-computer" }),
+        createRun(db, { providerId: "codex", isArchived: true }),
+        createRun(db, { providerId: "claude_code" }),
+      ]) expect(await providersService.getMobileGoalSummary(run.id)).toBeNull();
+      expect(read).not.toHaveBeenCalled();
+    });
   });
 
   // ─────────────────────────────────────────────────────────────

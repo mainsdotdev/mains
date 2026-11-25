@@ -33,9 +33,9 @@ export function permissionConfigKeyFor(providerId: string): string | null {
 
 /**
  * The provider-config keys the composer's run settings live under — and the
- * only config keys a paired device is shown (the desktop's
- * `providerForPairedDevice`): everything else in the blob, apiKey and baseUrl
- * first of all, never leaves the Mac.
+ * config keys included in conversation snapshots. Paired devices also receive
+ * the Codex voice preference separately through `providerForPairedDevice`;
+ * credentials such as apiKey and baseUrl never leave the Mac.
  */
 export const RUN_SETTING_CONFIG_KEYS = [
   "effortLevel",

@@ -228,6 +228,10 @@ describe("plugin detail navigation", () => {
 
   it("refreshes the connection on returning from hosted setup and replaces Connect with Connected", async () => {
     const detail = {
+      mcpServerStatuses: [
+        { name: "Calendar", runtimeStatus: "starting", authStatus: "unknown", toolCount: 0 },
+        { name: "Files", runtimeStatus: "failed", authStatus: "unknown", toolCount: 0 },
+      ],
       summary: plugin, skills: [], mcpServers: [], apps: [{
         id: "app-gmail", name: "Gmail", installed: true, runtimeEnabled: true, callable: false,
         installUrl: "https://chatgpt.com/apps/gmail", description: "Gmail app",
@@ -250,7 +254,9 @@ describe("plugin detail navigation", () => {
       });
       fireEvent.focus(window);
       expect(mocks.refetch).toHaveBeenCalledTimes(1);
-      expect(screen.getByText("Connected")).toBeTruthy();
+      expect(screen.getByText("Connected").getAttribute("data-status-tone")).toBe("success");
+      expect(screen.getByText("Connecting").getAttribute("data-status-tone")).toBe("info");
+      expect(screen.getByText("Connection failed").getAttribute("data-status-tone")).toBe("danger");
       expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
       view.unmount();
       fireEvent.focus(window);

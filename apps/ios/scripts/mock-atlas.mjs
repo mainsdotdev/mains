@@ -1,0 +1,154 @@
+import { CHANNELS } from '../../../packages/contracts/src/channels.ts';
+import { createHash } from 'node:crypto';
+
+const saved = new Map(), sources = new Map(), edits = new Map(), deleted = new Set();
+let nextSavedID = 0;
+const initialTags = () => [['fixture-tag-research', 'Research'], ['fixture-tag-work', 'Work']];
+const tags = new Map(initialTags());
+export function resetAtlasFixture() { saved.clear(); sources.clear(); edits.clear(); deleted.clear(); nextSavedID = 0; tags.clear(); for (const [id, name] of initialTags()) tags.set(id, name); }
+const normalizeTag = name => name.normalize('NFKC').trim().replace(/\s+/g, ' ');
+const tagDocument = (row, accountId) => ({ id: row.key, requestedId: row.key, title: row.title, kind: row.kind, tags: row.tags,
+  revision: createHash('sha256').update(JSON.stringify([accountId, row.key, [...row.tags].sort((a, b) => a.id.localeCompare(b.id))])).digest('hex') });
+
+/** Prepared Atlas responses and memory-only saves; no user library access. */
+export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase64, version }) {
+  if (input?.accountId !== 'fixture-account') throw new Error('Atlas account not found');
+  const rows = Array.from({ length: 55 }, (_, index) => ({
+    key: index === 0 ? 'fixture-atlas-page' : index === 1 ? 'fixture-atlas-doc' : index === 2 ? 'fixture-atlas-image' : index === 3 ? 'fixture-atlas-bookmark' : `fixture-atlas-page-${index}`,
+    kind: ['page', 'file', 'image', 'bookmark'][index] ?? 'page',
+    title: ['Travel notes', 'Project report', 'Sample image', 'A useful link'][index] ?? `Library page ${index}`,
+    date: '2026-11-12T10:00:00.000Z', collectionId: null, isFavorite: index < 2, origin: 'saved', sourceRunId: 'fixture-run',
+    file: index === 1 ? { itemId: 'fixture-atlas-doc' } : index === 2 ? { itemId: 'fixture-atlas-image' } : null,
+    pageId: index === 0 ? 'fixture-atlas-page' : index > 3 ? `fixture-atlas-page-${index}` : null,
+    icon: index === 0 ? 'emoji:🗺️' : null, url: index === 3 ? 'https://example.com' : null,
+    description: index === 3 ? 'A saved bookmark' : null, note: null,
+    tags: [0, 3].includes(index) ? [{ id: 'fixture-tag-research', name: 'Research', source: 'user' }] : index === 1 ? [{ id: 'fixture-tag-work', name: 'Work', source: 'user' }] : [],
+  })).filter(row => !deleted.has(row.key));
+  rows.push(...saved.values());
+  for (const row of rows) {
+    Object.assign(row, edits.get(row.key));
+    row.tags ??= [];
+    row.savedItemId = row.key; row.savedCollectionId = row.collectionId;
+  }
+  switch (channel) {
+    case CHANNELS.atlas.mobileTags: {
+      const search = normalizeTag(input.query ?? '').toLowerCase(), page = input.page ?? 1;
+      const rowsOfTags = [...tags].filter(([, name]) => name.toLowerCase().includes(search)).sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([id, name]) => ({ id, name, count: rows.filter(row => !row.trashedAt && row.tags.some(tag => tag.id === id)).length }));
+      return { items: rowsOfTags.slice((page - 1) * 50, page * 50), page, hasNext: page * 50 < rowsOfTags.length };
+    }
+    case CHANNELS.atlas.readMobileTags:
+    case CHANNELS.atlas.setMobileTags: {
+      const row = rows.find(row => row.key === input.id && !row.trashedAt);
+      if (!row) throw new Error('Atlas item not found or in Trash');
+      const current = tagDocument(row, input.accountId);
+      if (channel === CHANNELS.atlas.readMobileTags) return current;
+      if (input.expectedRevision !== current.revision) throw new Error('These tags changed elsewhere. Reload them before saving your edits.');
+      if (!Array.isArray(input.tags) || input.tags.length > 30 || input.tags.some(tag => typeof tag !== 'string' || !tag.trim() || tag.length > 64 || /\p{Cc}/u.test(tag))) throw new Error('Invalid tags');
+      const selected = new Map();
+      for (const value of input.tags) {
+        const name = normalizeTag(value), id = tags.has(value) ? value : [...tags].find(([, old]) => normalizeTag(old).toLowerCase() === name.toLowerCase())?.[0] ?? `fixture-tag-${tags.size}`;
+        if (!tags.has(id)) tags.set(id, name);
+        selected.set(id, { id, name: tags.get(id), source: row.tags.find(tag => tag.id === id)?.source ?? 'user' });
+      }
+      edits.set(row.key, { ...edits.get(row.key), tags: [...selected.values()] });
+      const result = tagDocument({ ...row, tags: [...selected.values()] }, input.accountId); delete result.tags; return result;
+    }
+    case CHANNELS.atlas.mobileTrash: {
+      const trashed = rows.filter(row => row.trashedAt).sort((left, right) => right.trashedAt.localeCompare(left.trashedAt) || right.key.localeCompare(left.key));
+      const page = input.page ?? 1;
+      return { items: trashed.slice((page - 1) * 50, page * 50).map(row => ({ id: row.key, title: row.title, kind: row.kind, collectionId: row.collectionId, trashedAt: row.trashedAt })), page, hasNext: page * 50 < trashed.length, canDeletePermanently: true };
+    }
+    case CHANNELS.atlas.setMobileTrash: {
+      const item = rows.find(row => row.key === input.id);
+      if (!item || typeof input.trashed !== 'boolean') throw new Error('Atlas item not found');
+      if (!!item.trashedAt !== input.trashed) edits.set(input.id, { ...edits.get(input.id), trashedAt: input.trashed ? new Date().toISOString() : null });
+      return { id: item.key, requestedId: input.id, title: item.title, kind: item.kind, trashed: input.trashed };
+    }
+    case CHANNELS.atlas.deleteMobileTrash: {
+      const item = rows.find(row => row.key === input.id);
+      if (!item?.trashedAt || item.trashedAt !== input.expectedTrashedAt) throw new Error('Trash status changed');
+      if (!saved.delete(item.key)) deleted.add(item.key);
+      edits.delete(item.key);
+      for (const [source, id] of sources) if (id === item.key) sources.delete(source);
+      return { id: item.key, requestedId: input.id, title: item.title, kind: item.kind };
+    }
+    case CHANNELS.atlas.readMobileBookmark:
+    case CHANNELS.atlas.editMobileBookmark: {
+      const item = rows.find(row => row.key === input.id && row.kind === 'bookmark' && !row.trashedAt);
+      if (!item) throw new Error('Bookmark not found or in Trash');
+      const document = row => ({ id: row.key, requestedId: input.id, title: row.title, kind: 'bookmark', url: row.url,
+        description: row.description ?? '', note: row.note ?? '',
+        revision: createHash('sha256').update(JSON.stringify([input.accountId, row.key, row.url, row.title, row.description ?? '', row.note ?? ''])).digest('hex') });
+      const current = document(item);
+      if (channel === CHANNELS.atlas.readMobileBookmark) return current;
+      if (input.expectedRevision !== current.revision) throw new Error('This bookmark changed elsewhere. Reload it before saving your edits.');
+      const patch = { ...edits.get(input.id) };
+      for (const field of ['title', 'description', 'note']) if (field in input) patch[field] = input[field].trim();
+      edits.set(input.id, patch);
+      const updated = document({ ...item, ...patch });
+      return { id: updated.id, requestedId: input.id, kind: 'bookmark', title: updated.title, revision: updated.revision };
+    }
+    case CHANNELS.atlas.updateMobileItem: {
+      const item = rows.find(row => row.key === input.id);
+      if (!item || item.trashedAt) throw new Error('Atlas item not found');
+      const patch = { ...edits.get(input.id) };
+      if (typeof input.isFavorite === 'boolean') patch.isFavorite = input.isFavorite;
+      if ('collectionId' in input) patch.collectionId = input.collectionId;
+      edits.set(input.id, patch);
+      const result = { ...item, ...patch };
+      return { id: result.key, requestedId: input.id, title: result.title, kind: result.kind, isFavorite: result.isFavorite, collectionId: result.collectionId };
+    }
+    case CHANNELS.atlas.saveMobileBookmark:
+    case CHANNELS.atlas.saveMobileFile: {
+      let source, title, kind, url = null;
+      if (channel === CHANNELS.atlas.saveMobileBookmark) {
+        const value = new URL(input.url);
+        if (!['http:', 'https:'].includes(value.protocol)) throw new Error('Invalid bookmark URL');
+        for (const key of [...value.searchParams.keys()]) if (key.startsWith('utm_') || ['fbclid', 'gclid'].includes(key)) value.searchParams.delete(key);
+        source = value.href; title = value.hostname; url = input.url; kind = 'bookmark';
+      } else {
+        if (input.runId !== 'fixture-run' || input.version !== version || ![503, 505].includes(input.artifactId)) throw new Error('Invalid Atlas save source');
+        source = `file:${input.runId}:${input.artifactId}`; title = input.artifactId === 505 ? 'report.pdf' : 'notes.md'; kind = 'file';
+      }
+      let key = sources.get(source);
+      if (!key) {
+        key = `fixture-saved-${nextSavedID++}`;
+        saved.set(key, { date: new Date().toISOString(), origin: 'saved', key, title, kind, isFavorite: false, sourceRunId: kind === 'file' ? input.runId : null,
+          collectionId: input.collectionId ?? null, file: kind === 'file' ? { itemId: key } : null, url });
+        sources.set(source, key);
+      }
+      const item = saved.get(key); return { id: key, title: item.title, kind: item.kind };
+    }
+    case CHANNELS.atlas.mobileLibrary: {
+      const filtered = rows.filter(row => !row.trashedAt && (!input.tagId || row.tags.some(tag => tag.id === input.tagId)) && (!input.type || input.type === 'all' || input.type === row.kind)
+        && (!input.scope || input.scope === 'all' || input.scope === 'saved' || input.scope === 'favorites' && row.isFavorite)
+        && (!input.collectionId || row.collectionId === input.collectionId) && (!input.query || `${row.title} ${row.tags.map(tag => tag.name).join(' ')}`.toLowerCase().includes(input.query.toLowerCase())));
+      const page = Math.max(1, Math.min(input.page ?? 1, Math.ceil(filtered.length / 50)));
+      return { items: filtered.slice((page - 1) * 50, page * 50), page, hasNext: page * 50 < filtered.length };
+    }
+    case CHANNELS.atlas.readMobilePage: {
+      if (!rows.some(row => row.pageId === input.id && !row.trashedAt) || input.version !== undefined && input.version !== 1) throw new Error('Atlas page changed or not found');
+      const chars = Array.from('x'.repeat(16383) + '😀' + 'İstanbul 🌍'), offset = input.offset ?? 0, end = Math.min(chars.length, offset + 16384);
+      if (offset < 0 || offset > chars.length) throw new Error('Invalid page offset');
+      return { id: input.id, title: 'Travel notes', icon: 'emoji:🗺️', version: 1, markdown: chars.slice(offset, end).join(''), offset, nextOffset: end < chars.length ? end : null, sourceRunId: 'fixture-run' };
+    }
+    case CHANNELS.atlas.describeMobileFile:
+    case CHANNELS.atlas.readMobileImage:
+    case CHANNELS.atlas.readMobileFile: {
+      const id = input.reference?.itemId;
+      if (!rows.some(row => row.key === id && !row.trashedAt)) throw new Error('Atlas file not found');
+      if (!['fixture-atlas-doc', 'fixture-atlas-image'].includes(id) && saved.get(id)?.kind !== 'file') throw new Error('Atlas file not found');
+      const image = id === 'fixture-atlas-image', bytes = image ? Buffer.from(imageBase64, 'base64') : saved.get(id)?.title === 'report.pdf' ? pdfBytes : outputBytes;
+      if (channel === CHANNELS.atlas.readMobileImage) {
+        if (!image) throw new Error('Not an Atlas image');
+        return { reference: input.reference, version, mime: 'image/png', base64: imageBase64, width: 1, height: 1 };
+      }
+      if (channel === CHANNELS.atlas.describeMobileFile) return { reference: input.reference, name: image ? 'image.png' : 'notes.md', mimeType: image ? 'image/png' : 'text/markdown', previewType: image ? 'image' : 'markdown', byteSize: bytes.length, modifiedAt: 1, version };
+      if (input.version !== version || !Number.isSafeInteger(input.offset) || input.offset < 0 || input.offset > bytes.length) throw new Error('Atlas file changed');
+      const end = Math.min(bytes.length, input.offset + 128 * 1024);
+      return { base64: bytes.subarray(input.offset, end).toString('base64'), offset: input.offset, nextOffset: end < bytes.length ? end : null, byteSize: bytes.length, version };
+    }
+    default: throw new Error('Unknown Atlas channel');
+  }
+}

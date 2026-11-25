@@ -10,9 +10,15 @@ import {
   resolveClaudeRuntime,
 } from "../../providers.utils";
 import { createClaudeDriver, mapSDKMessage } from "./claude.driver";
+import {
+  createWorkAdapter,
+  getAccountInfoForProvider,
+  listSkillsForProvider,
+  shutdownWorkAdapter,
+} from "../adapter.factory";
+import type { ProviderResponse } from "../../providers.dto";
 import { runsRepo } from "../../../runs/runs.repo";
 import { bridgeService } from "../../../bridge";
-import { guardsService } from "../../../guards/guards.service";
 import { appSettingsService } from "../../../appSettings";
 import { clearAllPendingRequests, handleToolApprovalResponse, listPendingApprovals } from "../../../runs/user-input-broker";
 import type { WorkRunEvent } from "../../../../../shared/adapter.types";
@@ -27,18 +33,17 @@ const sdk = vi.hoisted(() => ({
   getSessionMessages: vi.fn(),
   deleteSession: vi.fn(),
   getSessionInfo: undefined as ReturnType<typeof vi.fn> | undefined,
+  createSdkMcpServer: undefined as ReturnType<typeof vi.fn> | undefined,
+  tool: undefined as ReturnType<typeof vi.fn> | undefined,
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: sdk.query,
-  createSdkMcpServer: undefined,
-  tool: undefined,
+  get createSdkMcpServer() { return sdk.createSdkMcpServer; },
+  get tool() { return sdk.tool; },
   get getSessionInfo() { return sdk.getSessionInfo; },
   deleteSession: sdk.deleteSession,
   getSessionMessages: sdk.getSessionMessages,
-}));
-vi.mock("../../../guards/guards.service", () => ({
-  guardsService: { buildClaudeGuardHook: vi.fn().mockResolvedValue(null) },
 }));
 vi.mock("../../../bridge", () => ({ bridgeService: { mirrorClaudeSession: vi.fn().mockResolvedValue(undefined) } }));
 
@@ -58,6 +63,8 @@ describe("Claude runtime without a system CLI", () => {
     vi.clearAllMocks();
     sdk.deleteSession.mockReset().mockResolvedValue(undefined);
     sdk.getSessionInfo = undefined;
+    sdk.createSdkMcpServer = undefined;
+    sdk.tool = undefined;
     vi.spyOn(runsRepo, "findClaudeTaskAnchorsByRun").mockResolvedValue([]);
     clearClaudeCliCache();
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), "mains-claude-runtime-"));
@@ -136,6 +143,19 @@ esac
     await driver.executePrompt(prepared.session, prepared.prompt, () => {}, new AbortController().signal);
     return prepared;
   }
+
+  it.each([false, true])("keeps the MCP timeout long enough for an assistant question (assistant=%s)", async assistant => {
+    sdk.createSdkMcpServer = vi.fn(() => ({ type: "sdk", name: "mains", instance: {} }));
+    sdk.tool = vi.fn((name, description, shape, handler) => ({ name, description, shape, handler }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    try {
+      const prepared = await driver.createSession({ runId: "question-timeout", accountId: "account-1", goal: "Plan a trip", mode: "work",
+        execution: { workspaceId: null, cwd: fixture }, configSnapshot: assistant ? { assistantId: "gezici" } : {} });
+      const mains = (prepared.session as any).options.mcpServers.mains;
+      expect(mains.timeout).toBe(assistant ? 360_000 : undefined);
+      expect(sdk.tool.mock.calls.some(call => call[0] === "AskAssistantQuestion")).toBe(assistant);
+    } finally { await driver.shutdown?.(); }
+  });
 
   it.each([undefined, "0"])("opts model runs into native MCP tasks while preserving override %s", async (override) => {
     vi.stubEnv("CLAUDE_AUTO_BACKGROUND_TASKS", override);
@@ -445,7 +465,45 @@ esac
     await driver.shutdown?.();
   });
 
+  it("isolates welcome generation from tools, MCP, settings and hooks while honoring the profile", async () => {
+    const driver = createClaudeDriver({ settingSources: ["user", "project"], permissionMode: "bypassPermissions" });
+    expect(await driver.generateText!("welcome profile", { model: "chosen-model", effort: "high", isolated: true })).toBe("ok");
+    expect(sdk.query.mock.calls[0][0].options).toMatchObject({ model: "chosen-model", effort: "high", thinking: { type: "adaptive" }, permissionMode: "dontAsk", tools: [], allowedTools: [], disallowedTools: ["*"], mcpServers: {}, hooks: {}, plugins: [], settingSources: [] });
+    await driver.shutdown?.();
+  });
+
+  it.each([
+    {
+      events: [{ type: "assistant", error: "billing_error", message: { content: [
+        { type: "text", text: "This account needs an active subscription to use Claude Code." },
+      ] } }],
+      error: "This account needs an active subscription to use Claude Code.",
+    },
+    {
+      events: [{ type: "result", subtype: "error_during_execution", is_error: true, errors: ["This organization has no available credits."] }],
+      error: "This organization has no available credits.",
+    },
+    {
+      events: [{ type: "result", subtype: "success", is_error: true, result: "The selected model is unavailable on your plan." }],
+      error: "The selected model is unavailable on your plan.",
+    },
+    {
+      events: [{ type: "assistant", error: "authentication_failed", message: { content: [] } }],
+      error: "Claude: authentication failed — sign in again",
+    },
+  ])("reports the provider failure for isolated generation: $error", async ({ events, error }) => {
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close, async *[Symbol.asyncIterator]() {
+      yield { type: "assistant", message: { content: [{ type: "text", text: "Partial reply" }] } };
+      yield* events;
+    } }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    await expect(driver.generateText!("welcome profile", { isolated: true })).rejects.toThrow(new Error(error));
+    expect(sdk.close).toHaveBeenCalledOnce();
+  });
+
   it("uses the bundled executable for runs, the live catalogue, commands and account probes", async () => {
+    vi.stubEnv("DISABLE_TELEMETRY", undefined);
+    vi.stubEnv("DISABLE_ERROR_REPORTING", undefined);
     const driver = createClaudeDriver({ settingSources: [] });
     expect(resolveClaudeRuntime()).toEqual({ path: bundled, source: "bundled" });
     expect(detectInstalledClis()).toMatchObject({ claude: true, claudeSource: "bundled" });
@@ -463,6 +521,7 @@ esac
     expect(await driver.generateText!("hello", { model: "sonnet" })).toBe("ok");
     for (const [{ options }] of sdk.query.mock.calls) {
       expect(options.pathToClaudeCodeExecutable).toBe(bundled);
+      expect(options.env).toMatchObject({ DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1" });
       expect(options.env).not.toHaveProperty("ANTHROPIC_API_KEY");
       expect(options.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
     }
@@ -506,6 +565,69 @@ console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"avai
     }
   });
 
+  it("finishes commands, models and installed plugins when the first account probe invalidates discovery", async () => {
+    vi.spyOn(os, "homedir").mockReturnValue(fixture);
+    const logError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const provider: ProviderResponse = {
+      id: "claude_code", kind: "agent_runtime", displayName: "Claude", isEnabled: true,
+      config: { settingSources: [] }, capabilities: null, defaultModel: null,
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    const adapter = createWorkAdapter(provider);
+    const refreshed = path.join(fixture, "catalog-refreshed");
+    fs.writeFileSync(bundled, `#!${process.execPath}
+const fs = require("node:fs");
+const [command, subcommand] = process.argv.slice(2);
+if (command === "--version") console.log("2.1.283 (Claude Code)");
+if (command === "auth") process.stdout.write(fs.readFileSync(${JSON.stringify(statusFile)}));
+if (command === "plugin") {
+  if (!fs.existsSync(${JSON.stringify(refreshed)})) {
+    fs.appendFileSync(${JSON.stringify(callsFile)}, subcommand + "\\n");
+    setInterval(() => {}, 1000);
+  } else if (subcommand === "marketplace") {
+    console.log(JSON.stringify([{ name: "test", installLocation: ${JSON.stringify(fixture)} }]));
+  } else {
+    console.log(JSON.stringify({ installed: [{ id: "current@test", enabled: true }], available: [] }));
+  }
+}
+`);
+    let finishModels!: (value: unknown) => void;
+    let finishCommands!: (value: unknown) => void;
+    sdk.supportedModels.mockReturnValueOnce(new Promise((resolve) => { finishModels = resolve; }));
+    sdk.initializationResult.mockReturnValueOnce(new Promise((resolve) => { finishCommands = resolve; }));
+    const pending = Promise.allSettled([
+      adapter.listCommands!(fixture), adapter.listCommands!(fixture),
+      adapter.listModels!(), listSkillsForProvider(provider, fixture),
+    ]);
+    try {
+      await vi.waitFor(() => {
+        expect(sdk.initializationResult).toHaveBeenCalledOnce();
+        expect(sdk.supportedModels).toHaveBeenCalledOnce();
+        expect(cliCalls().trim().split("\n")).toHaveLength(2);
+      });
+      const oldQueries = sdk.query.mock.calls.map(([{ options }]) => options.abortController.signal);
+      fs.writeFileSync(refreshed, "");
+      await getAccountInfoForProvider(provider);
+
+      expect(await pending).toEqual([
+        { status: "fulfilled", value: [expect.objectContaining({ name: "help" })] },
+        { status: "fulfilled", value: [expect.objectContaining({ name: "help" })] },
+        { status: "fulfilled", value: [expect.objectContaining({ id: "sonnet" })] },
+        { status: "fulfilled", value: [expect.objectContaining({ name: "current", scope: "plugin" })] },
+      ]);
+      expect(oldQueries.every((signal) => signal.aborted)).toBe(true);
+      expect(sdk.initializationResult).toHaveBeenCalledTimes(2);
+      expect(sdk.supportedModels).toHaveBeenCalledTimes(2);
+      expect(sdk.close).toHaveBeenCalledTimes(4);
+      expect(logError).not.toHaveBeenCalled();
+    } finally {
+      finishCommands({ commands: [{ name: "obsolete" }] });
+      finishModels([{ value: "obsolete", displayName: "Obsolete" }]);
+      await shutdownWorkAdapter(provider.id);
+      await pending;
+    }
+  });
+
   it("reads plan usage through a control query using the selected runtime and releases it", async () => {
     sdk.usage.mockResolvedValueOnce({
       rate_limits_available: true,
@@ -529,14 +651,21 @@ console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"avai
     let finish!: (models: Array<{ value: string; displayName: string }>) => void;
     sdk.supportedModels.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
     const pending = driver.listModels!();
-    await vi.waitFor(() => expect(sdk.supportedModels).toHaveBeenCalledOnce());
-    driver.invalidateCatalogs?.();
-    finish([{ value: "old", displayName: "Old" }]);
-    await pending;
+    try {
+      await vi.waitFor(() => expect(sdk.supportedModels).toHaveBeenCalledOnce());
+      sdk.supportedModels.mockResolvedValue([{ value: "new", displayName: "New" }]);
+      driver.invalidateCatalogs?.();
 
-    sdk.supportedModels.mockResolvedValue([{ value: "new", displayName: "New" }]);
-    expect(await driver.listModels!()).toEqual([expect.objectContaining({ id: "new" })]);
-    expect(sdk.supportedModels).toHaveBeenCalledTimes(2);
+      const current = [expect.objectContaining({ id: "new" })];
+      expect(await pending).toEqual(current);
+      finish([{ value: "old", displayName: "Old" }]);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(await driver.listModels!()).toEqual(current);
+      expect(sdk.supportedModels).toHaveBeenCalledTimes(2);
+    } finally {
+      finish([]);
+      await driver.shutdown?.();
+    }
   });
 
   it("shares concurrent model discovery and closes the single control query", async () => {
@@ -611,7 +740,10 @@ console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"avai
     await expect(driver.generateText!("hello")).resolves.toBe("ok");
     expect(sdk.close).toHaveBeenCalledTimes(1);
     sdk.query.mockImplementationOnce(() => ({ close: sdk.close,
-      async *[Symbol.asyncIterator]() { throw new Error("query crashed"); yield; },
+      async *[Symbol.asyncIterator]() {
+        yield { type: "assistant", message: { content: [{ type: "text", text: "Partial reply" }] } };
+        throw new Error("query crashed");
+      },
     }));
     await expect(driver.generateText!("fail")).rejects.toThrow("query crashed");
     expect(sdk.close).toHaveBeenCalledTimes(2);
@@ -667,16 +799,22 @@ console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"avai
     expect(sdk.close).toHaveBeenCalledTimes(1);
   });
 
-  it("does not acquire a prepared session after shutdown retires its pending options", async () => {
+  it("does not acquire a resumed session after shutdown retires its pending lookup", async () => {
     let release!: () => void;
-    vi.mocked(guardsService.buildClaudeGuardHook).mockReturnValueOnce(new Promise((resolve) => { release = () => resolve(null); }));
-    const driver = createClaudeDriver({ settingSources: [] });
-    const pending = driver.createSession({ runId: "pending-options", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
-    const rejected = expect(pending).rejects.toThrow(/shutdown/);
-    await vi.waitFor(() => expect(guardsService.buildClaudeGuardHook).toHaveBeenCalled());
-    await driver.shutdown?.();
-    release(); await rejected;
-    expect(sdk.query.mock.calls.length).toBe(0);
+    const waiting = new Promise<null>((resolve) => { release = () => resolve(null); });
+    const lookup = vi.spyOn(runsRepo, "findRunById").mockReturnValueOnce(waiting);
+    try {
+      const driver = createClaudeDriver({ settingSources: [] });
+      const pending = driver.resumeSession!({ runId: "pending-lookup", accountId: "account-1", message: "Continue", execution: { workspaceId: null, cwd: fixture } });
+      const rejected = expect(pending).rejects.toThrow(/shutdown/);
+      await vi.waitFor(() => expect(lookup).toHaveBeenCalledWith("pending-lookup"));
+      await driver.shutdown?.();
+      release();
+      await rejected;
+      expect(sdk.query.mock.calls.length).toBe(0);
+    } finally {
+      lookup.mockRestore();
+    }
   });
 
   it("retires an acquired session on shutdown before its first query and removes its settings", async () => {
@@ -1087,11 +1225,28 @@ console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"avai
   });
 
   it("keeps fallback models only for a failed query and retries the live catalogue", async () => {
-    sdk.supportedModels.mockRejectedValueOnce(new Error("Catalogue unavailable"));
+    sdk.supportedModels
+      .mockRejectedValueOnce(new Error("Catalogue unavailable"))
+      .mockResolvedValueOnce([
+        { value: "default", description: "Use the default model (currently Sonnet)" },
+        { value: "fable", displayName: "Fable", supportsFastMode: true },
+        { value: "claude-fable-5-2", displayName: "Claude Fable 5.2" },
+        { value: "custom-model", resolvedModel: "claude-fable-5-2", displayName: "Custom model" },
+        { value: "sonnet", displayName: "Sonnet" },
+      ]);
     const driver = createClaudeDriver({});
-    expect((await driver.listModels!()).map((model) => model.id))
-      .toEqual(["fable", "sonnet", "opus[1m]", "haiku"]);
-    expect(await driver.listModels!()).toHaveLength(1);
+    expect(await driver.listModels!()).toMatchObject([
+      { id: "fable", contextWindow: 1_000_000 },
+      { id: "sonnet" },
+      { id: "opus[1m]" },
+      { id: "haiku" },
+    ]);
+    expect(await driver.listModels!()).toMatchObject([
+      { id: "fable", contextWindow: 1_000_000, supportsFastMode: true },
+      { id: "claude-fable-5-2", contextWindow: 1_000_000 },
+      { id: "custom-model", contextWindow: 1_000_000 },
+      { id: "sonnet", contextWindow: 200_000 },
+    ]);
     expect(sdk.close).toHaveBeenCalledTimes(2);
   });
 

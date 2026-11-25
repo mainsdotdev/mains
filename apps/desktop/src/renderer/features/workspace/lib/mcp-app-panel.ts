@@ -1,5 +1,6 @@
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import type { UiContextParts } from "./ui-context";
+import { assistantHref } from "@/features/assistants/lib/assistant-navigation";
 
 export type McpAppScope = UiContextParts;
 
@@ -11,6 +12,7 @@ export function sameMcpApp(left: Pick<McpAppEntrypoint, "server" | "resourceUri"
 
 export function sameMcpAppScope(left: McpAppScope, right: McpAppScope): boolean {
   return left.backendId === right.backendId && left.spaceId === right.spaceId &&
+    (left.assistantId ?? null) === (right.assistantId ?? null) &&
     left.providerId === right.providerId && left.mode === right.mode &&
     (left.workspaceId ?? null) === (right.workspaceId ?? null) &&
     (left.collectionId ?? null) === (right.collectionId ?? null);
@@ -24,6 +26,7 @@ export function mcpAppToolName(server: string, entrypointTool: string, requested
 }
 
 export function mcpAppConversationPath(scope: McpAppScope, runId?: string): string {
+  if (scope.assistantId) return assistantHref(scope.assistantId, runId ?? "new");
   if (scope.mode === "developer" && scope.workspaceId) return `/code/${scope.workspaceId}`;
   return runId ? `/code/runs/${runId}` : "/code";
 }

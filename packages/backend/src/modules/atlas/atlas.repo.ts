@@ -1,13 +1,32 @@
-import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { AtlasListOptions, AtlasMetadataPatch, AtlasItemTag, AtlasTag } from "@mains/contracts/atlas";
 import { ATLAS_LIBRARY_PAGE_SIZE } from "@mains/contracts/atlas";
+import { ATLAS_COVER_SOURCE_PREFIX } from "@mains/contracts/atlas-covers";
 import { getDb } from "../../db/client";
-import { atlasItems, atlasPageRevisions, atlasPageFileRefs, atlasTags, atlasItemTags, runs } from "../../db/schema";
+import { atlasItems, atlasPageRevisions, atlasPageFileRefs, atlasSourceRemovals, atlasTags, atlasItemTags, runs } from "../../db/schema";
 import { mergeMetadata, readMetadata } from "./atlas.metadata";
 
 export type AtlasRecord = typeof atlasItems.$inferSelect;
 export type RevisionRecord = typeof atlasPageRevisions.$inferSelect;
+type SourceRemoval = typeof atlasSourceRemovals.$inferSelect;
+type SourceFile = Pick<SourceRemoval, "accountId" | "sourceKey" | "kind" | "title" | "contentHash">;
+type TrashEntry = Pick<AtlasRecord, "id" | "title" | "kind" | "collectionId"> & { trashedAt: number; sourceOnly: 0 | 1 };
+
+function conversationSource(item: AtlasRecord): SourceFile | null {
+  if ((item.kind !== "file" && item.kind !== "image") || !item.sourceKey || !/^[a-f0-9]{64}$/.test(item.sourceKey)) return null;
+  return { accountId: item.accountId, sourceKey: item.sourceKey, kind: item.kind, title: item.title, contentHash: item.contentHash };
+}
+
+function matchingSource(file: SourceFile) {
+  return and(eq(atlasSourceRemovals.accountId, file.accountId), or(eq(atlasSourceRemovals.sourceKey, file.sourceKey),
+    file.contentHash ? and(eq(atlasSourceRemovals.kind, file.kind), eq(atlasSourceRemovals.contentHash, file.contentHash)) : undefined));
+}
+
+// Mirrors isAtlasLibraryItem for aggregate reads, without loading file inventory.
+const libraryItem = sql`coalesce(substr(${atlasItems.sourceKey},1,${ATLAS_COVER_SOURCE_PREFIX.length}) <> ${ATLAS_COVER_SOURCE_PREFIX},1)
+  AND (coalesce(substr(${atlasItems.sourceKey},1,5) <> 'page:',1)
+    OR CASE WHEN json_valid(${atlasItems.metadata}) THEN json_extract(${atlasItems.metadata},'$.savedToLibrary')=1 ELSE 0 END)`;
 
 export const atlasRepo = {
   saveBookmark(id: string, accountId: string, fields: Partial<AtlasRecord> & { title: string }, tags?: string[]) {
@@ -34,12 +53,15 @@ export const atlasRepo = {
     for (const { itemId, ...tag } of rows) result.set(itemId, [...(result.get(itemId) ?? []), tag]);
     return result;
   },
-  listTags(accountId: string): AtlasTag[] {
-    return getDb().select({ id: atlasTags.id, name: atlasTags.name,
-      count: sql<number>`count(CASE WHEN ${atlasItems.trashedAt} IS NULL AND ${atlasItemTags.isExcluded}=0 THEN ${atlasItems.id} END)` })
+  listTags(accountId: string, options?: { query: string; offset: number; limit: number }): AtlasTag[] {
+    const query = getDb().select({ id: atlasTags.id, name: atlasTags.name,
+      count: sql<number>`count(CASE WHEN ${atlasItems.trashedAt} IS NULL AND ${atlasItemTags.isExcluded}=0 AND ${libraryItem} THEN ${atlasItems.id} END)` })
       .from(atlasTags).leftJoin(atlasItemTags, eq(atlasTags.id, atlasItemTags.tagId))
       .leftJoin(atlasItems, and(eq(atlasItems.id, atlasItemTags.itemId), eq(atlasItems.accountId, accountId)))
-      .where(eq(atlasTags.accountId, accountId)).groupBy(atlasTags.id).orderBy(atlasTags.normalizedName).all();
+      .where(and(eq(atlasTags.accountId, accountId), options?.query ? sql`instr(${atlasTags.normalizedName}, ${options.query}) > 0` : undefined))
+      .groupBy(atlasTags.id).orderBy(atlasTags.normalizedName, atlasTags.id).$dynamic();
+    if (options) query.offset(options.offset).limit(options.limit);
+    return query.all();
   },
   /** Names and ids both resolve within this account. User removal records an
    * exclusion, so another enrichment cannot resurrect that relationship. */
@@ -122,17 +144,18 @@ export const atlasRepo = {
     if (trashed !== undefined) conditions.push(trashed ? isNotNull(atlasItems.trashedAt) : isNull(atlasItems.trashedAt));
     if (collectionId) conditions.push(eq(atlasItems.collectionId, collectionId));
     if (isFavorite !== undefined) conditions.push(eq(atlasItems.isFavorite, isFavorite));
-    query.where(and(...conditions)).orderBy(desc(atlasItems.updatedAt), desc(atlasItems.id));
+    query.where(and(...conditions)).orderBy(...(trashed === true
+      ? [desc(atlasItems.trashedAt), desc(atlasItems.updatedAt), desc(atlasItems.id)]
+      : [desc(atlasItems.updatedAt), desc(atlasItems.id)]));
     if (offset !== undefined) query.offset(offset);
     if (limit !== undefined || offset !== undefined) query.limit(limit ?? ATLAS_LIBRARY_PAGE_SIZE);
     return query.all();
   },
-  imageIdentities(accountId: string, collectionId?: string) {
-    const conditions = [eq(atlasItems.accountId, accountId), eq(atlasItems.kind, "image"), isNull(atlasItems.trashedAt)];
+  fileIdentities(accountId: string, kind?: "file" | "image", collectionId?: string) {
+    const conditions = [eq(atlasItems.accountId, accountId), isNull(atlasItems.trashedAt), isNotNull(atlasItems.contentHash), libraryItem,
+      kind ? eq(atlasItems.kind, kind) : inArray(atlasItems.kind, ["file", "image"])];
     if (collectionId) conditions.push(eq(atlasItems.collectionId, collectionId));
-    // Image identity is small; do not load storage paths, Page previews or the
-    // rest of the account's inventory merely to prefer permanent copies.
-    return getDb().select({ title: atlasItems.title, contentHash: atlasItems.contentHash })
+    return getDb().select({ kind: atlasItems.kind, contentHash: atlasItems.contentHash })
       .from(atlasItems).where(and(...conditions)).all();
   },
   find(id: string, accountId: string) {
@@ -143,6 +166,62 @@ export const atlasRepo = {
   bySource(accountId: string, sourceKey: string) {
     return getDb().select().from(atlasItems)
       .where(and(eq(atlasItems.accountId, accountId), eq(atlasItems.sourceKey, sourceKey))).get() ?? null;
+  },
+  sourceMasks(accountId: string) {
+    const db = getDb();
+    const removed = db.select({ sourceKey: atlasSourceRemovals.sourceKey, kind: atlasSourceRemovals.kind, contentHash: atlasSourceRemovals.contentHash })
+      .from(atlasSourceRemovals).where(eq(atlasSourceRemovals.accountId, accountId)).all();
+    const trashed = db.select().from(atlasItems).where(and(eq(atlasItems.accountId, accountId), isNotNull(atlasItems.trashedAt),
+      isNotNull(atlasItems.sourceKey), inArray(atlasItems.kind, ["file", "image"]))).all().flatMap((item) => conversationSource(item) ?? []);
+    return [...removed, ...trashed];
+  },
+  trashEntries(accountId: string, offset?: number, limit?: number) {
+    return getDb().all<TrashEntry>(sql`
+      SELECT id, title, kind, collection_id AS collectionId, trashed_at AS trashedAt, 0 AS sourceOnly, updated_at AS updatedAt
+      FROM atlas_items WHERE account_id = ${accountId} AND trashed_at IS NOT NULL
+      UNION ALL
+      SELECT id, title, kind, NULL, trashed_at, 1, trashed_at
+      FROM atlas_source_removals WHERE account_id = ${accountId} AND trashed_at IS NOT NULL
+      ORDER BY trashedAt DESC, updatedAt DESC, id DESC
+      ${limit === undefined ? sql.empty() : sql`LIMIT ${limit} OFFSET ${offset ?? 0}`}
+    `);
+  },
+  trashSource(file: SourceFile) {
+    const db = getDb();
+    return db.transaction(() => {
+      const previous = db.select().from(atlasSourceRemovals).where(matchingSource(file))
+        .orderBy(desc(atlasSourceRemovals.trashedAt), atlasSourceRemovals.id).get();
+      if (previous?.trashedAt) return previous;
+      if (previous) {
+        return db.update(atlasSourceRemovals).set({ trashedAt: new Date() })
+          .where(eq(atlasSourceRemovals.id, previous.id)).returning().get();
+      }
+      return db.insert(atlasSourceRemovals).values({ ...file, id: `source:${randomUUID()}`, trashedAt: new Date() }).returning().get();
+    });
+  },
+  removedSource(id: string, accountId: string) {
+    return getDb().select().from(atlasSourceRemovals)
+      .where(and(eq(atlasSourceRemovals.id, id), eq(atlasSourceRemovals.accountId, accountId))).get();
+  },
+  restoreSource(id: string, accountId: string) {
+    getDb().delete(atlasSourceRemovals).where(and(eq(atlasSourceRemovals.id, id),
+      eq(atlasSourceRemovals.accountId, accountId))).run();
+  },
+  clearSourceTrash(id: string, accountId: string) {
+    getDb().update(atlasSourceRemovals).set({ trashedAt: null })
+      .where(and(eq(atlasSourceRemovals.id, id), eq(atlasSourceRemovals.accountId, accountId))).run();
+  },
+  keepSourceCopy(row: typeof atlasItems.$inferInsert) {
+    const db = getDb();
+    return db.transaction(() => {
+      const existing = row.sourceKey ? atlasRepo.bySource(row.accountId, row.sourceKey) : null;
+      if (existing?.trashedAt) atlasRepo.update(existing.id, row.accountId, { trashedAt: null });
+      if (!existing) atlasRepo.insert(row);
+      const item = atlasRepo.find(existing?.id ?? row.id, row.accountId)!;
+      const source = conversationSource(item);
+      if (source) db.delete(atlasSourceRemovals).where(matchingSource(source)).run();
+      return item;
+    });
   },
   byStorageKey(storageKey: string) {
     return getDb().select().from(atlasItems).where(eq(atlasItems.storageKey, storageKey)).get() ?? null;
@@ -301,6 +380,10 @@ export const atlasRepo = {
       // Current covers (including trashed Pages) and historical embeds survive
       // until their references are removed. Share the lock with metadata writes.
       if (atlasRepo.referenced(id)) throw new Error("This file is used by a Page or its revision history");
+      const item = atlasRepo.find(id, accountId);
+      const source = item && conversationSource(item);
+      if (source) db.insert(atlasSourceRemovals).values({ ...source, id: `source:${randomUUID()}` })
+        .onConflictDoNothing({ target: [atlasSourceRemovals.accountId, atlasSourceRemovals.sourceKey] }).run();
       db.delete(atlasItems).where(and(eq(atlasItems.id, id), eq(atlasItems.accountId, accountId))).run();
     });
   },

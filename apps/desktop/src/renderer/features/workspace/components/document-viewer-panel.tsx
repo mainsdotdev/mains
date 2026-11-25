@@ -10,7 +10,8 @@ import { MarkdownDocument } from "./document-viewer/markdown-document";
 import { PdfDocument } from "./document-viewer/pdf-document";
 import { DocumentViewerToolbar } from "./document-viewer/document-viewer-toolbar";
 import { DocumentFallback } from "./document-viewer/document-fallback";
-import { documentPreviewLimit } from "@mains/contracts/output-files";
+import { MediaDocument } from "./document-viewer/media-document";
+import { documentPreviewLimit, isOutputMediaType } from "@mains/contracts/output-files";
 import { documentOwnerMatchesBackend } from "../lib/document-lifecycle";
 
 /** Each file owns its zoom, scroll containers and renderer for its open lifetime. */
@@ -59,8 +60,10 @@ function DocumentPreview({ currentDoc, active }: { currentDoc: DocumentViewerDoc
       isSaving={isSaving} onSaveCopy={() => void saveCopy()} />
     {currentDoc.byteSize !== undefined && currentDoc.byteSize > documentPreviewLimit(currentDoc.docType) ? (
       <div className="relative flex-1">
-        <DocumentFallback doc={currentDoc} message={`This document exceeds the ${documentPreviewLimit(currentDoc.docType) / (1024 * 1024)} MiB inline preview limit. Save a copy or open it in another app.`} />
+        <DocumentFallback doc={currentDoc} message={`This file exceeds the ${documentPreviewLimit(currentDoc.docType) / (1024 * 1024)} MiB inline preview limit. Save a copy or open it in another app.`} />
       </div>
+    ) : isOutputMediaType(currentDoc.docType) ? (
+      <MediaDocument doc={currentDoc} active={active} />
     ) : isTextDocType(currentDoc.docType) ? (
       <MarkdownDocument path={currentDoc.path} docType={currentDoc.docType} />
     ) : currentDoc.docType === "pdf" ? (

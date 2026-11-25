@@ -64,7 +64,7 @@ export function ProjectLinkedResources({ projectId, onManageClick }: ProjectLink
       <div className="py-4 flex justify-end">
         <Button
           type="button"
-          variant="primary"
+          variant="secondary"
           className="flex items-center gap-1.5 "
           onClick={onManageClick}
         >

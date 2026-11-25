@@ -1,4 +1,6 @@
-/** Atlas stores Pages and explicitly saved files; generated files are projections. */
+import { ATLAS_COVER_SOURCE_PREFIX } from "./atlas-covers";
+
+/** Atlas also stores Page assets that are not listed until explicitly saved. */
 export type AtlasKind = "page" | "file" | "image" | "bookmark";
 export interface AtlasTag { id: string; name: string; count: number }
 export interface AtlasItemTag { id: string; name: string; source: "user" | "ai" }
@@ -34,6 +36,8 @@ export function atlasPageHref(id: string): string {
 }
 /** Page presentation is independent of its content revisions. */
 export interface AtlasMetadata {
+  /** An embedded Page asset was explicitly added to the library. Internal save state. */
+  savedToLibrary?: boolean;
   /** Same emoji:/icon: format used by projects and spaces. */
   icon?: string;
   /** A permanently stored Atlas image, shared without copying its bytes. */
@@ -82,16 +86,19 @@ export interface AtlasListOptions {
   limit?: number;
   /** Include a bounded Markdown excerpt of each Page's current revision. */
   includePagePreview?: boolean;
+  /** Include automatically listed files removed from the library in a Trash read. */
+  includeRemovedSources?: boolean;
 }
 export interface AtlasListItem extends AtlasItem {
-  /** Exact byte identity for image presentation; absent on older backends. */
+  /** Exact byte identity for file presentation; absent when unavailable. */
   contentHash?: string;
   /** Display-only excerpt; never used to edit or restore a Page. */
   preview?: string;
+  sourceOnly?: boolean;
 }
 export interface AtlasGeneratedFile {
   sourceKey: string;
-  /** Deduplicate images across conversations and paginated results. */
+  /** Exact byte identity for deduplication across conversations. */
   contentHash?: string;
   /** Omitted by older backends for generated outputs. Uploads are not creations. */
   origin?: "generated" | "attachment";
@@ -185,10 +192,16 @@ export interface AtlasSavePage extends AtlasIdentity {
   blocks?: unknown[];
   markdown?: string;
 }
-export interface AtlasSaveFile {
-  accountId: string;
-  runId: string;
-  path: string;
+export type AtlasSaveFile = { accountId: string } & (
+  { runId: string; path: string; itemId?: never }
+  /** Promote an existing Page asset without copying bytes or changing its identity. */
+  | { itemId: string; runId?: never; path?: never }
+);
+
+/** Storage inventory includes Page embeds/covers; the library shows explicit saves. */
+export function isAtlasLibraryItem(item: Pick<AtlasItem, "sourceKey" | "metadata">): boolean {
+  return !item.sourceKey?.startsWith(ATLAS_COVER_SOURCE_PREFIX)
+    && (!item.sourceKey?.startsWith("page:") || item.metadata?.savedToLibrary === true);
 }
 export interface AtlasUploadFile {
   accountId: string;

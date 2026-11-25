@@ -40,6 +40,7 @@ export interface ReviewTarget {
 export interface RunOperationsDeps {
   /** Embedded owners may retire preparation before the native write starts. */
   operationIsCurrent?: (accountId?: string) => boolean;
+  atlasImage?: true;
   /** Pull a newly created run into the list, select it, and return its id. */
   registerNewRun: (runId: string) => Promise<string | null>;
   /** Refresh one run's transcript. */
@@ -53,6 +54,7 @@ export function useRunOperations({
   loadRunDetails,
   onRunUpdated,
   operationIsCurrent,
+  atlasImage,
 }: RunOperationsDeps) {
   const dispatch = useAppDispatch();
   const [isLoading, setIsLoading] = useState(false);
@@ -155,6 +157,7 @@ export function useRunOperations({
           mode: activeSpace?.mode,
           providerId: selectedProvider,
           goal: goal.trim(),
+          ...(atlasImage ? { atlasImage } : {}),
           ...(atlasPageId ? { atlasPageId } : {}),
           clientPromptId,
           model: model || undefined,
@@ -172,7 +175,7 @@ export function useRunOperations({
         return registerNewRun(result.data.runId);
       }, null, "Failed to execute run");
     },
-    [runOperation, registerNewRun, activeSpaceId, activeSpace?.mode],
+    [runOperation, registerNewRun, activeSpaceId, activeSpace?.mode, atlasImage],
   );
 
   const continueRun = useCallback(async (

@@ -20,9 +20,11 @@ const mocks = vi.hoisted(() => ({
   empty: [],
   items: [] as AtlasListItem[],
   generated: [] as AtlasGeneratedFile[],
-  list: vi.fn(), setTags: vi.fn(),
+  list: vi.fn(), setTags: vi.fn(), setSourceTrash: vi.fn(), success: vi.fn(),
   tags: [{ id: "react", name: "React", count: 1 }, { id: "ts", name: "TypeScript", count: 1 }],
   queryResult: undefined as ((options: AtlasLibraryOptions) => AtlasLibraryPage) | undefined,
+  libraryRead: undefined as { currentData?: AtlasLibraryPage; isFetching?: boolean; error?: string } | undefined,
+  refetchLibrary: vi.fn(),
   previewImages: {} as Record<string, string>,
   fetching: false,
   pendingPage: undefined as number | undefined,
@@ -46,15 +48,26 @@ vi.mock("@/lib/platform", () => ({ useCapabilities: () => ({ openWithApp: mocks.
 vi.mock("@/lib/redux/api/atlasApi", () => ({
   useAtlasLibraryQuery: (options: AtlasLibraryOptions) => {
     mocks.list(options);
-    return { currentData: options.page === mocks.pendingPage ? undefined : mocks.queryResult?.(options) ?? libraryPage([
+    const defaultData = options.page === mocks.pendingPage ? undefined : mocks.queryResult?.(options) ?? libraryPage([
       ...mocks.items.map(savedEntry), ...mocks.generated.map((file) => generatedEntry(file)),
-    ]), isFetching: mocks.fetching || options.page === mocks.pendingPage, refetch: vi.fn() };
+    ]);
+    const currentData = mocks.libraryRead ? mocks.libraryRead.currentData : defaultData;
+    const error = mocks.libraryRead?.error;
+    return {
+      currentData,
+      isFetching: mocks.libraryRead ? !!mocks.libraryRead.isFetching : mocks.fetching || options.page === mocks.pendingPage,
+      isError: error !== undefined,
+      isSuccess: !!currentData && error === undefined,
+      error,
+      refetch: () => mocks.refetchLibrary(options),
+    };
   },
   useListAtlasTagsQuery: () => ({ data: mocks.tags }),
   useSetAtlasTagsMutation: () => [mocks.setTags, { isLoading: false }],
   useEnrichAtlasBookmarkMutation: () => [vi.fn(), {}],
   useCreateAtlasPageMutation: () => [mocks.create, { isLoading: false }],
   useUpdateAtlasItemMutation: () => [vi.fn(), {}],
+  useSetAtlasSourceTrashMutation: () => [mocks.setSourceTrash, {}],
   useRemoveAtlasItemMutation: () => [vi.fn(), {}],
 }));
 vi.mock("@/hooks/use-active-space", () => ({ useActiveSpace: () => ({
@@ -77,7 +90,7 @@ vi.mock("../hooks/use-save-to-atlas", () => ({
   atlasError: (error: unknown) => error instanceof Error ? error.message : String(error),
 }));
 vi.mock("@/components/ui", async (original) => ({
-  ...await original<typeof import("@/components/ui")>(), toast: { error: mocks.error },
+  ...await original<typeof import("@/components/ui")>(), toast: { error: mocks.error, success: mocks.success },
 }));
 
 function savedEntry(item: AtlasListItem): AtlasLibraryEntry {
@@ -109,15 +122,16 @@ function setup(initialEntry = "/atlas?project=project") {
     backends: () => ({ activeBackendId: "backend-a" }),
   } });
   store.dispatch(updateAtlasPageChat({ ownerKey: '["backend-a","account"]', id: "existing-page", patch: { draft: "Keep my draft" } }));
-  render(<Provider store={store}><MemoryRouter initialEntries={[initialEntry]}>
+  const view = () => <Provider store={store}><MemoryRouter initialEntries={[initialEntry]}>
     <Location /><Routes>
       <Route path="/atlas" element={<AtlasLibrary accountId="account" />} />
       <Route path="/atlas/images/new" element={<div>Image creator</div>} />
       <Route path="/atlas/:itemId" element={<PageDraft />} />
       <Route path="/settings" element={<div>Settings page</div>} />
     </Routes>
-  </MemoryRouter></Provider>);
-  return store;
+  </MemoryRouter></Provider>;
+  const { rerender } = render(view());
+  return { store, rerender: () => rerender(view()) };
 }
 beforeEach(() => {
   vi.clearAllMocks();
@@ -130,6 +144,7 @@ beforeEach(() => {
   mocks.items = [];
   mocks.generated = [];
   mocks.queryResult = undefined;
+  mocks.libraryRead = undefined;
   mocks.previewImages = {};
   mocks.fetching = false;
   mocks.pendingPage = undefined;
@@ -223,6 +238,19 @@ describe("Tags across Atlas item types", () => {
     expect(screen.getByRole("menuitem", { name: "Save to Atlas" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: /Add tags|Edit tags/ })).toBeNull();
   });
+
+  it("removes an unsaved chat file and undoes it with the returned Trash identity", async () => {
+    mocks.generated = [{ sourceKey: "upload", runId: "run", runTitle: "Images", collectionId: null, kind: "image",
+      origin: "attachment", path: "/upload.png", fileName: "upload.png", mimeType: "image/png", byteSize: 1, modifiedAt: "2026-10-07" }];
+    mocks.setSourceTrash.mockReturnValue({ unwrap: async () => ({ id: "source:trash" }) });
+    setup("/atlas?type=image&view=uploads");
+    fireEvent.click(screen.getByRole("button", { name: "Actions for upload.png" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove from Atlas" }));
+    await waitFor(() => expect(mocks.success).toHaveBeenCalled());
+    expect(mocks.setSourceTrash).toHaveBeenCalledWith({ accountId: "account", id: "upload", runId: "run", trashed: true });
+    mocks.success.mock.calls[0][1].action.onClick();
+    expect(mocks.setSourceTrash).toHaveBeenLastCalledWith({ accountId: "account", id: "source:trash", trashed: false });
+  });
 });
 
 describe("Page cover previews", () => {
@@ -291,6 +319,55 @@ describe("Atlas library pagination", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByText("Loading your items…")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Report 0" })).toBeNull();
+  });
+});
+
+describe("Atlas library load states", () => {
+  it.each([false, true])("retries the current query and waits for a successful empty response (cached empty page: %s)", (cached) => {
+    mocks.libraryRead = { currentData: cached ? libraryPage([], 2) : undefined, error: "The backend is unavailable." };
+    const route = "/atlas?type=file&view=saved&project=project&tag=react&q=report&page=2";
+    const { rerender } = setup(route);
+
+    expect(screen.getByRole("alert").textContent).toContain("Unable to load Atlas items.");
+    expect(screen.getByRole("alert").textContent).toContain("The backend is unavailable.");
+    expect(screen.queryByText("No matching items")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(mocks.refetchLibrary).toHaveBeenCalledOnce();
+    expect(mocks.refetchLibrary).toHaveBeenCalledWith({
+      accountId: "account", type: "file", scope: "saved",
+      collectionId: "project", tagId: "react", query: "report", page: 2,
+    });
+
+    mocks.libraryRead = { isFetching: true };
+    rerender();
+    expect(screen.getByText("Loading your items…")).toBeTruthy();
+    expect(screen.queryByText("No matching items")).toBeNull();
+
+    mocks.libraryRead = { currentData: libraryPage([], 2) };
+    rerender();
+    expect(screen.getByText("No matching items")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("url").textContent).toBe(route);
+  });
+
+  it("keeps the current results visible while refreshing and after a failed refresh", () => {
+    const currentData = libraryPage([savedEntry({
+      id: "report", accountId: "account", kind: "file", title: "Retained report", metadata: null,
+      collectionId: null, sourceRunId: null, sourceKey: null, path: null, fileName: "report.pdf",
+      mimeType: "application/pdf", byteSize: null, isFavorite: false, trashedAt: null, version: 1,
+      createdAt: "2026-10-07", updatedAt: "2026-10-07",
+    })]);
+    mocks.libraryRead = { currentData, isFetching: true };
+    const { rerender } = setup("/atlas?type=file");
+
+    expect(screen.getByRole("button", { name: "Retained report" })).toBeTruthy();
+    expect(screen.queryByText("Loading your items…")).toBeNull();
+
+    mocks.libraryRead = { currentData, error: "The backend is unavailable." };
+    rerender();
+    expect(screen.getByRole("alert").textContent).toContain("Showing the last loaded results.");
+    expect(screen.getByRole("button", { name: "Retained report" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 });
 
@@ -603,7 +680,7 @@ describe("Atlas page starters", () => {
     ["claude_code", "Claude"],
   ])("opens a blank Page with an editable prompt for %s", async (providerId, label) => {
     mocks.providerId = providerId;
-    const store = setup();
+    const { store } = setup();
     const section = screen.getByRole("region", { name: "Start a page" });
     const first = within(section).getAllByRole("button")[0];
     expect(first.textContent).toMatch(new RegExp(`Create page with\\s+${label}`));
@@ -618,7 +695,7 @@ describe("Atlas page starters", () => {
   });
 
   it.each(["starter", "menu"])("creates a populated Page directly from the first template in the %s", async (entryPoint) => {
-    const store = setup();
+    const { store } = setup();
     if (entryPoint === "menu") {
       fireEvent.click(screen.getByRole("button", { name: "New Atlas item" }));
     }
@@ -630,7 +707,7 @@ describe("Atlas page starters", () => {
 
   it("does not open a Page or seed its draft after a failed creation", async () => {
     mocks.create.mockImplementation(() => ({ unwrap: async () => { throw new Error("Could not create page"); } }));
-    const store = setup();
+    const { store } = setup();
     fireEvent.click(screen.getByRole("button", { name: "Create page with Codex" }));
     await waitFor(() => expect(mocks.error).toHaveBeenCalledWith("Could not create page"));
     expect(screen.getByTestId("url").textContent).toBe("/atlas?project=project");
@@ -641,7 +718,7 @@ describe("Atlas page starters", () => {
     let resolve!: (page: { item: { id: string } }) => void;
     const pending = new Promise<{ item: { id: string } }>((finish) => { resolve = finish; });
     mocks.create.mockImplementation(() => ({ unwrap: () => pending }));
-    const store = setup();
+    const { store } = setup();
     const card = screen.getByRole("button", { name: "Create page with Codex" });
     fireEvent.click(card);
     fireEvent.click(card);

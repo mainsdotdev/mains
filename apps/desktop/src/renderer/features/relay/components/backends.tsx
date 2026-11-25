@@ -6,9 +6,12 @@ import {
   Input,
   Muted,
   SegmentedTabs,
+  StatusBadge,
   Text,
+  type StatusTone,
   toast,
 } from "@/components/ui";
+import { Check, Close, Refresh } from "@/components/ui/icons";
 import {
   SettingsPageShell,
   SettingsSection,
@@ -33,27 +36,12 @@ const ADD_BACKEND_MODE_OPTIONS = [
   { value: "ssh", label: "SSH tunnel" },
 ] as const;
 
-const STATUS_LABEL: Record<TransportStatus, string> = {
-  connected: "Connected",
-  connecting: "Connecting…",
-  reconnecting: "Reconnecting…",
-  offline: "Offline",
-};
-
-function StatusDot({ status }: { status: TransportStatus }) {
-  const color =
-    status === "connected"
-      ? "bg-success"
-      : status === "connecting" || status === "reconnecting"
-        ? "bg-warning"
-        : "bg-danger";
-  return (
-    <span
-      className={`inline-block w-2 h-2 rounded-full ${color}`}
-      aria-label={STATUS_LABEL[status]}
-    />
-  );
-}
+const CONNECTION_STATUS = {
+  connected: { label: "Connected", tone: "success", icon: Check },
+  connecting: { label: "Connecting…", tone: "info", icon: Refresh },
+  reconnecting: { label: "Reconnecting…", tone: "info", icon: Refresh },
+  offline: { label: "Offline", tone: "danger", icon: Close },
+} satisfies Record<TransportStatus, { label: string; tone: StatusTone; icon: typeof Check }>;
 
 type AddInput = {
   label: string;
@@ -228,11 +216,12 @@ function AddBackendForm({
       <Caption>
         {mode === "ssh"
           ? "Leave blank when a launch command is set — a token is generated automatically. Otherwise paste the one `mains` printed."
-          : "Printed by `mains`, or shown under This machine."}
+          : "Printed by `mains`, or shown under This machine."}{" "}
+        If the OS credential store is unavailable, the token lasts until Mains quits.
       </Caption>
 
       <div className="flex justify-end">
-        <Button type="button" variant="submit" onClick={() => void submit()}>
+        <Button type="button" variant="primary" onClick={() => void submit()}>
           Add
         </Button>
       </div>
@@ -270,6 +259,7 @@ function BackendRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(backend.label);
+  const connection = CONNECTION_STATUS[status];
 
   const commitRename = () => {
     const next = draft.trim();
@@ -296,11 +286,10 @@ function BackendRow({
             className="w-48"
           />
         ) : (
-          <div className="flex items-center gap-2">
-            {isActive && <StatusDot status={status} />}
-            <Body className="truncate">{backend.label}</Body>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Body className="max-w-full truncate">{backend.label}</Body>
             {isActive && (
-              <Caption className="shrink-0">{STATUS_LABEL[status]}</Caption>
+              <StatusBadge tone={connection.tone} icon={connection.icon}>{connection.label}</StatusBadge>
             )}
           </div>
         )}
@@ -395,7 +384,7 @@ export default function BackendsSettings() {
   // page; adding/switching backends is a desktop-app concern.
   if (isWeb) {
     return (
-      <SettingsPageShell title="Mains Connect">
+      <SettingsPageShell title="Connect">
         <Muted>
           This web client is connected to the Mains server at{" "}
           <code>{window.location.host}</code>. Add or switch servers from the
@@ -406,7 +395,7 @@ export default function BackendsSettings() {
   }
 
   return (
-    <SettingsPageShell title="Mains Connect">
+    <SettingsPageShell title="Connect">
       <Muted className="mb-6 block">
         Run on this machine or connect to Mains running somewhere else. You can
         also make this machine available to your other devices.
@@ -417,7 +406,6 @@ export default function BackendsSettings() {
       <SettingsSection title="Run on">
         <div className="flex items-center justify-between py-3 gap-4">
           <div className="min-w-0 flex-1 flex items-center gap-2">
-            {!isRemote && <StatusDot status="connected" />}
             <Body>Local (this machine)</Body>
           </div>
           <div className="shrink-0">
@@ -431,7 +419,7 @@ export default function BackendsSettings() {
                 Use local
               </Button>
             ) : (
-              <Caption>Active</Caption>
+              <StatusBadge tone="success" icon={Check}>Active</StatusBadge>
             )}
           </div>
         </div>

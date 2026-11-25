@@ -1,7 +1,8 @@
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import { bridgeBase64, bridgeBytes } from "@mains/contracts/bridge-auth";
-import { bridgeMember, bridgeWriterKey } from "@mains/contracts/bridge-membership";
+import { bridgeMember, bridgeOwnerRetiredAt, bridgeWriterKey } from "@mains/contracts/bridge-membership";
+import { isBridgeRetiredRunDelete } from "@mains/contracts/bridge-protocol";
 import { bridgeSigningMessage } from "@mains/contracts/bridge-signing";
 import { validateEncryptedBridgeEnvelope } from "@mains/contracts/bridge-wire";
 import type { BridgeCodec } from "./bridge.crypto";
@@ -22,11 +23,14 @@ export function createBridgeSigningCodec(codec: BridgeCodec, identity: BridgeSig
   return {
     destroy() { secret.fill(0); codec.destroy?.(); },
     seal(header, body) {
-      if (header.origin !== backendId || header.owner && header.owner !== backendId) throw new Error("Cannot sign another Bridge writer's record");
+      if (header.origin !== backendId) throw new Error("Cannot sign another Bridge writer's record");
       // A writer binds the newest head it verified, which must still list its current key.
       const state = membership.current();
       if (!state) throw new BridgeMembershipNotReadyError();
       if (bridgeMember(state, backendId)?.signingPublicKey !== publicKey) throw new Error("This backend is not a member of the Bridge account");
+      if (header.owner && header.owner !== backendId &&
+          !(isBridgeRetiredRunDelete(header) && bridgeOwnerRetiredAt(state, header.owner, state.seq)))
+        throw new Error("Cannot sign another Bridge writer's record");
       const envelope = codec.seal(header, body);
       const auth = { v: 2 as const, accountId, epoch: 1 as const, membership: { seq: state.seq, hash: state.head },
         publicationId: bridgeBase64(randomBytes(32)), signingPublicKey: publicKey };
@@ -44,6 +48,8 @@ export function createBridgeSigningCodec(codec: BridgeCodec, identity: BridgeSig
       if (state.hashes[bound.seq] !== bound.hash) throw new Error("Bridge record binds a different membership history");
       const key = bridgeWriterKey(state, header.origin, auth.signingPublicKey, bound.seq);
       if (!key) throw new Error("Bridge record writer is not a member of this account");
+      if (isBridgeRetiredRunDelete(header) && !bridgeOwnerRetiredAt(state, header.owner!, bound.seq))
+        throw new Error("Bridge run owner was active when the deletion was signed");
       // After a removal, the removed writer's account records are exactly those its fence admits, however
       // early they bind; run streams are fenced separately (MEMBERSHIP.md §6).
       if (key.until !== null && header.stream === "account" && !membership.fence(key.until)?.has(auth.signature))

@@ -1,4 +1,5 @@
 import { providersRepo } from "./providers.repo";
+import { createHash } from "node:crypto";
 import { rememberSkillDocuments } from "./skill-document-paths";
 import { detectInstalledClis } from "./providers.utils";
 import type {
@@ -10,6 +11,9 @@ import type {
 } from "./providers.dto";
 import { isEffortLevel } from "@mains/contracts/effort-levels";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
+import type { MobileGoalChange, MobileGoalSummary } from "@mains/contracts/provider-goals";
+import { ACCOUNT_ID } from "../account";
+import { runsService, type RunResponse } from "../runs";
 import {
   permissionConfigKeyFor,
   permissionModeIdsFor,
@@ -59,6 +63,7 @@ import type {
   GoalInfo,
   GoalMutationOrigin,
   GoalSetParams,
+  GoalWriteGuard,
 } from "../../../shared/adapter.types";
 
 /** Resolve a provider and require it to be enabled — the shared preamble of
@@ -68,6 +73,35 @@ async function requireEnabledProvider(id: string): Promise<ProviderResponse> {
   if (!provider) throw new Error("Provider not found");
   if (!provider.isEnabled) throw new Error("Provider is not enabled");
   return provider;
+}
+
+function validateGoalRunId(runId: string): void {
+  if (typeof runId !== "string" || !runId || runId.length > 256) throw new Error("Invalid conversation ID.");
+}
+
+function eligibleGoalRun(run: RunResponse | null): run is RunResponse {
+  return !!run && run.accountId === ACCOUNT_ID && run.providerId === PROVIDER_IDS.codex && !run.isReplica && !run.isArchived;
+}
+
+function goalRevision(runId: string, goal: GoalInfo): string {
+  return createHash("sha256").update(JSON.stringify([runId, goal.threadId, goal.createdAt, goal.objective, goal.status])).digest("hex");
+}
+
+function parseMobileGoalChange(input: unknown): MobileGoalChange {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid goal change.");
+  const { action, expectedRevision, objective } = input as Record<string, unknown>;
+  const fields = action === "edit" ? ["action", "expectedRevision", "objective"] : ["action", "expectedRevision"];
+  if (Object.keys(input).some((key) => !fields.includes(key)) || typeof expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(expectedRevision)) {
+    throw new Error("Invalid goal change.");
+  }
+  if (action === "edit") {
+    if (typeof objective !== "string" || !objective.trim() || Array.from(objective.trim()).length > 2048) {
+      throw new Error("Enter a goal objective of up to 2,048 characters.");
+    }
+    return { action, expectedRevision, objective: objective.trim() };
+  }
+  if (action === "pause" || action === "resume" || action === "clear") return { action, expectedRevision };
+  throw new Error("Invalid goal change.");
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -140,9 +174,19 @@ export const providersService = {
     id: string,
     patch: UpdateRunSettingsPayload,
   ): Promise<ProviderResponse> {
+    if (patch.realtimeVoice !== undefined) {
+      if (id !== PROVIDER_IDS.codex || typeof patch.realtimeVoice !== "string" || !patch.realtimeVoice || patch.realtimeVoice.length > 128) {
+        throw new Error("Invalid Codex voice");
+      }
+      const catalog = await providersService.getRealtimeVoices(id);
+      if (!catalog?.voices.includes(patch.realtimeVoice)) throw new Error("This voice is no longer available. Refresh the voice list.");
+    }
+    // Read the latest config after asynchronous voice discovery so another
+    // settings edit made while the catalog loads is preserved.
     const provider = await providersRepo.findById(id);
     if (!provider) throw new Error("Provider not found");
     const config: Record<string, unknown> = { ...(provider.config ?? {}) };
+    if (patch.realtimeVoice !== undefined) config.realtimeVoice = patch.realtimeVoice;
 
     if (patch.effortLevel !== undefined) {
       if (typeof patch.effortLevel !== "string") {
@@ -277,6 +321,58 @@ export const providersService = {
     return getGoalForProvider(provider, runId);
   },
 
+  async getMobileGoalSummary(runId: string): Promise<MobileGoalSummary | null> {
+    validateGoalRunId(runId);
+    const run = await runsService.getRunById(runId);
+    if (!eligibleGoalRun(run)) return null;
+    const goal = await this.getGoal(PROVIDER_IDS.codex, runId);
+    if (!goal) return null;
+    const root = await runsService.getRunExecutionRoot(runId);
+    const current = await runsService.getRunById(runId);
+    if (!eligibleGoalRun(current) || (current.sessionId && current.sessionId !== goal.threadId) || current.workspaceId !== run.workspaceId) return null;
+    const prefix = root && (root.endsWith("/") ? root : root + "/");
+    const objective = Array.from((prefix ? goal.objective.split(prefix).join("") : goal.objective).trim());
+    if (!objective.length) return null;
+    return {
+      objective: objective.slice(0, 2048).join(""),
+      ...(objective.length > 2048 ? { objectiveTruncated: true } : {}),
+      revision: goalRevision(runId, goal),
+      status: goal.status.slice(0, 64),
+      ...(goal.tokensUsed !== undefined && Number.isSafeInteger(goal.tokensUsed) && goal.tokensUsed >= 0 ? { tokensUsed: goal.tokensUsed } : {}),
+      ...(goal.timeUsedSeconds !== undefined && Number.isSafeInteger(goal.timeUsedSeconds) && goal.timeUsedSeconds >= 0 ? { timeUsedSeconds: goal.timeUsedSeconds } : {}),
+    };
+  },
+
+  async changeMobileGoal(runId: string, input: unknown): Promise<{ applied: true }> {
+    validateGoalRunId(runId);
+    const change = parseMobileGoalChange(input);
+    const run = await runsService.getRunById(runId);
+    if (!eligibleGoalRun(run)) throw new Error("This Codex goal is unavailable.");
+    const provider = await requireEnabledProvider(PROVIDER_IDS.codex);
+    const guard: GoalWriteGuard = {
+      async ownsRun() {
+        const current = await runsService.getRunById(runId);
+        return eligibleGoalRun(current) && current.workspaceId === run.workspaceId && (!run.sessionId || current.sessionId === run.sessionId);
+      },
+      matches(goal) {
+        if (goalRevision(runId, goal) !== change.expectedRevision) return false;
+        switch (change.action) {
+          case "edit": return goal.status !== "complete";
+          case "pause": return goal.status === "active";
+          case "resume": return goal.status === "paused";
+          case "clear": return true;
+        }
+      },
+    };
+    const applied = change.action === "clear"
+      ? await clearGoalForProvider(provider, runId, "user", guard)
+      : await setGoalForProvider(provider, runId, change.action === "edit"
+        ? { objective: change.objective, origin: "user" }
+        : { status: change.action === "pause" ? "paused" : "active", origin: "user" }, guard);
+    if (!applied) throw new Error("Couldn’t change this goal. Check its current state and try again.");
+    return { applied: true };
+  },
+
   async clearGoal(id: string, runId: string, origin?: GoalMutationOrigin): Promise<boolean> {
     const provider = await requireEnabledProvider(id);
     return clearGoalForProvider(provider, runId, origin);
@@ -404,8 +500,8 @@ export const providersService = {
 
 /**
  * The provider row a paired device may see. `config` is the Mac's settings
- * blob, credentials included — a device gets only the run-settings keys the
- * composer reads (`RUN_SETTING_CONFIG_KEYS`); everything else, apiKey and
+ * blob, credentials included — a device gets the run-settings keys the
+ * composer reads (`RUN_SETTING_CONFIG_KEYS`) and Codex's voice; apiKey and
  * baseUrl first of all, never leaves the machine.
  */
 export function providerForPairedDevice(provider: ProviderResponse): ProviderResponse {
@@ -413,6 +509,10 @@ export function providerForPairedDevice(provider: ProviderResponse): ProviderRes
   const config: Record<string, unknown> = {};
   for (const key of RUN_SETTING_CONFIG_KEYS) {
     if (key in provider.config) config[key] = provider.config[key];
+  }
+  // Voice is a provider preference, not a per-conversation model snapshot.
+  if (provider.id === PROVIDER_IDS.codex && typeof provider.config.realtimeVoice === "string") {
+    config.realtimeVoice = provider.config.realtimeVoice;
   }
   return { ...provider, config };
 }

@@ -86,7 +86,7 @@ export function NewConversationContextSelect({
         aria-label={`${isDeveloper ? "Workspace" : "Project"}: ${label}`}
         aria-haspopup="menu"
         aria-expanded={position !== null}
-        className="flex max-w-full items-center gap-1.5 rounded-2xl px-2.5 py-1 text-xs glass-card"
+        className="flex max-w-full items-center gap-1.5 rounded-[14px] px-2.5 py-1 text-xs glass-card"
         onMouseDown={(event) => event.stopPropagation()}
         onClick={() => position ? setPosition(null) : open()}
         onKeyDown={(event) => {

@@ -261,9 +261,9 @@ const workspaceSlice = createSlice({
   reducers: {
     activateWorkspaceView: (
       state,
-      action: PayloadAction<{ key: string; workspaceId: string | null; providerId: string }>,
+      action: PayloadAction<{ key: string; workspaceId: string | null; providerId: string; rememberWorkspace?: boolean }>,
     ) => {
-      const { key, workspaceId, providerId } = action.payload;
+      const { key, workspaceId, providerId, rememberWorkspace = true } = action.payload;
       if (state.workspaceViewKey !== key) {
         if (state.workspaceViewKey) {
           state.workspaceViews[state.workspaceViewKey] = snapshotWorkspaceView(state);
@@ -276,7 +276,7 @@ const workspaceSlice = createSlice({
       if (state.selectedProviderId !== providerId) state.providerAuthTerminal = null;
       state.activeWorkspaceId = workspaceId;
       state.selectedProviderId = providerId;
-      if (workspaceId) state.activeWorkspaceIdByProvider[providerId] = workspaceId;
+      if (workspaceId && rememberWorkspace) state.activeWorkspaceIdByProvider[providerId] = workspaceId;
     },
     setComposerContextKey: (state, action: PayloadAction<string>) => {
       state.composerContextReady = true;
@@ -306,6 +306,9 @@ const workspaceSlice = createSlice({
       else delete state.mcpAppRunIdByKey[action.payload.key];
     },
     detachArchivedRun: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
+      detachRunFromViews(state, action.payload.backendId, action.payload.runId);
+    },
+    detachAssistantRun: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
       detachRunFromViews(state, action.payload.backendId, action.payload.runId);
     },
     forgetRunUiState: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
@@ -700,6 +703,7 @@ export const {
   collapseAllExplorerPaths,
   setActiveTab,
   closeRunTab,
+  detachAssistantRun,
   openReviewTab,
   closeReviewTab,
   setReviewRunId,

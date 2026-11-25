@@ -20,6 +20,7 @@ vi.mock("@/lib/redux/api/atlasApi", () => ({
   useListAtlasQuery: () => ({ data: mocks.items }),
   useCreateAtlasPageMutation: () => [vi.fn(), {}],
   useUpdateAtlasItemMutation: () => [mocks.update, {}],
+  useSetAtlasSourceTrashMutation: () => [mocks.update, {}],
   useRemoveAtlasItemMutation: () => [mocks.remove, {}],
 }));
 vi.mock("@/hooks/use-space-provider-variant", () => ({ useSpaceProviderVariant: () => ({ supportsAtlas: true }) }));

@@ -1,6 +1,8 @@
-import { useCallback, useLayoutEffect, useReducer, useRef, useSyncExternalStore } from "react";
+import { useCallback, useLayoutEffect, useMemo, useReducer, useRef, useSyncExternalStore } from "react";
 import { appEvents, getTransport, onTransportChange } from "@/lib/transport";
 import { createTranscriptStreams } from "@mains/contracts/transcript-stream";
+import { runActivityKind, runActivityStore } from "../lib/run-activity";
+import { useRunActivity } from "./use-run-activity";
 
 export interface StreamingEvent {
   id: string;
@@ -18,6 +20,7 @@ export interface StreamingEvent {
  * for real-time text rendering.
  */
 export function useStreamingEvents(activeRunId: string | null, persistedStreamIds: ReadonlySet<string>) {
+  const activity = useRunActivity(activeRunId);
   const streamsRef = useRef(createTranscriptStreams());
   const [revision, advance] = useReducer((value: number) => value + 1, 0);
   useLayoutEffect(() => onTransportChange(advance), []);
@@ -80,6 +83,7 @@ export function useStreamingEvents(activeRunId: string | null, persistedStreamId
       if (!current || getTransport() !== transport || data.runId !== activeRunId) return;
 
       const { event, ts } = data;
+      if (runActivityKind(event)) return;
       const streamId = event.streamId;
       if (!streamId || persistedRef.current.has(streamId)) return;
       if (!streams.receive({ kind: event.kind, content: event.content ?? "", metadata: event.metadata, streamId, timestamp: ts })) return;
@@ -111,11 +115,13 @@ export function useStreamingEvents(activeRunId: string | null, persistedStreamId
     };
   }, [activeRunId, notify, revision]);
 
-  const streamingEvents = useSyncExternalStore(subscribe, getSnapshot);
+  const messageEvents = useSyncExternalStore(subscribe, getSnapshot);
+  const streamingEvents = useMemo(() => [...messageEvents, ...activity], [messageEvents, activity]);
 
   const clearTurnStreams = useCallback((interrupted = false) => {
+    if (activeRunId) runActivityStore.finish(activeRunId);
     if (streamsRef.current.settleTurn(interrupted)) notify();
-  }, [notify]);
+  }, [notify, activeRunId]);
 
   return { streamingEvents, clearTurnStreams };
 }

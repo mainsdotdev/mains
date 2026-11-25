@@ -280,7 +280,7 @@ async function reconcileHost(current: () => boolean = () => true): Promise<void>
       webRoot: webRoot(),
       fetchProxiedImage: (url) => imageProxyService.proxyImage(url),
       serveLocalImage: (url) => serveLocalImage(url),
-      serveLocalDocument: (url) => serveLocalDocument(url),
+      serveLocalDocument,
       // Paired devices authenticate with their own token instead of the shared
       // session token, and new ones pair through `POST /pair`. The last-seen
       // stamp verifying records reaches the list with the connection change

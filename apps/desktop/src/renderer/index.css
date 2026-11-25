@@ -46,6 +46,8 @@ html:not(.app-ready) *::after {
 }
 
 @theme inline {
+  --container-transcript-bubble: min(85%, var(--container-xl));
+  --radius-transcript-bubble: 20px;
   --text-xt: 0.5625rem;
   --text-xt--line-height: calc(1.25 / 0.5625);
   --text-t: 0.625rem;
@@ -91,6 +93,12 @@ html:not(.app-ready) *::after {
   --color-warning: #F59E0B;
   --color-action: #2563eb;
   --color-action-hover: #1d4ed8;
+  --color-action-pressed: color-mix(in srgb, var(--color-action-hover) 85%, black);
+  --color-action-foreground: var(--color-white);
+  /* Keep light text readable across the red action states. */
+  --color-danger-button: color-mix(in srgb, var(--color-danger) 83%, black);
+  --color-danger-button-hover: color-mix(in srgb, var(--color-danger-hover) 92%, black);
+  --color-danger-button-pressed: color-mix(in srgb, var(--color-danger-hover) 85%, black);
   --color-claude: #D97757;
   --color-copilot: #8534F3;
   --color-codex: #0169CC;
@@ -194,6 +202,25 @@ html:not(.app-ready) *::after {
   --font-sans: var(--font-ui-family, "Inter"), -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif, Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;
   --font-mono: var(--font-code-family, ui-monospace), SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
+
+.status-badge {
+  --status-badge-color: var(--color-primary-700);
+  background-color: color-mix(in srgb, var(--status-badge-color) 13%, transparent);
+  color: color-mix(in srgb, var(--status-badge-color) 50%, var(--color-primary-950));
+}
+
+.dark .status-badge {
+  --status-badge-color: var(--color-primary-300);
+  --status-badge-ink-strength: 74%;
+  color: color-mix(in srgb, var(--status-badge-color) var(--status-badge-ink-strength), var(--color-primary-50));
+}
+
+.status-badge[data-status-tone="info"] { --status-badge-color: var(--color-accent); }
+.status-badge[data-status-tone="progress"] { --status-badge-color: var(--color-action); }
+.dark .status-badge:is([data-status-tone="info"], [data-status-tone="progress"]) { --status-badge-ink-strength: 62%; }
+.status-badge[data-status-tone="success"] { --status-badge-color: var(--color-success); }
+.status-badge[data-status-tone="warning"] { --status-badge-color: var(--color-warning); }
+.status-badge[data-status-tone="danger"] { --status-badge-color: var(--color-danger); }
 
 .voice-orb {
   --color-voice-orb-secondary: hsl(from var(--color-voice-orb-deep) calc(h + 54) calc(s * 0.72) 72%);
@@ -679,17 +706,6 @@ body[data-resizing] iframe {
   animation: spinSlow 2s linear infinite;
 }
 
-/* Pulse page — the live dot on an active pulse. A slow expanding halo rather
-   than tailwind's 1s ping: a list of them has to read calm, not alarmed. */
-@keyframes pulseBeat {
-  0% { transform: scale(1); opacity: 0.5; }
-  70%, 100% { transform: scale(2.6); opacity: 0; }
-}
-
-.animate-pulse-beat {
-  animation: pulseBeat 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
-
 @keyframes rotate3dY {
   0% { transform: rotate3d(1, 1, 0, 0deg); }
   100% { transform: rotate3d(1, 1, 0, 360deg); }
@@ -700,7 +716,8 @@ body[data-resizing] iframe {
 }
 
 /*
- * Tool status loader — a 4×4 grid of squares. Each square carries two
+ * Shared square cell — used by the 3×3 tool loader and assistant silhouettes.
+ * Each square carries two
  * overlapping pulses (::before / ::after) that peak once per cycle. Their
  * per-cell delays are set inline so the lit squares sweep diagonally: the
  * ::before layer rides the top-left → bottom-right anti-diagonal during the
@@ -716,6 +733,10 @@ body[data-resizing] iframe {
 
 .tool-square {
   position: relative;
+  min-width: 0;
+  min-height: 0;
+  border-radius: var(--tsq-radius, 1px);
+  background: var(--tsq-base, transparent);
 }
 
 .tool-square::before,
@@ -723,16 +744,16 @@ body[data-resizing] iframe {
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: 1px;
-  background: currentColor;
+  border-radius: inherit;
+  background: var(--tsq-color, currentColor);
   opacity: 0;
   /* ease-in-out-sine: zero velocity at the peak and at the dim landings, so the
      brighten/dim fades stay silky with no hard corners. */
-  animation: toolSquarePulse 2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  animation: toolSquarePulse var(--tsq-duration, 2000ms) cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
-.tool-square::before { animation-delay: var(--tsq-d1, 0ms); }
-.tool-square::after  { animation-delay: var(--tsq-d2, 0ms); }
+.tool-square::before { animation-delay: calc(var(--tsq-duration, 2000ms) * (var(--tsq-d1, 0) - var(--tsq-phase, 0))); }
+.tool-square::after  { animation-delay: calc(var(--tsq-duration, 2000ms) * (var(--tsq-d2, 0) - var(--tsq-phase, 0))); }
 
 /*
  * Generate spinner: each tiny square twinkles independently at a random phase
@@ -865,12 +886,12 @@ body[data-resizing] iframe {
   animation: shine 2s linear infinite;
   background:
     radial-gradient(circle at center, var(--color-primary-900), transparent) -200% 50% / 200% 100% no-repeat,
-    var(--color-primary-400);
+    var(--shine-text-base, var(--color-primary-400));
 
   .dark & {
     background:
       radial-gradient(circle at center, var(--color-primary-100), transparent) -200% 50% / 200% 100% no-repeat,
-      var(--color-primary-700);
+      var(--shine-text-base, var(--color-primary-700));
   }
 }
 
@@ -987,22 +1008,13 @@ html.mains-web.dark #root {
   --glass-fill-surface: var(--color-primary-100);
   --glass-fill-card: color-mix(in srgb, var(--color-primary) 98%, transparent);
   --glass-fill-input: var(--color-primary);
-  --glass-fill-toggle: color-mix(in srgb, var(--color-primary-200) 86%, var(--color-primary-100));
+  --glass-fill-toggle: var(--color-primary-200);
   --glass-fill-button: color-mix(in srgb, var(--color-primary) 72%, transparent);
   --glass-fill-primary: color-mix(in srgb, var(--color-primary-50) 72%, transparent);
-  --glass-fill-secondary: color-mix(in srgb, var(--color-primary-950) 42%, transparent);
-  --glass-fill-submit: color-mix(in srgb, var(--color-action) 90%, transparent);
-  --glass-fill-danger: rgba(255, 68, 54, 0.9);
   --glass-fill-success: rgba(13, 197, 94, 0.9);
 
   --glass-hover-button: color-mix(in srgb, var(--color-primary) 90%, transparent);
   --glass-hover-primary: var(--color-primary-200);
-  --glass-hover-submit: var(--color-action-hover);
-  --glass-hover-danger: var(--color-danger-hover);
-
-  /* Saturated fills swallow a dark rim — light them from the other side. */
-  --glass-edge-submit: rgba(255, 255, 255, 0.42);
-  --glass-edge-danger: rgba(255, 255, 255, 0.42);
 }
 
 @theme static {
@@ -1054,11 +1066,9 @@ html.mains-web.dark #root {
   --glass-fill-command: color-mix(in srgb, var(--color-primary-950) 80%, transparent);
   --glass-fill-card: color-mix(in srgb, color-mix(in srgb, var(--color-primary-900) 78%, var(--color-primary-800)) 98%, transparent);
   --glass-fill-input: color-mix(in srgb, var(--color-primary-950) 75%, var(--color-primary-900));
-  --glass-fill-toggle: var(--glass-fill-input);
+  --glass-fill-toggle: var(--color-primary-800);
   --glass-fill-button: color-mix(in srgb, var(--color-primary-800) 72%, transparent);
   --glass-fill-primary: color-mix(in srgb, var(--color-primary-800) 72%, transparent);
-  --glass-fill-secondary: color-mix(in srgb, color-mix(in srgb, var(--color-primary-600) 62%, var(--color-primary-500)) 42%, transparent);
-
   --glass-hover-button: color-mix(in srgb, color-mix(in srgb, var(--color-primary-800) 80%, var(--color-primary-700)) 85%, transparent);
   --glass-hover-primary: color-mix(in srgb, var(--color-primary-800) 60%, transparent);
 }
@@ -1098,6 +1108,49 @@ html.mains-web.dark #root {
   }
 }
 
+@utility button-outline {
+  @apply border-[0.5px] border-primary-200/70 dark:border-primary-700/60;
+}
+
+@utility button-neutral {
+  @apply button-outline bg-primary-50 dark:bg-primary-800;
+  @apply enabled:hover:bg-[color-mix(in_srgb,var(--color-primary-200)_55%,var(--color-primary-50))] enabled:active:bg-primary-200;
+  @apply dark:enabled:hover:bg-[color-mix(in_srgb,var(--color-primary-800)_74%,var(--color-primary-700))] dark:enabled:active:bg-[color-mix(in_srgb,var(--color-primary-800)_50%,var(--color-primary-700))];
+}
+
+/* Keep the quiet states below explicitly filled icon controls in the cascade. */
+@utility button-quiet {
+  :where(&) {
+    @apply enabled:hover:bg-primary-950/8 enabled:active:bg-primary-950/13 dark:enabled:hover:bg-primary/8 dark:enabled:active:bg-primary/13;
+  }
+}
+
+@utility button-icon-focus {
+  :where(&:focus-visible) {
+    @apply bg-primary-950/8 dark:bg-primary/8;
+  }
+}
+
+@media (forced-colors: active) {
+  .button-control:focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: -2px;
+  }
+}
+
+/* Preserve the original content's layout and direct-child styling during loading. */
+[data-button-busy] {
+  -webkit-text-fill-color: transparent;
+}
+
+[data-button-busy] > :not(.button-spinner) {
+  opacity: 0;
+}
+
+.button-spinner {
+  -webkit-text-fill-color: currentColor;
+}
+
 /*
  * Keeps clear of the session box, which floats over the top-right of the
  * content. The app shell sets `--content-inset-right` on the content wrapper
@@ -1123,6 +1176,19 @@ html.mains-web.dark #root {
 @utility content-inset {
   padding-right: var(--content-inset-right, 0px);
   transition: padding-right 150ms ease-out;
+}
+
+@utility bg-mate-user-bubble {
+  background-color: var(--mate-color, var(--color-primary-200));
+  color: var(--color-white);
+
+  & .prose :where(h1, h2, h3, h4, h5, h6, p, ul, ol, li, th, td, blockquote, strong, em, code, a, button) {
+    color: inherit;
+  }
+
+  & .prose a {
+    text-decoration-line: underline;
+  }
 }
 
 @utility glass-outline {
@@ -1412,11 +1478,6 @@ html.mains-web.dark #root {
   .animate-claude-pulse,
   .animate-rotate-3d {
     animation: none;
-  }
-
-  .animate-pulse-beat {
-    animation: none;
-    opacity: 0;
   }
 }
 

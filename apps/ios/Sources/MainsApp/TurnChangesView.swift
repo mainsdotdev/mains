@@ -8,12 +8,17 @@ struct TurnFileSelection: Hashable {
 }
 
 struct TurnChangesCard: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let turn: RunTurn
     let open: (TurnFileChange) -> Void
     @State private var expanded = false
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
         if let changes = turn.changes {
             let count = changes.fileCount ?? changes.files.count
+            let hasMoreFiles = count > changes.files.count
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: "doc.badge.plus").foregroundStyle(.secondary)
@@ -22,14 +27,20 @@ struct TurnChangesCard: View {
                         .accessibilityLabel("Turn \((turn.turnIndex ?? 0) + 1). \(changes.undoneAt != nil ? "Changes undone" : "Edited \(count) files")")
                     DiffCounts(additions: changes.additions, deletions: changes.deletions)
                 }.padding(14)
-                    .background { Rectangle().fill(Color(.tertiarySystemBackground)) }
+                    .background(alignment: .center) {
+                        let shape = UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 0,
+                                                           bottomTrailingRadius: 0, topTrailingRadius: 16)
+                        shape.fill(Color(.secondarySystemBackground))
+                            .overlay { shape.fill(Color.black.opacity(scheme == .dark ? 0.3 : 0.06)) }
+                    }
                 Divider()
                 ForEach(Array((expanded ? changes.files : Array(changes.files.prefix(2))).enumerated()), id: \.offset) { _, file in
+                    let name = file.path.split(separator: "/").last.map(String.init) ?? file.path
                     Button { open(file) } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: file.binary ? "doc.zipper" : "doc.text").foregroundStyle(.secondary)
+                            fileIcon(name, binary: file.binary)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(file.path.split(separator: "/").last.map(String.init) ?? file.path)
+                                Text(name)
                                     .font(.footnote.weight(.medium)).lineLimit(1).truncationMode(.middle)
                                 let detail = context(file)
                                 if !detail.isEmpty { Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head) }
@@ -54,12 +65,26 @@ struct TurnChangesCard: View {
                     }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("expandTurnChanges-\(turn.id)")
                         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
                 }
-                if count > changes.files.count { notice("The full file list is available on desktop.") }
-                if changes.truncated { notice("Only part of this turn’s diff was stored.") }
+                if hasMoreFiles || changes.truncated {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if hasMoreFiles { notice("The full file list is available on desktop.") }
+                        if changes.truncated { notice("Only part of this turn’s diff was stored.") }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                }
             }
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 16))
             .clipShape(.rect(cornerRadius: 16))
         }
+    }
+    private func fileIcon(_ name: String, binary: Bool) -> some View {
+        let image = WorkspaceFileArtwork.fileTypeAssetName(for: name).map { Image(decorative: $0) }
+            ?? Image(systemName: binary ? "doc.zipper" : "doc.text")
+        return image.resizable().scaledToFit()
+            .foregroundStyle(.secondary)
+            .frame(width: 16, height: 16)
+            .accessibilityHidden(true)
     }
     private func context(_ file: TurnFileChange) -> String {
         let directory = file.path.split(separator: "/").dropLast().joined(separator: "/")
@@ -67,11 +92,14 @@ struct TurnChangesCard: View {
             .filter { !$0.isEmpty }.joined(separator: " · ")
     }
     private func notice(_ text: String) -> some View {
-        Text(text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.bottom, 12)
+        Text(text).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
 }
 
 struct DiffCounts: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let additions: Int
     let deletions: Int
     var body: some View {
@@ -83,6 +111,9 @@ struct DiffCounts: View {
 }
 
 struct TurnFileDiffView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let selection: TurnFileSelection
     let close: () -> Void
@@ -107,7 +138,7 @@ struct TurnFileDiffView: View {
                     } else if let error {
                         message(error)
                         Button("Try again") { attempt += 1 }.frame(minHeight: 44).accessibilityIdentifier("retryFileDiff")
-                    } else { ProgressView("Loading file diff…").frame(maxWidth: .infinity).padding(.vertical, 24) }
+                    } else { ContentSkeleton(label: "Loading file diff…", layout: .text, count: 8) }
                 }.padding(.horizontal, 16).padding(.bottom, 20)
             }.accessibilityIdentifier("fileDiffContent")
                 .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -129,8 +160,10 @@ struct TurnFileDiffView: View {
                     proxy.scrollTo("diff-top", anchor: .top)
                 }
         }
-        .background(Color(.systemBackground)).navigationTitle(selection.file.path.split(separator: "/").last.map(String.init) ?? "File diff")
-        .navigationBarTitleDisplayMode(.inline).toolbarRole(.editor)
+        .background(Color(.systemBackground))
+        .navigationHeaderFade()
+        .expandedNavigationTitle(selection.file.path.split(separator: "/").last.map(String.init) ?? "File diff")
+        .toolbarRole(.editor)
         .navigationBarBackButtonHidden()
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -154,6 +187,9 @@ struct TurnFileDiffView: View {
 }
 
 private struct NumberedDiffBody: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let lines: [FileDiffLine]
     @Environment(\.colorScheme) private var scheme
     var body: some View {
@@ -179,7 +215,7 @@ private struct NumberedDiffBody: View {
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 8)
                 }.font(.system(.caption, design: .monospaced)).fixedSize(horizontal: false, vertical: true)
                     .padding(.vertical, 2)
-                    .background { Rectangle().fill(line.kind == .context ? Color.clear : hue.opacity(0.12)) }
+                    .background(alignment: .center) { Rectangle().fill(line.kind == .context ? Color.clear : hue.opacity(0.12)) }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("\(line.kind == .add ? "Added" : line.kind == .remove ? "Removed" : "Context"), line \(line.newNo ?? line.oldNo ?? 0): \(line.text)")
             }

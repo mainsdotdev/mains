@@ -120,16 +120,9 @@ describe("smoke", () => {
     it("seeds seven connections (all revoked)", async () => {
       // Query connections table directly since connectionsService needs more setup
       const rows = db.query.connections.findMany().sync?.() ?? [];
-      expect(rows.length).toBe(8);
 
-      const providers = rows.map((r: { provider: string }) => r.provider);
-      expect(providers).toContain("github");
-      expect(providers).toContain("linear");
-      expect(providers).toContain("gitlab");
-      expect(providers).toContain("jira");
-      expect(providers).toContain("asana");
-      expect(providers).toContain("trello");
-      expect(providers).toContain("sentry");
+      const providers = rows.map((r: { provider: string }) => r.provider).sort();
+      expect(providers).toEqual(["asana", "github", "gitlab", "jira", "linear", "sentry", "trello"]);
 
       for (const row of rows) {
         expect((row as { status: string }).status).toBe("revoked");

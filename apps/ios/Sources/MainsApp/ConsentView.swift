@@ -4,10 +4,59 @@ struct ConsentContext: Identifiable {
     let backendID: String
     let providerID: String
     var isDemo = false
+    var isVoice = false
     var id: String { backendID + ":" + providerID }
 }
 
+struct MateConsentRequest: Identifiable {
+    let id = UUID()
+    let requirement: MateConsentRequired
+    let change: MateChange
+}
+
+extension View {
+    func mateConsentSheet(_ request: Binding<MateConsentRequest?>, session: BackendSession,
+                          resume: @escaping (MateChange) -> Void) -> some View {
+        modifier(MateConsentSheet(request: request, session: session, resume: resume))
+    }
+}
+
+private struct MateConsentSheet: ViewModifier {
+    @Binding var request: MateConsentRequest?
+    let session: BackendSession
+    let resume: (MateChange) -> Void
+    @State private var approved: MateConsentRequest?
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $request, onDismiss: finish) { pending in
+            let requirement = pending.requirement
+            ConsentView(context: ConsentContext(backendID: requirement.backendID, providerID: requirement.providerID, isDemo: session.isDemo)) {
+                guard belongsToCurrentPairing(requirement) else { return }
+                session.grantConsent(providerID: requirement.providerID, backendID: requirement.backendID)
+                approved = pending
+            }
+        }
+        .onChange(of: session.ownership) { _, _ in
+            approved = nil
+            request = nil
+        }
+    }
+
+    private func belongsToCurrentPairing(_ requirement: MateConsentRequired) -> Bool {
+        requirement.owner == session.ownership && requirement.backendID == session.pairing?.descriptor.backendId
+    }
+
+    private func finish() {
+        let pending = approved
+        approved = nil
+        if let pending, belongsToCurrentPairing(pending.requirement) { resume(pending.change) }
+    }
+}
+
 struct ConsentView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let context: ConsentContext
     let allow: () -> Void
     @Environment(\.dismiss) private var dismiss
@@ -31,9 +80,23 @@ struct ConsentView: View {
         default: "Your computer uses \(Provider.name(context.providerID)) to complete your request."
         }
     }
+    private var allowTitle: String {
+        #if MAINS_GPT_LIVE
+        context.isVoice ? "Allow & Start" : "Allow & Send"
+        #else
+        "Allow & Send"
+        #endif
+    }
+    private var disclosure: String {
+        if context.isDemo { return "This run uses bundled sample data. Your message and attachments stay on this iPhone; no computer or AI service is contacted." }
+        #if MAINS_GPT_LIVE
+        if context.isVoice { return "During GPT Live, your microphone audio goes to OpenAI. Mains on your computer supplies the conversation context and runs delegated work." }
+        #endif
+        return "Mains on your computer will share the following with this third-party AI service to complete your request."
+    }
     var body: some View {
         VStack(spacing: 0) {
-            Text(context.isDemo ? "Demo data sharing" : "AI data sharing").font(.headline)
+            Text(context.isDemo ? "Demo data sharing" : "AI data sharing").font(.headline.width(.expanded))
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .overlay(alignment: .leading) {
                     RoundControl(symbol: "xmark", label: "Close", size: 40) { dismiss() }
@@ -43,13 +106,17 @@ struct ConsentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     VStack(spacing: 6) {
-                        Text(context.isDemo ? "Continue the demo with \(Provider.name(context.providerID))?" : "Share data with \(recipient)?").font(.title3.bold())
+                        Text(context.isDemo ? "Continue the demo with \(Provider.name(context.providerID))?" : "Share data with \(recipient)?")
+                            .font(.title3.bold().width(.expanded))
                             .accessibilityAddTraits(.isHeader)
-                        Text(context.isDemo ? "This run uses bundled sample data. Your message and attachments stay on this iPhone; no computer or AI service is contacted." : "Mains on your computer will share the following with this third-party AI service to complete your request.")
+                        Text(disclosure)
                             .font(.footnote).foregroundStyle(.secondary)
                     }.multilineTextAlignment(.center).frame(maxWidth: .infinity)
 
                     VStack(spacing: 0) {
+                        #if MAINS_GPT_LIVE
+                        if context.isVoice { category("Your microphone audio during the call"); Divider().padding(.horizontal, 16) }
+                        #endif
                         category("Your message and chat history")
                         Divider().padding(.horizontal, 16)
                         category("Skills and instructions you attach")
@@ -59,7 +126,7 @@ struct ConsentView: View {
                     .background(Color(.tertiarySystemBackground), in: .rect(cornerRadius: 20))
                     .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(.primary.opacity(0.08)) }
 
-                    Text(context.isDemo ? "This choice applies only to Demo Mode. Mains asks separately before sharing data with a provider on a paired computer." : "\(recipientDetail) Mains sends nothing until you choose Allow & Send.")
+                    Text(context.isDemo ? "This choice applies only to Demo Mode. Mains asks separately before sharing data with a provider on a paired computer." : "\(recipientDetail) Mains sends nothing until you choose \(allowTitle).")
                         .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 8)
 
                     VStack(alignment: .leading, spacing: 0) {
@@ -100,7 +167,7 @@ struct ConsentView: View {
                 .frame(width: max(0, geometry.size.width - 10) * 0.43)
                 .accessibilityIdentifier("declineDataSharing")
                 Button { allow(); dismiss() } label: {
-                    Text(context.isDemo ? "Continue Demo" : "Allow & Send").foregroundStyle(.white)
+                    Text(context.isDemo ? "Continue Demo" : allowTitle).foregroundStyle(.white)
                         .frame(maxWidth: .infinity, minHeight: buttonHeight)
                         .background(Provider.accent(context.providerID), in: .rect(cornerRadius: 14))
                 }

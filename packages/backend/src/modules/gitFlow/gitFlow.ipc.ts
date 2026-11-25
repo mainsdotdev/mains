@@ -82,6 +82,11 @@ export function registerGitFlowIpc(): void {
   );
 
   ipcMain.handle(
+    CHANNELS.gitFlow.getGitHubCliStatus,
+    handle(() => gitFlowService.getGitHubCliStatus()),
+  );
+
+  ipcMain.handle(
     CHANNELS.gitFlow.getPublishPreflight,
     handle((workspaceId: string) =>
       gitFlowService.getPublishPreflight(workspaceId),
@@ -114,6 +119,7 @@ export function unregisterGitFlowIpc(): void {
     CHANNELS.gitFlow.discardPrAttachments,
     CHANNELS.gitFlow.generateCommitMessage,
     CHANNELS.gitFlow.generatePrBody,
+    CHANNELS.gitFlow.getGitHubCliStatus,
     CHANNELS.gitFlow.getPublishPreflight,
     CHANNELS.gitFlow.publish,
   ].forEach((channel) => ipcMain.removeHandler(channel));

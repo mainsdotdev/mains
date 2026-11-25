@@ -270,14 +270,14 @@ export default function WorkspaceItem({
             onClick?.();
           }
         }}
-        className={`block
+        className={`flex items-center gap-2
            transition-all duration-200 ease-out ${sortHandle?.listeners ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${grouping !== "project" ? "rounded-2xl px-2.5 py-1.25" : `rounded-[10px] ${SIDEBAR_PROJECT_CHILD_ROW_CLASS}`} ${
              isActive
                ? "bg-primary/50 glass-outline-soft glass-outline dark:bg-primary/5 hover:bg-primary/90 dark:hover:bg-primary/10"
                : "bg-transparent group-hover:bg-primary/50 dark:group-hover:bg-primary/5"
            }`}
       >
-        <div className="flex flex-col ">
+        <div className="flex min-w-0 flex-1 flex-col">
           {grouping !== "project" && (
             <div className="flex items-center gap-1 min-w-0 flex-1 mb-0.5 ">
               <span className="shrink-0 ">
@@ -291,9 +291,7 @@ export default function WorkspaceItem({
             </div>
           )}
           <div className="flex flex-col min-w-0">
-            <div
-              className={`flex items-center gap-1.5 ${grouping === "project" ? "pl-0" : "pl-0"}`}
-            >
+            <div className="flex min-w-0 items-center gap-1.5">
               {grouping !== "project" && <span aria-hidden="true" className="size-3.5 shrink-0" />}
               {!pathExists ? (
                 // Replaces the branch line rather than sitting next to it: with
@@ -321,53 +319,53 @@ export default function WorkspaceItem({
                   onBlur={handleRenameBranchConfirm}
                   onClick={(e) => e.stopPropagation()}
                   aria-label="Branch name"
-                  className="text-xs bg-primary/20 dark:bg-primary/10 text-primary-800 dark:text-primary-200 rounded-md px-1 py-0.5 outline-none glass-input w-full max-w-35"
+                  className="text-xs bg-primary/20 dark:bg-primary/10 text-primary-800 dark:text-primary-200 rounded-md px-1 py-0.5 outline-none glass-input w-full min-w-0 max-w-35"
                 />
               )}
             </div>
           </div>
         </div>
+        {/* The compact options button also uses this space. */}
+        <div className="flex min-w-6 shrink-0 justify-end">
+          {(insertions || deletions) && (
+            <Text
+              as="span"
+              size="t"
+              tone="inherit"
+              className="pointer-events-none flex items-center gap-1 font-mono tabular-nums transition-opacity group-hover:opacity-0 group-has-[button:focus-visible]:opacity-0"
+            >
+              {insertions && (
+                <NumberFlow
+                  value={parseInt(insertions)}
+                  prefix="+"
+                  className="text-success"
+                />
+              )}
+              {deletions && (
+                <NumberFlow
+                  value={parseInt(deletions)}
+                  prefix="-"
+                  className="text-danger"
+                />
+              )}
+            </Text>
+          )}
+        </div>
       </div>
 
-      {/* Diff stats (visible by default, hidden on hover) / Options button (hidden by default, visible on hover) */}
-      <div className="absolute right-2 top-1/2 -translate-y-1/2 z-(--z-base)">
-        {(insertions || deletions) && (
-          <Text
-            as="span"
-            size="t"
-            tone="inherit"
-            className="flex items-center gap-1 font-mono tabular-nums group-hover:opacity-0 transition-opacity pointer-events-none"
-          >
-            {insertions && (
-              <NumberFlow
-                value={parseInt(insertions)}
-                prefix="+"
-                className="text-success"
-              />
-            )}
-            {deletions && (
-              <NumberFlow
-                value={parseInt(deletions)}
-                prefix="-"
-                className="text-danger"
-              />
-            )}
-          </Text>
-        )}
-        <Button
-          variant="icon"
-          iconSize="sm"
-          tooltip="More options"
-          ref={buttonRef}
-          onClick={handleOptionClick}
-          aria-haspopup="menu"
-          aria-expanded={isDropdownOpen}
-          className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
-          aria-label="Workspace options"
-        >
-          <Option className="w-5 h-5" />
-        </Button>
-      </div>
+      <Button
+        variant="icon"
+        iconSize="sm"
+        tooltip="More options"
+        ref={buttonRef}
+        onClick={handleOptionClick}
+        aria-haspopup="menu"
+        aria-expanded={isDropdownOpen}
+        className="absolute right-2 top-1/2 z-(--z-base) -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+        aria-label="Workspace options"
+      >
+        <Option className="w-5 h-5" />
+      </Button>
 
       {/* Dropdown Menu */}
       <DropdownMenu

@@ -5,6 +5,10 @@ export function isWorkspaceRoute(pathname: string): boolean {
     pathname === "/code" || pathname.startsWith("/code/");
 }
 
+export function isAssistantsRoute(pathname: string): boolean {
+  return pathname === "/assistants" || pathname.startsWith("/assistants/");
+}
+
 export function isSettingsRoute(pathname: string): boolean {
   return pathname === "/settings" || pathname.startsWith("/settings/");
 }
@@ -22,6 +26,7 @@ export function hasSidebarPanel(pathname: string): boolean {
   return (
     isWorkspaceRoute(pathname) ||
     isSettingsRoute(pathname) ||
+    isAssistantsRoute(pathname) ||
     isAtlasRoute(pathname) ||
     isTasksRoute(pathname)
   );
@@ -35,7 +40,7 @@ export function shouldHideRightPanel(pathname: string): boolean {
 
 /** Atlas keeps document/browser previews, but never workspace tool panels. */
 export function shouldHideWorkspacePanels(pathname: string): boolean {
-  return isAtlasRoute(pathname) || shouldHideRightPanel(pathname);
+  return isAtlasRoute(pathname) || isAssistantsRoute(pathname) || shouldHideRightPanel(pathname);
 }
 
 /**
@@ -71,6 +76,10 @@ export const SIDEBAR_WIDTH_MAX = 420;
 export const PANEL_WIDTH_DEFAULT = 352; // 22rem
 export const PANEL_WIDTH_MIN = 300;
 export const PANEL_WIDTH_MAX = 500;
+
+export const ASSISTANT_INFO_PANEL_WIDTH_DEFAULT = 416; // 26rem
+export const ASSISTANT_INFO_PANEL_WIDTH_MIN = 320;
+export const ASSISTANT_INFO_PANEL_WIDTH_MAX = 640;
 
 export const BROWSER_PANEL_WIDTH_VAR = "--browser-panel-width";
 export const BROWSER_PANEL_WIDTH_DEFAULT = 608; // 38rem

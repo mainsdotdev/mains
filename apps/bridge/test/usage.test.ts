@@ -2,7 +2,7 @@ import { signFixture } from "./record-signing.mjs";
 import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { afterEach, expect, it } from "vitest";
-import type { BridgeEnvelope } from "@mains/contracts/bridge-protocol";
+import type { BridgeEnvelope, BridgeLogRecord, BridgePushResult } from "@mains/contracts/bridge-protocol";
 import type { BridgeQuota } from "@mains/contracts/bridge";
 import { BRIDGE_IDLE_RETENTION_MS } from "@mains/contracts/bridge-protocol";
 import { createHash } from "node:crypto";
@@ -23,7 +23,7 @@ export class UsageProbe extends DurableObject {
       transactionSync: (fn) => this.ctx.storage.transactionSync(fn),
     };
     this.store = createHubStore(storage);
-    this.quota = createBlobQuota(storage, this.env, () => this.store.recordBytes());
+    this.quota = createBlobQuota(storage, this.env, this.store.recordBytes, undefined, undefined, this.store.retainedBlobBytes);
   }
   async fetch(request) {
     this.cursors = [];
@@ -34,8 +34,14 @@ export class UsageProbe extends DurableObject {
       this.initialize();
       if (input.op === "push" || input.op === "rollback") {
         const quota = await this.quota.status("test");
-        const push = () => this.store.push("A", input.stream ?? "account", input.records,
-          { ...quota, blobBytes: quota.blobBytes + quota.reservedBytes });
+        const push = () => {
+          const realNow = Date.now;
+          if (input.now !== undefined) Date.now = () => input.now;
+          try {
+            return this.store.push("A", input.stream ?? "account", input.records,
+              { ...quota, blobBytes: quota.blobBytes + quota.reservedBytes });
+          } finally { Date.now = realNow; }
+        };
         if (input.op === "push") value = push();
         else { try { this.ctx.storage.transactionSync(() => { push(); throw new Error("rollback"); }); } catch { value = "rolled back"; } }
       } else if (input.op === "compact") value = this.store.compact();
@@ -51,13 +57,13 @@ export default { fetch(request, env) { return env.PROBE.get(env.PROBE.idFromName
 const receiptBytes = 256;
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
-async function probe() {
+async function probe(writesPerMinute = 100_000) {
   const bundle = await build({ stdin: { contents: source, resolveDir: process.cwd(), sourcefile: "usage-probe.ts" }, bundle: true,
     write: false, format: "esm", platform: "browser", target: "es2022", external: ["cloudflare:workers"] });
   const mf = new Miniflare(convertV4MiniflareOptions({ name: "usage-test", modules: true, script: bundle.outputFiles[0].text,
     compatibilityDate: "2026-07-30", host: "127.0.0.1", port: 0, unsafeInspectDurableObjects: true,
     durableObjects: { PROBE: { className: "UsageProbe", useSQLite: true } }, r2Buckets: { BLOBS: "usage-test" },
-    bindings: { BRIDGE_WRITES_PER_MINUTE: "100000" } }));
+    bindings: { BRIDGE_WRITES_PER_MINUTE: String(writesPerMinute) } }));
   cleanup.push(() => mf.dispose());
   const url = await mf.ready;
   async function call<T>(input: object): Promise<{ value: T; rowsRead: number; rowsWritten: number }> {
@@ -83,6 +89,31 @@ const deleted = (row: BridgeEnvelope): BridgeEnvelope => {
   return signFixture({ header: { ...header, op: "delete", hlc: { physicalMs: 0, counter: 0 } }, body: { nonce: "opaque", payload: "tombstone" } }, "usage-account");
 };
 const size = (row: BridgeEnvelope) => Buffer.byteLength(JSON.stringify(row));
+
+it("batches sequence and rate writes while keeping replay ACKs, delete limits and rollback", async () => {
+  const p = await probe(2), now = 1_800_000_000_000;
+  const push = (records: BridgeEnvelope[], at = now) =>
+    p.call<{ results: BridgePushResult[]; changed: BridgeLogRecord[] }>({ op: "push", records, now: at });
+  const ack = (row: BridgeEnvelope, seq: number) => ({ seq, publicationId: row.auth!.publicationId });
+  const rateLimited = { error: "rateLimited" };
+  const first = record("first"), second = record("second"), third = record("third"), tombstone = deleted(first);
+  const result = await push([first, first, second, third, tombstone]);
+  expect(result.value.results).toEqual([ack(first, 1), ack(first, 1), ack(second, 2), rateLimited, ack(tombstone, 3)]);
+  expect(result.value.changed).toEqual([{ seq: 1, envelope: first }, { seq: 2, envelope: second }, { seq: 3, envelope: tombstone }]);
+
+  const nextMinute = now + 60_000;
+  await p.call({ op: "rollback", records: [third], now: nextMinute });
+  await p.evict();
+  expect(await p.sql("SELECT seq FROM streams WHERE stream='account'")).toEqual([{ seq: 3 }]);
+  expect(await p.sql("SELECT * FROM write_rate ORDER BY backend_id")).toEqual([
+    { backend_id: "A", window: now / 60_000, count: 2 },
+    { backend_id: "A:delete", window: now / 60_000, count: 1 },
+  ]);
+  const retry = await push([second, third]);
+  expect(retry.value).toEqual({ results: [ack(second, 2), rateLimited], changed: [] });
+  expect(retry.rowsWritten).toBe(0);
+  expect((await push([third], nextMinute)).value.results).toEqual([ack(third, 4)]);
+});
 
 it("keeps first-upload reads linear and quota reads constant across records, chunks and DO eviction", async () => {
   const p = await probe(), count = 1157;

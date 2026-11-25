@@ -96,11 +96,11 @@ function AppContent() {
       if (!(event.target as Element).closest("[data-floating-chat-surface]")) panel.setChatMode("input");
     }}>
     <PreviewToolbar aria-label="App controls" className="justify-end">
-      {panel.ownerKey !== composerKey && <Button variant="ghost" className="glass-card text-xs" onClick={() => {
-        if (panel.runId) dispatch(setPendingRunId(panel.runId));
+      {panel.ownerKey !== composerKey && <Button variant="secondary" className="text-xs" onClick={() => {
+        if (panel.runId && !panel.scope?.assistantId) dispatch(setPendingRunId(panel.runId));
         if (panel.scope) navigate(mcpAppConversationPath(panel.scope, panel.runId));
       }}>Open app conversation</Button>}
-      <Button variant="icon" className="glass-card" onClick={reload} tooltip="Reload app" aria-label="Reload app">
+      <Button variant="icon" className="button-neutral" onClick={reload} tooltip="Reload app" aria-label="Reload app">
         <Refresh className="size-4" />
       </Button>
     </PreviewToolbar>

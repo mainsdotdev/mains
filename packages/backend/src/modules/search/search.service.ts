@@ -1,10 +1,18 @@
 import path from "node:path";
+import { lstat, realpath } from "node:fs/promises";
 import type {
   GlobalSearchQuery,
   GlobalSearchResult,
+  ConversationSearchQuery,
+  ConversationSearchPage,
+  WorkspaceFileSearchHit,
+  WorkspaceFileSearchQuery,
 } from "@mains/contracts/search";
 import { isModeId } from "@mains/contracts/modes";
 import { isProviderId } from "@mains/contracts/provider-ids";
+import { accountService } from "../account";
+import { fileExplorerService } from "../fileExplorer";
+import { workspaceService } from "../workspace";
 import {
   searchRepo,
   type DocumentSearchRow,
@@ -15,6 +23,31 @@ import {
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 25;
 const MAX_QUERY_LENGTH = 200;
+const MAX_WORKSPACE_FILE_MATCHES = 50;
+const MAX_WORKSPACE_FILE_PATH_LENGTH = 4096;
+
+async function workspaceFileSearchRoot(workspaceId: string, accountId: string): Promise<string> {
+  const workspace = await workspaceService.get(workspaceId);
+  if (!workspace || workspace.accountId !== accountId || workspace.isArchived || workspace.isReplica ||
+      !path.isAbsolute(workspace.rootPath)) throw new Error("Choose an active local workspace");
+  return realpath(workspace.rootPath).catch(() => { throw new Error("The workspace folder is unavailable"); });
+}
+
+async function workspaceFileHit(root: string, { fullPath, type }: { fullPath: string; type: WorkspaceFileSearchHit["type"] }): Promise<WorkspaceFileSearchHit | null> {
+  const relative = path.relative(root, fullPath);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  const wirePath = relative.split(path.sep).join("/");
+  if (wirePath.length > MAX_WORKSPACE_FILE_PATH_LENGTH || /^[A-Za-z]:|[\\\p{Cc}\u2063\u2064\uFFFC]/u.test(wirePath)) return null;
+  try {
+    // Git can list deleted files, symlinks and files below a replaced directory.
+    const entry = await lstat(fullPath);
+    const matchesType = type === "directory" ? entry.isDirectory() : entry.isFile();
+    if (!matchesType || path.relative(fullPath, await realpath(fullPath)) !== "") return null;
+    return { path: wirePath, type };
+  } catch {
+    return null;
+  }
+}
 
 function epochMilliseconds(value: number): number {
   // SQLite timestamp columns are stored as epoch seconds. Be tolerant of a
@@ -126,6 +159,40 @@ function mapDocument(
 }
 
 export const searchService = {
+  async workspaceFiles(input: WorkspaceFileSearchQuery): Promise<WorkspaceFileSearchHit[]> {
+    if (!input || typeof input.workspaceId !== "string" || !input.workspaceId.trim() || input.workspaceId.length > 200 ||
+        typeof input.query !== "string" || input.query.length > MAX_WORKSPACE_FILE_PATH_LENGTH) throw new Error("Choose a workspace and search query");
+    const query = input.query.trim();
+    if (!query) return [];
+
+    const account = await accountService.getAccount();
+    const root = await workspaceFileSearchRoot(input.workspaceId, account.id);
+    const entries = await fileExplorerService.searchFiles({
+      rootPath: root, query, max: MAX_WORKSPACE_FILE_MATCHES, includeDirectories: input.includeDirectories === true,
+    });
+    const hits = await Promise.all(entries.map(entry => workspaceFileHit(root, entry)));
+    if (await workspaceFileSearchRoot(input.workspaceId, account.id) !== root) throw new Error("The workspace folder changed");
+    return hits.filter(hit => hit !== null);
+  },
+
+  async conversations(input: ConversationSearchQuery): Promise<ConversationSearchPage> {
+    if (!input || typeof input.query !== "string" || typeof input.accountId !== "string" || !input.accountId.trim() || input.accountId.length > 200) throw new Error("Choose an account and search query");
+    const query = input.query.trim().normalize("NFKC").slice(0, MAX_QUERY_LENGTH);
+    if (!query) return { items: [], nextCursor: null };
+    const cursor = input.cursor;
+    if (cursor && (!Number.isSafeInteger(cursor.rank) || cursor.rank < 0 || cursor.rank > 4 ||
+      !Number.isSafeInteger(cursor.createdAt) || cursor.createdAt < 0 || typeof cursor.runId !== "string" || !cursor.runId || cursor.runId.length > 200)) throw new Error("Invalid search cursor");
+    const limit = Math.max(1, Math.min(MAX_LIMIT, Number.isFinite(input.limit) ? Math.floor(input.limit!) : MAX_LIMIT));
+    const rows = searchRepo.findConversations({ accountId: input.accountId.trim(), query, cursor, limit: limit + 1 });
+    const page = rows.slice(0, limit), last = page.at(-1);
+    return {
+      items: page.map(row => ({ runId: row.id, title: row.title?.trim() || firstMeaningfulLine(row.goal, "Untitled chat"),
+        providerId: row.providerId, mode: row.mode, context: row.context, updatedAt: row.updatedAt,
+        snippet: row.matchSnippet ? compact(row.matchSnippet) : searchSnippet(row.goal, query),
+        messageCursor: row.artifactId != null && row.messageTime != null ? { timestamp: row.messageTime, source: "artifact" as const, id: row.artifactId } : null })),
+      nextCursor: rows.length > limit && last ? { rank: last.rank, createdAt: last.createdAt, runId: last.id } : null,
+    };
+  },
   async query(input: GlobalSearchQuery): Promise<GlobalSearchResult[]> {
     const query = input.query.trim().slice(0, MAX_QUERY_LENGTH);
     if (!query) return [];

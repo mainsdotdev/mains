@@ -13,6 +13,7 @@ import {
   useUpdateAppSettingsMutation,
 } from "@/lib/redux/api/appSettingsApi";
 import { useGetSpacesQuery } from "@/lib/redux/api/spaceApi";
+import { useGetGitHubCliStatusQuery } from "@/lib/redux/api/gitFlowApi";
 import {
   useDetectInstalledClisQuery,
   useGetEnabledProvidersQuery,
@@ -38,6 +39,7 @@ import { onTransportChange } from "@/lib/transport";
 const ALL_ONBOARDING_STEPS = [
   "welcome",
   "providers",
+  "github-cli",
   "theme",
   "worktrees",
   "notifications",
@@ -93,6 +95,15 @@ export function useOnboarding(beforeComplete?: () => Promise<void>) {
   });
   // Retained step state can point past the end after an optional step is hidden.
   const index = Math.min(storedIndex, ONBOARDING_STEPS.length - 1);
+  const step = ONBOARDING_STEPS[index];
+  const gitHubCliQuery = useGetGitHubCliStatusQuery(undefined, {
+    skip: step !== "github-cli",
+    refetchOnMountOrArgChange: true,
+    refetchOnFocus: true,
+  });
+  const gitHubCliStatus = gitHubCliQuery.isError
+    ? { status: "unavailable" as const }
+    : gitHubCliQuery.currentData;
   // undefined means untouched; null is the user's explicit "Set up later".
   const [providerChoice, setProviderChoice] = useState<
     ProviderVariant | null | undefined
@@ -125,7 +136,6 @@ export function useOnboarding(beforeComplete?: () => Promise<void>) {
   const providerSkipped = providerChoice === null;
   const notifyOnRunComplete =
     notifications ?? settingsQuery.data?.notifyOnRunComplete ?? false;
-  const step = ONBOARDING_STEPS[index];
   const isLastStep = index === ONBOARDING_STEPS.length - 1;
   const canContinue =
     !isSaving &&
@@ -257,6 +267,9 @@ export function useOnboarding(beforeComplete?: () => Promise<void>) {
     isDetecting,
     providerError,
     recheckProviders,
+    gitHubCliStatus,
+    isCheckingGitHubCli: gitHubCliQuery.isFetching,
+    recheckGitHubCli: gitHubCliQuery.refetch,
     settingsReady: !!settingsQuery.data,
     settingsError: settingsQuery.isError || spacesQuery.isError,
     retrySettings: () => {

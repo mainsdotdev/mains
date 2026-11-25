@@ -1,4 +1,6 @@
-import { assertNoPlanDecisionPatch } from "@mains/contracts/plan-decision";
+import { prepareAssistantMentions, withAssistantMentionFiles, annotateAssistantTaskPrompts } from "../assistants";
+import { assistantsService } from "../assistants/assistants.service";
+import { assertNoPlanDecisionPatch, PLAN_EXIT_SETTINGS } from "@mains/contracts/plan-decision";
 import { assertPlanContinuationCurrent, decidePlan } from "./plan-decision-lifecycle";
 import type { PlanDecisionPayload } from "@mains/contracts/plan-decision";
 import { retireAnswer } from "./async-answer-lifecycle";
@@ -18,7 +20,7 @@ import type {
   VoiceTaskLink,
 } from "@mains/contracts/realtime";
 import { insertRunInputArtifact } from "./run-input-artifact";
-import { assertRunCanContinue, canSteerRun, claimRunResponse, isRunResponseStarting, startingRunResponseIds } from "./run-lifecycle";
+import { assertRunCanContinue, canSteerRun, claimRunResponse, isRunResponseStarting, realtimeConnections, startingRunResponseIds } from "./run-lifecycle";
 import { answerAsyncQuestions, assertAsyncQuestionCanReply, assertAsyncQuestionDecisionCurrent, dismissAsyncQuestions } from "./run-async-questions";
 import type { AnswerAsyncQuestionsPayload, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import { providerTurnLineageMetadata } from "../../../shared/provider-turn-lineage";
@@ -35,7 +37,7 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { runsRepo } from "./runs.repo";
-import { validateHistoryContentRequest, validateHistoryRequest } from "./run-history";
+import { mobileHistoryLimits, validateHistoryContentRequest, validateHistoryRequest } from "./run-history";
 import { describeRunOutput, readRunOutputChunk, validateOutputReference } from "./run-output-files";
 import type { ListRunOutputsPayload, ReadRunOutputPayload, RunOutputsPage } from "@mains/contracts/run-outputs";
 import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload } from "@mains/contracts/runs";
@@ -114,7 +116,7 @@ import { restoreRecordStorage, stageRecordStorage } from "../../runtime/record-s
 import { withImageContentHashes } from "./run-image-content-hashes";
 import { deliverableReplies, projectRunDeliverables } from "./run-deliverables";
 import { resolveOutputFilePath } from "./run-output-references";
-import { OUTPUT_FILE_MAX_BYTES, OUTPUT_DOCUMENT_TYPES, OUTPUT_IMAGE_EXTENSIONS, TEXT_PREVIEW_MAX_BYTES, type OutputRole } from "@mains/contracts/output-files";
+import { OUTPUT_FILE_MAX_BYTES, OUTPUT_DOCUMENT_TYPES, OUTPUT_IMAGE_EXTENSIONS, TEXT_PREVIEW_MAX_BYTES, outputMediaMimeType, type OutputRole } from "@mains/contracts/output-files";
 import type {
   CreateRunPayload,
   UpdateRunPayload,
@@ -481,6 +483,13 @@ async function findSpaceForRun(spaceId: string | null | undefined) {
  * keep behaving under the mode the run started with. The caller validates
  * that the resolved Space exists and owns the selected account/provider.
  */
+async function buildAssistantInstructions(runId: string, assistantId: string | null | undefined, accountId: string, query: string): Promise<string | null> {
+  if (!assistantId) return null;
+  const content = assistantsService.context(assistantId, accountId, query);
+  await runsRepo.insertContext({ runId, kind: "note", content, contentHash: hashContent(content), metadata: { origin: "assistant-context", assistantId } });
+  return content;
+}
+
 async function resolveRunMode(spaceId: string | undefined): Promise<{
   spaceId: string | undefined;
   mode: ModeId;
@@ -680,16 +689,6 @@ async function syncCodexRunSession(
 // Single-item reads return null for absence; mutations on a missing
 // target throw (see CONTEXT.md "absence rule").
 // ─────────────────────────────────────────────────────────────
-const realtimeConnections = new Map<
-  string,
-  {
-    connectionId: string;
-    cancelRequested: boolean;
-    prepared: Promise<void>;
-    dispose?: () => void;
-  }
->();
-
 function assertRunCanRetire(runId: string): void {
   if (isRunResponseStarting(runId) || runSessionRegistry.get(runId) || realtimeConnections.has(runId)) {
     throw new Error("Stop active responses and voice chat before archiving or deleting this run.");
@@ -700,7 +699,15 @@ export const runsService = {
   async createRealtimeConversation(
     payload: CreateRealtimeConversationPayload,
   ): Promise<CreateRealtimeConversationResponse> {
-    const { spaceId, mode, space } = await resolveRunMode(payload.spaceId);
+    const { assistantId } = payload;
+    if (assistantId !== undefined && [payload.spaceId, payload.workspaceId, payload.collectionId,
+      payload.conversationSettings, payload.additionalDirectories].some(value => value !== undefined)) {
+      throw new Error("A Mate voice chat uses the Mate’s saved profile.");
+    }
+    const assistant = assistantId === undefined ? null : assistantsService.requireForWork(assistantId, payload.accountId);
+    const { spaceId, mode, space } = assistant
+      ? { spaceId: assistant.spaceId, mode: "work" as const, space: assistant.spaceSnapshot }
+      : await resolveRunMode(payload.spaceId);
     if (!spaceId || !space)
       throw new Error("A valid space is required to start voice chat");
     if (space.accountId !== payload.accountId)
@@ -723,21 +730,19 @@ export const runsService = {
     } else if (payload.workspaceId) {
       throw new Error("Work and Chat runs do not use a workspace");
     }
-    const collectionId = await validateCollectionForRun(
-      payload.collectionId,
-      payload.accountId,
-      mode,
-    );
+    const collectionId = assistant ? undefined : await validateCollectionForRun(payload.collectionId, payload.accountId, mode);
+    if (assistant) assertRecordAvailable(recordKey("assistant", assistant.id, payload.accountId));
     const settings = resolveConversationSettings(
       space.providerId,
       provider.config,
       composeConfigSnapshot(mode, space.providerId, null),
-      undefined,
-      payload.conversationSettings,
+      assistant?.model,
+      assistant?.conversationSettings ?? payload.conversationSettings,
       { inheritProviderPermissions: true },
     );
     const configSnapshot = normalizeAdditionalDirectories(
       composeConfigSnapshot(mode, space.providerId, {
+        ...(assistant ? { assistantId: assistant.id } : {}),
         ...settings.config,
         conversationSettings: settings,
         ...(payload.additionalDirectories !== undefined
@@ -755,6 +760,7 @@ export const runsService = {
       workspaceId: workspace?.id,
       collectionId,
       spaceId,
+      assistantId: assistant?.id,
       providerId: space.providerId,
       mode,
       model: settings.model || undefined,
@@ -763,10 +769,11 @@ export const runsService = {
       toolPolicySnapshot: composeToolPolicy(mode, null) ?? undefined,
     });
     emit(CHANNELS.runs.updated, { runId, ts: Date.now() });
-    return { runId };
+    return assistant ? { runId, assistantId: assistant.id } : { runId };
   },
 
-  async startRealtime(payload: RunRealtimeStartPayload): Promise<void> {
+  async startRealtime(payload: RunRealtimeStartPayload, owner?: { deviceId: string; clientId?: string; signal?: AbortSignal }): Promise<void> {
+    if (owner?.signal?.aborted) throw new Error("The voice connection was closed.");
     assertOwnedRecord("runs", payload.runId);
     assertRecordAvailable(recordKey("run", payload.runId));
     if (
@@ -794,17 +801,40 @@ export const runsService = {
       );
     if (realtimeConnections.has(run.id))
       throw new Error("Voice chat is already active for this conversation.");
+    if (owner?.signal?.aborted) throw new Error("The voice connection was closed.");
     assertRecordAvailable(recordKey("run", run.id));
+    const assistant = run.assistantId ? assistantsService.requireForWork(run.assistantId, run.accountId) : null;
+    if (assistant) assertRecordAvailable(recordKey("assistant", assistant.id, run.accountId));
     let prepared!: () => void;
     const connection: NonNullable<ReturnType<typeof realtimeConnections.get>> =
       {
         connectionId: payload.connectionId,
+        assistantId: assistant?.id ?? null,
+        deviceId: owner?.deviceId,
         cancelRequested: false,
         prepared: new Promise<void>((resolve) => {
           prepared = resolve;
         }),
       };
     realtimeConnections.set(run.id, connection);
+    // A killed/backgrounded phone cannot leave an unowned native call alive.
+    // Failed closure retains the claim and retries until native teardown confirms.
+    if (owner?.signal) {
+      const signal = owner.signal;
+      let retry: ReturnType<typeof setTimeout> | undefined;
+      const close = () => {
+        if (realtimeConnections.get(run.id) !== connection) return;
+        void runsService.stopRealtime(payload, owner.deviceId).catch(() => {
+          if (realtimeConnections.get(run.id) !== connection) return;
+          retry = setTimeout(close, 2_000);
+          retry.unref();
+        });
+      };
+      signal.addEventListener("abort", close, { once: true });
+      connection.releaseOwner = () => { signal.removeEventListener("abort", close); clearTimeout(retry); };
+      if (signal.aborted) close();
+    }
+    const realtimeScope = owner?.clientId ? { clientId: owner.clientId } : { excludeDevices: true };
     let coordinator: ReturnType<typeof createVoiceTaskCoordinator> | undefined;
     try {
       const provider = await providersService.getById(run.providerId);
@@ -833,18 +863,19 @@ export const runsService = {
         latestKnownModel(turns, run.model),
         runSessionRegistry.get(run.id)
           ? undefined
-          : payload.conversationSettings,
+          : assistant?.conversationSettings ?? payload.conversationSettings,
       );
       const configSnapshot = normalizeAdditionalDirectories(
         composeConfigSnapshot(run.mode, run.providerId, {
           ...(run.configSnapshot ?? {}),
+          ...(assistant ? { assistantId: assistant.id } : {}),
           ...settings.config,
           conversationSettings: settings,
         }),
         run.providerId,
       );
       const toolPolicy = composeToolPolicy(run.mode, run.toolPolicySnapshot);
-      const space = await findSpaceForRun(run.spaceId);
+      const space = assistant?.spaceSnapshot ?? await findSpaceForRun(run.spaceId);
       const projectInstructions = await buildCollectionSourceInstructions({
         runId: run.id,
         accountId: run.accountId,
@@ -876,7 +907,9 @@ export const runsService = {
                 rootTurnId: nativeRootTurnId ?? nativeTurnId,
               }
             : undefined;
-          const target = await resolveRunMode(run.spaceId ?? undefined);
+          const target = assistant
+            ? { spaceId: assistant.spaceId, space: assistant.spaceSnapshot, mode: run.mode }
+            : await resolveRunMode(run.spaceId ?? undefined);
           if (
             !target.space ||
             target.space.accountId !== run.accountId ||
@@ -889,8 +922,10 @@ export const runsService = {
           }
           const { runId } = await runsService.executeRun({
             accountId: run.accountId,
+            assistantId: assistant?.id,
             providerId: run.providerId,
             spaceId: target.spaceId ?? undefined,
+            mode: assistant ? run.mode : undefined,
             workspaceId: run.workspaceId ?? undefined,
             collectionId: run.collectionId ?? undefined,
             goal: args.prompt,
@@ -999,7 +1034,7 @@ export const runsService = {
             runId: run.id,
             connectionId: payload.connectionId,
             type: "ending",
-          } satisfies RunRealtimeEvent);
+          } satisfies RunRealtimeEvent, realtimeScope);
           await runsService.stopRealtime({
             runId: run.id,
             accountId: run.accountId,
@@ -1019,7 +1054,7 @@ export const runsService = {
             eventId: generateRunId(),
             content,
             announce,
-          } satisfies RunRealtimeEvent);
+          } satisfies RunRealtimeEvent, realtimeScope);
         },
       });
       connection.dispose = coordinator.dispose;
@@ -1039,12 +1074,13 @@ export const runsService = {
       const itemTimestamps = new Map<string, number>();
       let persistence = Promise.resolve();
       const onRealtimeEvent = (event: RunRealtimeEvent) => {
-        emit(CHANNELS.runs.realtimeEvent, event);
+        emit(CHANNELS.runs.realtimeEvent, event, realtimeScope);
         if (
           event.type === "closed" &&
           realtimeConnections.get(run.id) === connection
         ) {
           coordinator?.dispose();
+          connection.releaseOwner?.();
           realtimeConnections.delete(run.id);
         }
         if (event.type === "started") coordinator?.activate();
@@ -1052,20 +1088,20 @@ export const runsService = {
           return;
         if (!transcriptContext.has(event.itemId)) {
           transcriptContext.set(event.itemId, {
-            steering: event.role === "user" && !!runSessionRegistry.get(run.id),
-            providerTurnId: nativeTurnId,
-            providerRootTurnId: nativeRootTurnId,
+            steering: !event.recovered && event.role === "user" && !!runSessionRegistry.get(run.id),
+            providerTurnId: event.recovered ? undefined : nativeTurnId,
+            providerRootTurnId: event.recovered ? undefined : nativeRootTurnId,
           });
           if (transcriptContext.size > 256)
             transcriptContext.delete(transcriptContext.keys().next().value!);
         }
-        if (event.role === "user") latestUserItemId = event.itemId;
+        if (event.role === "user" && !event.recovered) latestUserItemId = event.itemId;
         // Capture delivery at speech start, not at transcript completion: the
         // initiating speech can finish transcription after its work has begun.
         const context = transcriptContext.get(event.itemId);
         const providerTurnId = context?.providerTurnId;
         const streamId = `voice-${payload.connectionId}-${event.itemId}`;
-        const voiceStartedAt = itemTimestamps.get(event.itemId) ?? Date.now();
+        const voiceStartedAt = event.observedAtMs ?? itemTimestamps.get(event.itemId) ?? Date.now();
         itemTimestamps.set(event.itemId, voiceStartedAt);
         if (itemTimestamps.size > 256)
           itemTimestamps.delete(itemTimestamps.keys().next().value!);
@@ -1078,6 +1114,7 @@ export const runsService = {
           voiceStartedAt,
           itemId: event.itemId,
           realtimeSessionId: payload.connectionId,
+          ...(event.recovered ? { voiceRecovered: true } : {}),
           ...(providerTurnId ? { providerTurnId } : {}),
           ...(context?.providerRootTurnId
             ? { providerRootTurnId: context.providerRootTurnId }
@@ -1158,8 +1195,13 @@ export const runsService = {
           toolPolicy,
           voiceTools: coordinator.tools,
           voiceInstructions: `${VOICE_COORDINATOR_INSTRUCTIONS}\nPreviously linked working chats (use ListVoiceTasks for all): ${JSON.stringify(links.slice(-16).map(({ id, taskKey, title }) => ({ runId: id, taskKey, title })))}`,
+          // Realtime initial items have a tighter startup limit than the backing thread.
+          voiceInitialInstructions: assistant
+            ? `You are ${JSON.stringify(assistant.name)}, a persistent Mains assistant. Ask the backing agent when you need more profile details or saved memories.\n${Array.from(assistant.instructions).slice(0, 1700).join("")}`
+            : undefined,
           extraInstructions: joinInstructions(
             composeExtraInstructions(run.mode, space?.systemPrompt),
+            assistant ? assistantsService.context(assistant.id, run.accountId, run.goal ?? "") : null,
             projectInstructions,
             resolveAtlasPageContext(
               run.accountId,
@@ -1259,6 +1301,7 @@ export const runsService = {
       );
     } catch (error) {
       coordinator?.dispose();
+      connection.releaseOwner?.();
       if (realtimeConnections.get(run.id) === connection)
         realtimeConnections.delete(run.id);
       throw error;
@@ -1267,7 +1310,7 @@ export const runsService = {
     }
   },
 
-  async stopRealtime(payload: RunRealtimeStopPayload): Promise<void> {
+  async stopRealtime(payload: RunRealtimeStopPayload, deviceId?: string): Promise<void> {
     assertOwnedRecord("runs", payload.runId);
     const run = await runsRepo.findRunById(payload.runId);
     if (!run) throw new Error("Run not found");
@@ -1275,6 +1318,8 @@ export const runsService = {
       throw new Error("Run does not belong to this account");
     const connection = realtimeConnections.get(run.id);
     if (!connection || connection.connectionId !== payload.connectionId) return;
+    if (deviceId && connection.deviceId !== deviceId)
+      throw new Error("This voice chat belongs to another device.");
     connection.cancelRequested = true;
     connection.dispose?.();
     await connection.prepared;
@@ -1574,12 +1619,16 @@ export const runsService = {
   },
 
   async createRun(payload: CreateRunPayload): Promise<string> {
+    if (payload.assistantId) throw new Error("Use the assistant conversation endpoint to create assistant runs");
     if (payload.workspaceId) assertOwnedRecord("workspaces", payload.workspaceId);
     return runsRepo.insertRun(payload);
   },
 
   async updateRun(id: string, payload: UpdateRunPayload): Promise<RunResponse> {
     assertOwnedRecord("runs", id);
+    const existingAssistantRun = await runsRepo.findRunById(id);
+    if (existingAssistantRun?.assistantId && (payload.model !== undefined || payload.conversationSettings !== undefined || payload.configSnapshot !== undefined || payload.systemPrompt !== undefined || payload.toolPolicySnapshot !== undefined)) throw new Error("Assistant execution profiles are fixed in V1");
+    if ("assistantId" in payload) throw new Error("Conversation assistant identity cannot be changed");
     const patch = { ...payload };
     if (payload.conversationSettings !== undefined) {
       const run = await runsRepo.findRunById(id);
@@ -1599,6 +1648,8 @@ export const runsService = {
 
   /** A narrow paired-device write; never changes the active turn or provider defaults. */
   async updateConversationSettings(id: string, settings: ConversationSettings): Promise<ConversationSettings> {
+    const assistantRun = await runsRepo.findRunById(id);
+    if (assistantRun?.assistantId) throw new Error("Assistant execution profiles are fixed in V1");
     if (!settings) throw new Error("Invalid conversation settings");
     const updated = await this.updateRun(id, { conversationSettings: settings });
     return conversationSettingsFrom(updated.configSnapshot)!;
@@ -1710,6 +1761,15 @@ export const runsService = {
   async deleteRunsByWorkspace(workspaceId: string): Promise<void> {
     const runIds = await runsRepo.findRunIdsByWorkspaceId(workspaceId);
     for (const runId of runIds) assertRunCanRetire(runId);
+    for (const runId of runIds) await this.deleteRun(runId);
+  },
+
+  async deleteRunsByAssistant(accountId: string, assistantId: string): Promise<void> {
+    const runIds = await runsRepo.findRunIdsByAssistant(accountId, assistantId);
+    for (const runId of runIds) {
+      assertRunCanRetire(runId);
+      if (isRecordTransitioning(recordKey("run", runId))) throw new Error("Wait for this Mate’s conversation changes to finish.");
+    }
     for (const runId of runIds) await this.deleteRun(runId);
   },
 
@@ -1850,7 +1910,7 @@ export const runsService = {
     if (!candidate) throw new Error("Supply a local output file path");
     const extension = path.extname(candidate).slice(1).toLowerCase();
     const image = OUTPUT_IMAGE_EXTENSIONS.has(extension);
-    if (!image && !Object.prototype.hasOwnProperty.call(OUTPUT_DOCUMENT_TYPES, extension)) throw new Error("Unsupported output file type");
+    if (!image && !Object.prototype.hasOwnProperty.call(OUTPUT_DOCUMENT_TYPES, extension) && !outputMediaMimeType(extension)) throw new Error("Unsupported output file type");
     const roots = [root, path.join(getBackendRuntime().getPath("userData"), "generated-images", runId)];
     if (run.providerId === "codex" && run.sessionId && /^[\w-]+$/.test(run.sessionId))
       roots.push(path.join(os.homedir(), ".codex", "generated_images", run.sessionId));
@@ -1876,13 +1936,13 @@ export const runsService = {
     const page = runsRepo.findHistoryPage(payload);
     const result = {
       ...page,
-      artifacts: await selectedArtifacts(run, page.artifacts, page),
+      artifacts: annotateAssistantTaskPrompts(run.id, await selectedArtifacts(run, page.artifacts, page)),
     };
     if (payload.profile === "mobile") {
       // Deliverable discovery may hydrate images that the bounded repo query
       // omitted. Pixels are loaded through readImage, never in a transcript page.
       result.artifacts = result.artifacts.map((artifact) => ({ ...artifact, blobData: null }));
-      if (Buffer.byteLength(JSON.stringify(result)) > 1024 * 1024) {
+      if (Buffer.byteLength(JSON.stringify(result)) > mobileHistoryLimits(payload).bytes) {
         throw new Error("Conversation page exceeds the mobile data limit");
       }
     }
@@ -2030,6 +2090,14 @@ export const runsService = {
     return runsRepo.insertArtifact(payload);
   },
 
+  async ensureAssistantTaskArtifact(runId: string, assignmentId: string) {
+    const run = await runsRepo.findRunById(runId);
+    if (!run || run.isArchived || run.isReplica) return;
+    if (await runsRepo.findAssistantTaskArtifact(runId, assignmentId)) return;
+    await runsRepo.insertArtifact({ runId, kind: "report", content: "Assistant request", metadata: { source: "assistant_assignment", assignmentId } });
+    emit(CHANNELS.runs.eventPersisted, { runId, ts: Date.now() });
+  },
+
   async removeArtifact(id: number): Promise<void> {
     assertOwnedRecord("run_artifacts", id);
     await runsRepo.deleteArtifact(id);
@@ -2084,12 +2152,16 @@ export const runsService = {
    * The session owns the lifecycle from here on; this method returns immediately.
    */
   async executeRun(payload: StartRunPayload): Promise<StartRunResponse> {
+    const assistant = payload.assistantId ? assistantsService.requireForWork(payload.assistantId, payload.accountId) : null;
+    if (assistant) payload = { ...payload, providerId: assistant.providerId, spaceId: assistant.spaceId, mode: payload.mode ?? "work", model: assistant.model, collectionId: undefined, conversationSettings: assistant.conversationSettings, systemPrompt: undefined, configSnapshot: { ...assistant.conversationSettings.config, conversationSettings: assistant.conversationSettings }, toolPolicySnapshot: undefined };
     // Before anything is written: a refused attachment must leave no run behind.
     const uploads = sanitizeRunAttachments(
       payload.attachments,
       await browserCaptureDir(),
     );
-    const runId = generateRunId();
+    const runId = payload.reservedRunId ?? generateRunId();
+    if (!/^[\w-]{1,150}$/.test(runId)) throw new Error("Invalid reserved run identity");
+    if (payload.reservedRunId && await runsRepo.findRunById(runId)) throw new Error("Reserved run already exists; inspect it instead of starting again");
     const releaseResponse = claimRunResponse(runId);
     try {
       const provider = await providersService.getById(payload.providerId);
@@ -2109,7 +2181,7 @@ export const runsService = {
         spaceId: resolvedSpaceId,
         mode: spaceMode,
         space,
-      } = await resolveRunMode(payload.spaceId);
+      } = assistant ? { spaceId: assistant.spaceId, mode: payload.mode ?? "work", space: assistant.spaceSnapshot } : await resolveRunMode(payload.spaceId);
       if (!resolvedSpaceId || !space) {
         throw new Error("A valid space is required to start a run");
       }
@@ -2121,7 +2193,13 @@ export const runsService = {
       }
       const mode = payload.mode === undefined ? spaceMode : payload.mode;
       if (!isModeId(mode)) throw new Error("Invalid run mode");
-      if (!providerSupportsMode(payload.providerId, mode)) {
+      const atlasImage = payload.atlasImage === true;
+      const cursor = payload.providerId === PROVIDER_IDS.cursor;
+      if (atlasImage && (mode !== "work" || assistant || payload.atlasPageId || payload.configSnapshot?.atlasPageId ||
+        (!cursor && payload.providerId !== PROVIDER_IDS.codex))) {
+        throw new Error("Atlas image creation requires a Codex or Cursor image conversation");
+      }
+      if (!providerSupportsMode(payload.providerId, mode) && !(atlasImage && cursor)) {
         throw new Error(
           `Provider "${provider.displayName}" does not support ${mode} mode`,
         );
@@ -2176,8 +2254,10 @@ export const runsService = {
       );
       const configSnapshot = normalizeAdditionalDirectories(
         composeConfigSnapshot(mode, payload.providerId, {
+          ...(assistant ? { assistantId: assistant.id } : {}),
           ...providerOutputStyle,
           ...(payload.configSnapshot ?? {}),
+          ...(atlasImage ? { atlasImage: true } : {}),
           ...conversationSettings.config,
           conversationSettings,
           ...(atlasPage ? { atlasPageId: atlasPage.id } : {}),
@@ -2188,6 +2268,9 @@ export const runsService = {
         payload.providerId,
       );
       const toolPolicy = composeToolPolicy(mode, payload.toolPolicySnapshot);
+      const mentions = prepareAssistantMentions({ accountId: payload.accountId, mode, assistantId: assistant?.id ?? null, prompt: payload.goal, promptId: payload.clientPromptId,
+        context: { initialContext: payload.initialContext, contextFiles: payload.contextFiles, contextIssues: payload.contextIssues, contextSignals: payload.contextSignals, contextSkills: payload.contextSkills } });
+      payload = { ...payload, clientPromptId: mentions.promptId, initialContext: mentions.items };
       const execution = resolveRunExecution({ runId, mode, workspace });
       if (workspace) {
         await workspaceService.update(workspace.id, { status: "in_progress" });
@@ -2195,6 +2278,7 @@ export const runsService = {
 
       await runsRepo.insertRun({
         id: runId,
+        assistantId: assistant?.id,
         accountId: payload.accountId,
         workspaceId: workspace?.id,
         collectionId,
@@ -2209,7 +2293,15 @@ export const runsService = {
         toolPolicySnapshot: toolPolicy ?? undefined,
       });
       await runsRepo.updateRun(runId, { startedAt: new Date() });
+      if (assistant) {
+        const welcome = assistantsService.welcome(assistant.id, payload.accountId);
+        if (welcome?.runId === runId && welcome.question && welcome.answer !== null) {
+          await runsRepo.insertArtifact({ runId, kind: "report", content: welcome.question.profileSetup?.saved ? welcome.question.idleMessage : welcome.question.question + (welcome.wasSkipped ? `\n\n${welcome.question.idleMessage}` : ""),
+            metadata: { source: "assistant_welcome", question: welcome.question, skipped: welcome.wasSkipped } });
+        }
+      }
       const attachments = await prepareRunAttachments(runId, uploads);
+      payload.initialContext = withAssistantMentionFiles(payload.initialContext, attachments ?? []);
 
       const projectInstructions = await buildCollectionSourceInstructions({
         runId,
@@ -2219,6 +2311,7 @@ export const runsService = {
       });
       const extraInstructions = joinInstructions(
         baseInstructions,
+        await buildAssistantInstructions(runId, assistant?.id, payload.accountId, payload.goal),
         projectInstructions,
         atlasPage?.instructions ?? null,
       );
@@ -2464,7 +2557,8 @@ export const runsService = {
   async continueRun(payload: ContinueRunPayload): Promise<ContinueRunResponse> {
     assertOwnedRecord("runs", payload.runId);
     assertRecordAvailable(recordKey("run", payload.runId));
-    const { runId, accountId, message, additionalContext } = payload;
+    const { runId, accountId, message } = payload;
+    let additionalContext = payload.additionalContext;
     const releaseResponse = claimRunResponse(runId);
     try {
       // Preconditions must not mark someone else's live turn failed.
@@ -2472,6 +2566,10 @@ export const runsService = {
       if (!existing) throw new Error("Run not found");
       if (existing.accountId !== accountId)
         throw new Error("Run does not belong to this account");
+      const mentions = prepareAssistantMentions({ accountId, mode: existing.mode, assistantId: existing.assistantId ?? null, prompt: message, promptId: payload.clientPromptId, fallbackPromptId: payload.clientUserMessageId,
+        context: { initialContext: additionalContext, contextFiles: payload.contextFiles, contextIssues: payload.contextIssues, contextSignals: payload.contextSignals, contextSkills: payload.contextSkills } });
+      additionalContext = mentions.items;
+      payload = { ...payload, clientPromptId: mentions.promptId };
       if (existing.workspaceId) assertRecordAvailable(recordKey("workspace", existing.workspaceId));
       assertRunCanContinue(existing, runSessionRegistry.get(runId)?.phase, realtimeConnections.has(runId));
       if (payload.asyncQuestionReply) await assertAsyncQuestionCanReply(runId, payload.asyncQuestionReply);
@@ -2548,7 +2646,7 @@ export const runsService = {
           provider.config,
           run.configSnapshot,
           payload.model ?? previousModel,
-          payload.conversationSettings ??
+          run.assistantId ? assistantsService.require(run.assistantId, accountId).conversationSettings : payload.conversationSettings ??
             (payload.model
               ? {
                   model: payload.model,
@@ -2562,6 +2660,11 @@ export const runsService = {
               : undefined),
         );
 
+        const planExit = PLAN_EXIT_SETTINGS[run.providerId as keyof typeof PLAN_EXIT_SETTINGS];
+        if (assertPlanContinuationCurrent(runId, payload.clientUserMessageId) && planExit &&
+            conversationSettings.config[planExit.key] === planExit.planValue) {
+          conversationSettings.config = { ...conversationSettings.config, [planExit.key]: planExit.nextValue };
+        }
         const toolPolicy = composeToolPolicy(run.mode, run.toolPolicySnapshot);
         const configSnapshot = normalizeAdditionalDirectories(
           composeConfigSnapshot(run.mode, run.providerId, {
@@ -2595,6 +2698,7 @@ export const runsService = {
           { preserveConversationSettings: !!payload.conversationSettings },
         );
 
+        additionalContext = withAssistantMentionFiles(additionalContext, attachments ?? []);
         const projectInstructions = await buildCollectionSourceInstructions({
           runId,
           accountId,
@@ -2623,7 +2727,7 @@ export const runsService = {
 
         // Complete every awaited preparation before registering the native
         // session; Stop/dismiss must still be able to retire this decision.
-        const space = await findSpaceForRun(run.spaceId);
+        const space = run.assistantId ? assistantsService.require(run.assistantId, run.accountId).spaceSnapshot : await findSpaceForRun(run.spaceId);
         if (payload.asyncQuestionReply) {
           await assertAsyncQuestionCanReply(runId, payload.asyncQuestionReply);
           assertAsyncQuestionDecisionCurrent(runId, payload.asyncQuestionReply);
@@ -2656,7 +2760,8 @@ export const runsService = {
             execution,
             message,
             providerTurnLineage: payload.providerTurnLineage,
-            clientPromptId: payload.clientPromptId,
+            // Every provider keeps the application delivery identity, including those without native queued-input receipts.
+            clientPromptId: payload.clientPromptId ?? payload.clientUserMessageId,
             asyncQuestionReply: payload.asyncQuestionReply,
             ...(waitForInput
               ? {
@@ -2673,6 +2778,7 @@ export const runsService = {
             mode: run.mode,
             extraInstructions: joinInstructions(
               composeExtraInstructions(run.mode, space?.systemPrompt),
+              await buildAssistantInstructions(runId, run.assistantId, accountId, message),
               projectInstructions,
               atlasPage?.instructions ?? null,
             ),
@@ -2737,6 +2843,8 @@ export const runsService = {
     }
     if (!payload.clientUserMessageId || typeof payload.message !== "string")
       throw new Error("Invalid message.");
+    if (payload.additionalContext?.some(item => item.metadata?.source === "assistant_mention"))
+      throw new Error("Send a Mate request in the next turn.");
     const uploads = sanitizeRunAttachments(
       payload.attachments,
       await browserCaptureDir(),
@@ -2914,6 +3022,7 @@ export const runsService = {
         provider.config,
         sourceRun.configSnapshot,
         latestKnownModel(sourceTurns, sourceRun.model),
+        sourceRun.assistantId ? assistantsService.require(sourceRun.assistantId, accountId).conversationSettings : undefined,
       );
       const sourceModel = conversationSettings.model || undefined;
 
@@ -2937,6 +3046,7 @@ export const runsService = {
 
       await runsRepo.insertRun({
         id: newRunId,
+        assistantId: sourceRun.assistantId ?? undefined,
         accountId,
         workspaceId: sourceRun.workspaceId ?? undefined,
         collectionId: sourceRun.collectionId ?? undefined,
@@ -3002,7 +3112,7 @@ export const runsService = {
 
       // The fork inherits the source run's harness wholesale — same mode
       // snapshot, same composed policy/config (the fork row copied them).
-      const sourceSpace = await findSpaceForRun(sourceRun.spaceId);
+      const sourceSpace = sourceRun.assistantId ? assistantsService.require(sourceRun.assistantId, sourceRun.accountId).spaceSnapshot : await findSpaceForRun(sourceRun.spaceId);
 
       const runPromise = adapter.forkRun(
         {
@@ -3017,6 +3127,7 @@ export const runsService = {
           mode: sourceRun.mode,
           extraInstructions: joinInstructions(
             composeExtraInstructions(sourceRun.mode, sourceSpace?.systemPrompt),
+            await buildAssistantInstructions(newRunId, sourceRun.assistantId, accountId, message),
             projectInstructions,
             atlasPage?.instructions ?? null,
           ),

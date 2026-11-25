@@ -1,10 +1,15 @@
+import { useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import type { TerminalSession } from "@mains/contracts/terminal";
 import { Text, toast } from "@/components/ui";
 import { ArrowUp, Trash } from "@/components/ui/icons";
-import { useStopTerminalMutation } from "@/lib/redux/api";
+import { useActiveSpace } from "@/hooks/use-active-space";
+import { useSetActiveSpaceMutation, useStopTerminalMutation, useUpdateSpaceMutation } from "@/lib/redux/api";
+import { extractErrorMessage } from "@/lib/extract-error-message";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setBottomTerminalOpen } from "@/lib/redux/slices/appSettingsSlice";
+import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
+import { getTransport } from "@/lib/transport";
 import {
   forgetTerminal,
   selectTerminal,
@@ -12,22 +17,15 @@ import {
 } from "@/lib/redux/slices/terminalSlice";
 import { PanelItem } from "./panel-item";
 
-function SessionServerPorts({ session }: { session: TerminalSession }) {
+function SessionServerPorts({ session, allowStop, onOpen }: {
+  session: TerminalSession;
+  allowStop: boolean;
+  onOpen: (session: TerminalSession) => void;
+}) {
   const dispatch = useAppDispatch();
-  const navigate = useNavigate();
   const backendId = useAppSelector((state) => state.backends.activeBackendId ?? "local");
   const [stop, stopping] = useStopTerminalMutation();
   const workspaceName = session.workspaceName ?? session.workspaceId;
-
-  const openTerminal = () => {
-    if (!session.workspaceId) return;
-    dispatch(selectTerminal({
-      key: terminalWorkspaceKey(backendId, session.workspaceId),
-      id: session.id,
-    }));
-    dispatch(setBottomTerminalOpen(true));
-    navigate(`/code/${encodeURIComponent(session.workspaceId)}`);
-  };
 
   const stopTerminal = async () => {
     try {
@@ -63,14 +61,14 @@ function SessionServerPorts({ session }: { session: TerminalSession }) {
         </span>
       }
       title={`Open terminal: ${workspaceName}`}
-      onClick={openTerminal}
+      onClick={() => onOpen(session)}
       trailing={<ArrowUp aria-hidden className="size-3.5 rotate-90" />}
-      hoverAction={{
+      hoverAction={allowStop ? {
         icon: <Trash className="size-3.5" />,
         title: `Stop terminal and its servers: ${workspaceName}`,
         onClick: () => void stopTerminal(),
         pending: stopping.isLoading,
-      }}
+      } : undefined}
     />
   ));
 }
@@ -79,10 +77,49 @@ function SessionServerPorts({ session }: { session: TerminalSession }) {
 export function SessionServersSection({
   sessions,
   separated,
+  allowStop,
 }: {
   sessions: TerminalSession[];
   separated: boolean;
+  allowStop: boolean;
 }) {
+  const dispatch = useAppDispatch();
+  const navigate = useNavigate();
+  const backendId = useAppSelector((state) => state.backends.activeBackendId ?? "local");
+  const { activeSpace, spaces } = useActiveSpace();
+  const [setActiveSpace] = useSetActiveSpaceMutation();
+  const [updateSpace] = useUpdateSpaceMutation();
+  const opening = useRef(false);
+
+  const openTerminal = async ({ id, workspaceId }: TerminalSession) => {
+    if (!workspaceId || opening.current) return;
+    const transport = getTransport();
+    opening.current = true;
+
+    try {
+      if (activeSpace?.mode !== "developer") {
+        // The workspace drawer renders in Code. Prefer a Code space without
+        // changing the current chat's space configuration when one is available.
+        const target = spaces.find((space) => space.mode === "developer") ?? activeSpace ?? spaces[0];
+        if (!target) throw new Error("Set up an agent before opening a workspace terminal.");
+        if (target.mode !== "developer") {
+          await updateSpace({ id: target.id, payload: { mode: "developer" } }).unwrap();
+        }
+        if (getTransport() !== transport) return;
+        if (target.id !== activeSpace?.id) await setActiveSpace(target.id).unwrap();
+      }
+
+      if (getTransport() !== transport) return;
+      dispatch(selectTerminal({ key: terminalWorkspaceKey(backendId, workspaceId), id }));
+      dispatch(setBottomTerminalOpen(true));
+      navigate(`${WORKSPACE_BASE_PATH}/${encodeURIComponent(workspaceId)}`);
+    } catch (error) {
+      if (getTransport() === transport) toast.error(extractErrorMessage(error, "Could not open terminal."));
+    } finally {
+      opening.current = false;
+    }
+  };
+
   const count = sessions.reduce((total, session) => total + (session.servers?.length ?? 0), 0);
   return (
     <section
@@ -97,7 +134,9 @@ export function SessionServersSection({
           {count}
         </Text>
       </div>
-      {sessions.map((session) => <SessionServerPorts key={session.id} session={session} />)}
+      {sessions.map((session) => (
+        <SessionServerPorts key={session.id} session={session} allowStop={allowStop} onOpen={openTerminal} />
+      ))}
     </section>
   );
 }

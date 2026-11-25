@@ -2,6 +2,7 @@ import type { PlanDecisionPayload, PlanDecisionResult } from "@mains/contracts/p
 import type { WriteFileTextOptions } from "@mains/contracts/file-text";
 import type { BridgeSignInInput, BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
 import type { AtlasAutoTagging, AtlasSaveBookmark, AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
+import type { AtlasMobileSetTrash } from "@mains/contracts/atlas-mobile";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
@@ -106,6 +107,31 @@ interface BrowserClearDataOptions {
 
 // Expose IPC methods to renderer process
 const api = {
+  assistants: {
+    assignment: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.assignment, accountId, id),
+    prepareWelcome: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.prepareWelcome, accountId, id),
+    setupProfile: (accountId: string, id: string, input: import("@mains/contracts/assistants").AssistantProfileSetupAction) => ipcRenderer.invoke(CHANNELS.assistants.setupProfile, accountId, id, input),
+    respondWelcome: (accountId: string, id: string, answer: string | null, execution?: import("@mains/contracts/assistants").AssistantExecution) => ipcRenderer.invoke(CHANNELS.assistants.respondWelcome, accountId, id, answer, execution),
+    overview: (accountId: string): Promise<ServiceResponse<import("@mains/contracts/assistants").AssistantOverview>> => ipcRenderer.invoke(CHANNELS.assistants.overview, accountId),
+    teamWork: (accountId: string, teamId: string): Promise<ServiceResponse<import("@mains/contracts/assistants").AssistantTeamWork>> => ipcRenderer.invoke(CHANNELS.assistants.teamWork, accountId, teamId),
+    create: (payload: import("@mains/contracts/assistants").CreateAssistant) => ipcRenderer.invoke(CHANNELS.assistants.create, payload),
+    createTeam: (payload: { accountId: string; name: string }) => ipcRenderer.invoke(CHANNELS.assistants.createTeam, payload),
+    changeTeam: (payload: import("@mains/contracts/assistants").ChangeAssistantTeam) => ipcRenderer.invoke(CHANNELS.assistants.changeTeam, payload),
+    updateProfile: (payload: import("@mains/contracts/assistants").UpdateAssistantProfile) => ipcRenderer.invoke(CHANNELS.assistants.updateProfile, payload),
+    setPinned: (payload: import("@mains/contracts/assistants").SetAssistantPinned) => ipcRenderer.invoke(CHANNELS.assistants.setPinned, payload),
+    archive: (accountId: string, id: string, archived: boolean) => ipcRenderer.invoke(CHANNELS.assistants.archive, accountId, id, archived),
+    remove: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.remove, accountId, id),
+    conversations: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.conversations, accountId, id),
+    send: (payload: import("@mains/contracts/assistants").SendAssistantMessage) => ipcRenderer.invoke(CHANNELS.assistants.send, payload),
+    saveMemory: (payload: import("@mains/contracts/assistants").SaveAssistantMemory) => ipcRenderer.invoke(CHANNELS.assistants.saveMemory, payload),
+    removeMemory: (accountId: string, id: string, revision: number) => ipcRenderer.invoke(CHANNELS.assistants.removeMemory, accountId, id, revision),
+    assign: (payload: import("@mains/contracts/assistants").AssignAssistantTask) => ipcRenderer.invoke(CHANNELS.assistants.assign, payload),
+    reviewPullRequest: (payload: import("@mains/contracts/assistants").ReviewPullRequestWithAssistant) => ipcRenderer.invoke(CHANNELS.assistants.reviewPullRequest, payload),
+    pullRequestReviews: (accountId: string, ref: import("@mains/contracts/pull-requests").PrRefInput, selectedId?: string) => ipcRenderer.invoke(CHANNELS.assistants.pullRequestReviews, accountId, ref, selectedId),
+    cancel: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.cancel, accountId, id),
+    reconcile: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.reconcile, accountId, id),
+    followup: (accountId: string, id: string, messageId: string, message: string) => ipcRenderer.invoke(CHANNELS.assistants.followup, accountId, id, messageId, message),
+  },
   // Entity operations (canonical content)
   entities: {
     getAll: (options?: {
@@ -217,8 +243,6 @@ const api = {
       ipcRenderer.invoke(CHANNELS.connections.getTrelloBoards, connectionId),
     getSentryProjects: (connectionId: string) =>
       ipcRenderer.invoke(CHANNELS.connections.getSentryProjects, connectionId),
-    getSocketDevOrganizations: (connectionId: string) =>
-      ipcRenderer.invoke(CHANNELS.connections.getSocketDevOrganizations, connectionId),
     saveResources: (payload: {
       provider: string;
       connectionId: string;
@@ -229,18 +253,6 @@ const api = {
       ipcRenderer.invoke(CHANNELS.connections.deleteResource, resourceId),
     getSelectedResources: (provider: string) =>
       ipcRenderer.invoke(CHANNELS.connections.getSelectedResources, provider),
-  },
-  // Guards operations (dependency security)
-  guards: {
-    getActiveGuard: () => ipcRenderer.invoke(CHANNELS.guards.getActiveGuard),
-    checkPackage: (pkg: { name: string; version?: string; ecosystem: string }) =>
-      ipcRenderer.invoke(CHANNELS.guards.checkPackage, pkg),
-    checkPackages: (pkgs: Array<{ name: string; version?: string; ecosystem: string }>) =>
-      ipcRenderer.invoke(CHANNELS.guards.checkPackages, pkgs),
-    getPackageScore: (pkg: { name: string; version?: string; ecosystem: string }) =>
-      ipcRenderer.invoke(CHANNELS.guards.getPackageScore, pkg),
-    scanWorkspace: (workspaceId: string, rootPath: string) =>
-      ipcRenderer.invoke(CHANNELS.guards.scanWorkspace, workspaceId, rootPath),
   },
   // SSH tunneling for remote backends (runs the local ssh client; not served remotely)
   ssh: {
@@ -270,6 +282,8 @@ const api = {
     takeRecoveryCode: () => ipcRenderer.invoke(CHANNELS.bridge.takeRecoveryCode),
     regenerateRecoveryCode: () => ipcRenderer.invoke(CHANNELS.bridge.regenerateRecoveryCode),
     getStatus: () => ipcRenderer.invoke(CHANNELS.bridge.getStatus),
+    storageOverview: () => ipcRenderer.invoke(CHANNELS.bridge.storageOverview),
+    deleteStorageRun: (runId: string) => ipcRenderer.invoke(CHANNELS.bridge.deleteStorageRun, runId),
     syncNow: () => ipcRenderer.invoke(CHANNELS.bridge.syncNow),
     getProjectScopes: () => ipcRenderer.invoke(CHANNELS.bridge.getProjectScopes),
     setProjectLocalOnly: (projectId: string, localOnly: boolean) => ipcRenderer.invoke(CHANNELS.bridge.setProjectLocalOnly, projectId, localOnly),
@@ -386,6 +400,7 @@ const api = {
     saveFile: (input: AtlasSaveFile) => ipcRenderer.invoke(CHANNELS.atlas.saveFile, input),
     uploadFile: (input: AtlasUploadFile) => ipcRenderer.invoke(CHANNELS.atlas.uploadFile, input),
     update: (input: AtlasUpdateItem) => ipcRenderer.invoke(CHANNELS.atlas.update, input),
+    setMobileTrash: (input: AtlasMobileSetTrash) => ipcRenderer.invoke(CHANNELS.atlas.setMobileTrash, input),
     setCoverPreset: (input: AtlasSetCoverPreset) => ipcRenderer.invoke(CHANNELS.atlas.setCoverPreset, input),
     remove: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.remove, options),
   },
@@ -1455,6 +1470,10 @@ const api = {
       ipcRenderer.invoke(CHANNELS.pullRequests.search, input),
     getDetail: (input: unknown) =>
       ipcRenderer.invoke(CHANNELS.pullRequests.getDetail, input),
+    getCommits: (input: unknown) =>
+      ipcRenderer.invoke(CHANNELS.pullRequests.getCommits, input),
+    getActivity: (input: unknown) =>
+      ipcRenderer.invoke(CHANNELS.pullRequests.getActivity, input),
     getDiff: (input: unknown) =>
       ipcRenderer.invoke(CHANNELS.pullRequests.getDiff, input),
     merge: (input: unknown) =>
@@ -1476,6 +1495,8 @@ const api = {
     getById: (id: string) => ipcRenderer.invoke(CHANNELS.pulse.getById, id),
     create: (accountId: string, input: unknown) =>
       ipcRenderer.invoke(CHANNELS.pulse.create, accountId, input),
+    createRoutine: (accountId: string, assistantId: string, input: unknown) =>
+      ipcRenderer.invoke(CHANNELS.pulse.createRoutine, accountId, assistantId, input),
     update: (id: string, input: unknown) =>
       ipcRenderer.invoke(CHANNELS.pulse.update, id, input),
     delete: (id: string) => ipcRenderer.invoke(CHANNELS.pulse.delete, id),

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Edit, Play, Trash } from "@/components/ui/icons";
+import { Clock, Close, Edit, Minus, Play, Trash } from "@/components/ui/icons";
 import {
   useDeletePulseMutation,
   useRunPulseNowMutation,
@@ -17,8 +17,10 @@ import {
   Body,
   Button,
   Caption,
+  StatusBadge,
   Text,
   Toggle,
+  type StatusTone,
   toast,
 } from "@/components/ui";
 import { formatSchedule } from "../lib/format-schedule";
@@ -28,10 +30,18 @@ interface PulseListProps {
   /** Already search-filtered by the page. */
   pulses: Pulse[];
   isLoading: boolean;
-  /** A search is narrowing `pulses` — hide the section rather than claim nothing is scheduled. */
+  loadFailed: boolean;
+  onRetry: () => void;
+  /** Hide an empty section when a completed search narrows the list. */
   searching: boolean;
   onEdit: (pulse: Pulse) => void;
 }
+
+const PULSE_STATUS = {
+  active: { tone: "info", icon: Clock },
+  paused: { tone: "neutral", icon: Minus },
+  failed: { tone: "danger", icon: Close },
+} satisfies Record<PulseState, { tone: StatusTone; icon: typeof Clock }>;
 
 /** Re-render once a minute so "Next in 3h" doesn't go stale on an open page. */
 function useMinuteClock(): number {
@@ -46,6 +56,8 @@ function useMinuteClock(): number {
 export function PulseList({
   pulses,
   isLoading,
+  loadFailed,
+  onRetry,
   searching,
   onEdit,
 }: PulseListProps) {
@@ -70,6 +82,7 @@ export function PulseList({
   };
 
   const targetName = (pulse: Pulse): string | null => {
+    if (pulse.assistantId) return "Mate routine";
     if (pulse.workspaceId) {
       return workspaces.find((w) => w.id === pulse.workspaceId)?.name ?? null;
     }
@@ -81,7 +94,7 @@ export function PulseList({
 
   const activeCount = pulses.filter((p) => p.isActive).length;
 
-  if (searching && pulses.length === 0) return null;
+  if (searching && pulses.length === 0 && !isLoading && !loadFailed) return null;
 
   return (
     <section>
@@ -94,17 +107,28 @@ export function PulseList({
         )}
       </div>
 
+      {loadFailed && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-3xl glass-surface px-5 py-4">
+          <Body role="alert">
+            {pulses.length > 0 ? "Unable to refresh pulses. Showing the last loaded list." : "Unable to load pulses."}
+          </Body>
+          <Button variant="secondary" onClick={onRetry}>Try again</Button>
+        </div>
+      )}
+
       {isLoading ? (
-        <Text as="div" size="xs" tone="faint" className="px-1 py-3">
+        <Text as="div" role="status" size="xs" tone="faint" className="px-1 py-3">
           Loading…
         </Text>
       ) : pulses.length === 0 ? (
-        <div className="rounded-3xl border border-dashed border-primary-300/70 dark:border-primary-800 px-5 py-5">
-          <Body>Nothing scheduled yet</Body>
-          <Caption as="p" tone="subtle" className="mt-1">
-            Pick a template below, or start a pulse from scratch.
-          </Caption>
-        </div>
+        !loadFailed && (
+          <div className="rounded-3xl border border-dashed border-primary-300/70 dark:border-primary-800 px-5 py-5">
+            <Body>Nothing scheduled yet</Body>
+            <Caption as="p" tone="subtle" className="mt-1">
+              Pick a template below, or start a pulse from scratch.
+            </Caption>
+          </div>
+        )
       ) : (
         <div className="rounded-3xl glass-surface px-4 py-1">
           {pulses.map((pulse, index) => (
@@ -159,6 +183,7 @@ function PulseRow({
   const [togglePulse, { isLoading: isToggling }] = useTogglePulseMutation();
   const [runPulseNow, { isLoading: isRunning }] = useRunPulseNowMutation();
   const status = describePulseStatus(pulse, now);
+  const statusStyle = PULSE_STATUS[status.state];
   const schedule = formatSchedule({
     frequency: pulse.frequency,
     hour: pulse.hour,
@@ -177,7 +202,7 @@ function PulseRow({
   const handleRunNow = async () => {
     try {
       await runPulseNow(pulse.id).unwrap();
-      toast.success(`Started “${pulse.title}”`);
+      toast.success(pulse.assistantId ? `Task queued for “${pulse.title}”` : `Started “${pulse.title}”`);
     } catch (err) {
       toast.error(extractErrorMessage(err, "Failed to start pulse"));
     }
@@ -185,8 +210,6 @@ function PulseRow({
 
   return (
     <div className="group flex items-center gap-4 py-3">
-      <PulseBeat state={status.state} />
-
       <Button
         onClick={onEdit}
         className="flex-1 min-w-0 text-left rounded-lg focus-visible:ring-2 focus-visible:ring-accent"
@@ -201,7 +224,7 @@ function PulseRow({
         <Caption
           as="div"
           tone="subtle"
-          className="mt-0.5 flex min-w-0 items-center gap-1.5"
+          className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5"
         >
           {/* The target name is the only part long enough to need cutting. */}
           {target && (
@@ -211,20 +234,9 @@ function PulseRow({
             </>
           )}
           <span className="shrink-0 whitespace-nowrap">{schedule}</span>
-          {status.label && (
-            <>
-              <MetaDot />
-              <Text
-                as="span"
-                size="inherit"
-                tone={status.state === "failed" ? "danger" : "subtle"}
-                title={pulse.lastError ?? undefined}
-                className="shrink-0 whitespace-nowrap"
-              >
-                {status.label}
-              </Text>
-            </>
-          )}
+          <StatusBadge tone={statusStyle.tone} icon={statusStyle.icon} title={pulse.lastError ?? undefined}>
+            {status.label ?? "Active"}
+          </StatusBadge>
         </Caption>
       </Button>
 
@@ -285,24 +297,5 @@ function MetaDot() {
       aria-hidden
       className="size-0.75 shrink-0 rounded-full bg-primary-400 dark:bg-primary-600"
     />
-  );
-}
-
-/** The row's heartbeat: a slow halo while live, flat when paused, red when the last run failed. */
-function PulseBeat({ state }: { state: PulseState }) {
-  return (
-    <span aria-hidden className="relative flex size-2 shrink-0">
-      {state === "active" && (
-        <span className="absolute inset-0 rounded-full bg-success animate-pulse-beat" />
-      )}
-      <span
-        className={cn(
-          "relative size-2 rounded-full",
-          state === "active" && "bg-success",
-          state === "failed" && "bg-danger",
-          state === "paused" && "bg-primary-300 dark:bg-primary-700",
-        )}
-      />
-    </span>
   );
 }

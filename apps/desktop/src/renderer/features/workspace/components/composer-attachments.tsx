@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/icons";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { classifyDocType } from "@/lib/document-viewer";
+import { cn } from "@/lib/cn";
 import { useComposerContext } from "@/features/workspace/hooks/use-composer-context";
 import type {
   ContextAppshotItem,
@@ -93,7 +94,7 @@ function RemoveButton({
         onRemove();
       }}
       aria-label={`Remove ${name}`}
-      className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-primary-950/60 text-white opacity-0 backdrop-blur-sm transition-opacity hover:bg-primary-950/80 group-hover/attachment:opacity-100 focus-visible:opacity-100 cursor-pointer"
+      className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-primary-950 text-action-foreground opacity-0 hover:bg-primary-800 group-hover/attachment:opacity-100 focus-visible:opacity-100 cursor-pointer"
     >
       <Close className="size-3" />
     </Button>
@@ -103,6 +104,7 @@ function RemoveButton({
 interface ComposerAttachmentsProps {
   files: UploadedFile[];
   onRemove: (index: number) => void;
+  className?: string;
 }
 
 /**
@@ -113,6 +115,7 @@ interface ComposerAttachmentsProps {
 export function ComposerAttachments({
   files,
   onRemove,
+  className,
 }: ComposerAttachmentsProps) {
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [browserPreviewId, setBrowserPreviewId] = useState<string | null>(null);
@@ -156,7 +159,7 @@ export function ComposerAttachments({
         className={`grid transition-[grid-template-rows] duration-300 ease-out ${hasAttachments ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
       >
         <div className="min-h-0 overflow-hidden">
-          <div className="flex gap-2 overflow-x-auto noscrollbar px-5 pt-4">
+          <div className={cn("flex gap-2 overflow-x-auto noscrollbar px-5 pt-4", className)}>
             {appshots.map((appshot) => {
               const src = `mains-capture://cap/${appshot.screenshotCaptureName}`;
               const label = appshotLabel(appshot);

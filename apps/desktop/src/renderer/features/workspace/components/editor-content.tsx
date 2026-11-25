@@ -41,7 +41,9 @@ export function EditorContent({ className = "" }: EditorContentProps) {
     );
   }
 
-  if (selectedFile.type === "file" && isPreviewableImagePath(selectedFile.fullPath)) {
+  const isDiff = selectedFile.extension === "diff";
+  // DiffViewer resolves Git's workspace-relative paths for image previews.
+  if (!isDiff && selectedFile.type === "file" && isPreviewableImagePath(selectedFile.fullPath)) {
     return (
       <ImageViewer
         key={selectedFile.fullPath}
@@ -126,7 +128,7 @@ export function EditorContent({ className = "" }: EditorContentProps) {
     );
   }
 
-  if (selectedFile.extension === "diff") {
+  if (isDiff) {
     return (
       <div className={`relative flex flex-col h-full noscrollbar ${className}`}>
         <div className="flex shrink-0 items-center justify-end px-3 pt-1">

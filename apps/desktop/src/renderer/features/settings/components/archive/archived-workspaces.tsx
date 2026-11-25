@@ -9,15 +9,16 @@ import {
   Input,
   Muted,
   SegmentedTabs,
+  StatusBadge,
   toast,
   Text,
 } from "@/components/ui";
 import {
   Archive,
   Close,
-  Danger,
   Search,
   Trash,
+  Warning,
 } from "@/components/ui/icons";
 import { extractErrorMessage } from "@/lib/extract-error-message";
 import { formatAbsoluteDate } from "@/lib/format-date";
@@ -422,15 +423,7 @@ function ArchivedRunsPanel({ runs }: { runs: ArchivedRun[] }) {
                     {group.runs.length === 1 ? "" : "s"}
                   </Caption>
                   {group.workspaceArchived && (
-                    <Text
-                      as="span"
-                      size="t"
-                      tone="warning"
-                      weight="medium"
-                      className="rounded-full bg-warning/10 px-2 py-0.5"
-                    >
-                      Workspace archived
-                    </Text>
+                    <StatusBadge tone="neutral" icon={Archive}>Workspace archived</StatusBadge>
                   )}
                 </div>
 
@@ -488,30 +481,14 @@ export function ArchivedWorkspaceRow({
   return (
     <div className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between md:gap-8">
       <div className="min-w-0 md:flex-1">
-        <div className="flex min-w-0 items-center gap-1.5">
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <Body className="truncate">{workspace.name}</Body>
           {branch && <Body className="truncate opacity-70">• {branch}</Body>}
           {!workspace.pathExists && (
-            <Text
-              as="span"
-              size="t"
-              tone="warning"
-              className="flex shrink-0 items-center gap-1 rounded-full bg-warning/10 px-1.5 py-0.5"
-            >
-              <Danger className="size-3" />
-              Folder missing
-            </Text>
+            <StatusBadge tone="warning" icon={Warning}>Folder missing</StatusBadge>
           )}
           {projectMissing && (
-            <Text
-              as="span"
-              size="t"
-              tone="warning"
-              className="flex shrink-0 items-center gap-1 rounded-full bg-warning/10 px-1.5 py-0.5"
-            >
-              <Danger className="size-3" />
-              Project missing
-            </Text>
+            <StatusBadge tone="warning" icon={Warning}>Project missing</StatusBadge>
           )}
         </div>
 

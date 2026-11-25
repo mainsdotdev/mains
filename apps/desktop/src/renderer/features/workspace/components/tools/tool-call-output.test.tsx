@@ -39,3 +39,22 @@ it("offers retry after a failed request", async () => {
   expect(getOutput).toHaveBeenCalledTimes(2);
   expect(screen.getByText("Loaded: RECOVERED")).toBeTruthy();
 });
+
+it("keeps the Mate tool row while its full result loads", async () => {
+  const assignment = { title: "Check TestFlight", prompt: "Check the release", status: "completed" };
+  getOutput.mockResolvedValue({ success: true, data: { output: JSON.stringify(assignment) } });
+  const readAssignment = { ...event, content: "ReadAssistantTask: {}",
+    metadata: { ...event.metadata, toolName: "ReadAssistantTask", input: { assignmentId: "a" } } };
+  render(<TranscriptViewProvider view={createTranscriptViewCache().get("r")}>
+    <ToolCallItem event={readAssignment} isCompact={false} />
+  </TranscriptViewProvider>);
+  const toggle = screen.getByRole("button", { name: "Read mate assignment" });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(getOutput).not.toHaveBeenCalled();
+  await act(async () => { fireEvent.click(toggle); });
+
+  expect(getOutput).toHaveBeenCalledExactlyOnceWith("r", 12);
+  expect(screen.getByRole("button", { name: "Read Check TestFlight" }).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByText("Completed")).toBeTruthy();
+  expect(screen.queryByText(/Small preview/)).toBeNull();
+});

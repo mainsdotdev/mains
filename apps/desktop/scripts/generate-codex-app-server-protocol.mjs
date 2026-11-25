@@ -98,6 +98,8 @@ const roots = [
   "v2/ThreadRealtimeStartResponse.ts",
   "v2/ThreadRealtimeStopParams.ts",
   "v2/ThreadRealtimeStopResponse.ts",
+  "v2/ThreadRealtimeListParams.ts",
+  "v2/ThreadRealtimeListResponse.ts",
   "v2/ThreadRealtimeListVoicesParams.ts",
   "v2/ThreadRealtimeListVoicesResponse.ts",
   "v2/ThreadRealtimeStartedNotification.ts",

@@ -35,7 +35,7 @@ export function buildTurnMarkers(groups: EventGroup[]): TurnMarker[] {
 
   for (let i = 0; i < groups.length; i++) {
     const group = groups[i];
-    if (!isUserPromptGroup(group)) continue;
+    if (!isUserPromptGroup(group) || group.representedByQuestion) continue;
 
     const prompt = group.events.map((e) => e.content).join(" ");
     const replyParts: string[] = [];

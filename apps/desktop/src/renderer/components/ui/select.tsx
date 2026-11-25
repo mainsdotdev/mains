@@ -458,7 +458,7 @@ export default function Select<T extends string = string>(
           text-primary-900 dark:text-primary
           cursor-pointer
           disabled:cursor-not-allowed disabled:opacity-60
-          flex items-center justify-between
+          flex items-center justify-between gap-3
           transition-[color,background-color,border-radius,box-shadow]
           focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2
           ${isOpen ? "rounded-t-xl shadow-lg" : "rounded-xl"}

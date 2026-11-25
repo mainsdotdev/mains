@@ -1,0 +1,24 @@
+Mains is a companion and remote controller for the user's own Mains installation. It is intended for people who run AI agents on their own computer. Agent execution happens on that computer, not on the phone. Direct pairing requires no Mains account or sign-in.
+
+REVIEW WITHOUT A COMPUTER OR AI ACCOUNT
+1. Launch the app without pairing a computer.
+2. On the "No computer paired" card, tap "Try Demo Mode on this phone".
+3. Open the sidebar and Search, search for "Explore Mains", and open that sample conversation.
+4. Tap the sample PDF or image to preview it. The share button can save a copy to Files.
+5. In the conversation, send "Show sample file changes and diffs" to explore numbered file diffs, or "Walk me through approvals and questions" to explore approvals and agent questions. If a disclosure appears, tap "Continue Demo". It applies only to the demo and does not grant permission for real provider use.
+6. Open Settings to review appearance and AI Data Sharing. "Exit Demo Mode" returns to the unpaired app.
+
+All demo replies and activity are simulated on-device from bundled sample data. No backend or AI service is contacted in Demo Mode. No payment is required to review it.
+
+LIVE PAIRED MODE
+Install a compatible Mains desktop release from https://mains.dev. Configure the desired AI tooling and provider access on that computer. Enable remote access with an HTTPS endpoint, for example Tailscale HTTPS. Scan the computer's pairing QR code or paste its pairing link into the mobile app, then confirm pairing. The computer must remain awake and reachable. Features depend on the provider and computer-side version.
+
+DATA SHARING AND PERMISSIONS
+Before the first message to a provider on a paired computer, a provider-specific sheet identifies the recipient and data categories, with an explicit Allow & Send action. The user can decline or withdraw permission in Settings. Supported tooling includes OpenAI Codex, Anthropic Claude Code, GitHub Copilot, Cursor, and OpenCode with the user's chosen model provider. Accounts and provider access are managed on the user's computer.
+
+Camera access is requested for pairing QR codes or user-initiated photo capture. Photo Library access is requested only when opening the Photos attachment panel. Only selected photos are attached to messages. The Files picker reads the documents the user selects. Local Network permission supports connections to the user's own computer.
+
+Interactive HTML outputs are desktop-only. The app has no advertising, analytics SDK, in-app purchases, or Mains subscriptions.
+
+DEVELOPER DEVICE TESTING
+The app has been tested on iPhone 17 Pro with iOS 27.1 and iPhone 12 mini with iOS 27.1.

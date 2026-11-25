@@ -132,7 +132,7 @@ function CollectionDetailForm({
       <div className="mb-8 flex justify-end">
         <Button
           type="button"
-          variant="submit"
+          variant="primary"
           disabled={!trimmedName || !isDirty || isSaving}
           isLoading={isSaving}
           onClick={() => void handleSave()}

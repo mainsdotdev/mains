@@ -3,26 +3,20 @@ import { Button } from "@/components/ui";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
 import { useResyncWorkspaceDiffMutation } from "@/lib/redux/api";
-import { selectSessionRunId } from "./select-session-run";
 
 /**
- * Opens the session panel. Code may open it for the workspace environment even
- * before a run exists; Work opens it for the visible run's sources.
+ * Opens the panel for the current session or for running servers anywhere in Mains.
  */
 export function SessionPanelTrigger({
-  showGitActions,
-  showSources,
+  showSessionDetails,
+  hasRunningServers,
+  diffWorkspaceId,
 }: {
-  showGitActions: boolean;
-  showSources: boolean;
+  showSessionDetails: boolean;
+  hasRunningServers: boolean;
+  diffWorkspaceId: string | null;
 }) {
   const dispatch = useAppDispatch();
-  const activeWorkspaceId = useAppSelector(
-    (state) => state.workspace.activeWorkspaceId,
-  );
-  const sessionRunId = useAppSelector((state) =>
-    selectSessionRunId(state.workspace),
-  );
   const isOpen = useAppSelector((state) => state.appSettings.sessionPanelOpen);
 
   // Recomputes + persists the canonical workspace diff and invalidates the
@@ -30,9 +24,7 @@ export function SessionPanelTrigger({
   // stored diff) reflects the same numbers the panel shows live.
   const [resyncWorkspaceDiff] = useResyncWorkspaceDiffMutation();
 
-  const canOpen =
-    (showGitActions && !!activeWorkspaceId) || (showSources && !!sessionRunId);
-  if (!canOpen) return null;
+  const label = `${isOpen ? "Close" : "Open"} ${showSessionDetails ? "session details" : "running servers"}`;
 
   return (
     <Button
@@ -42,17 +34,17 @@ export function SessionPanelTrigger({
         // Refresh the stored workspace diff on open so the sidebar item matches
         // the panel's live numbers (the agent run / manual refresh aren't the
         // only moments the working tree changes).
-        if (!isOpen && showGitActions && activeWorkspaceId) {
-          resyncWorkspaceDiff(activeWorkspaceId);
+        if (!isOpen && diffWorkspaceId) {
+          resyncWorkspaceDiff(diffWorkspaceId);
         }
       }}
       aria-expanded={isOpen}
-      aria-label={isOpen ? "Close session details" : "Open session details"}
-      tooltip={isOpen ? "Close session details" : "Open session details"}
+      aria-label={label}
+      tooltip={label}
       tooltipPosition="left"
       className={isOpen ? "text-primary-700 dark:text-primary-300" : undefined}
     >
-      <Menu className="size-4 " fill={isOpen ? "currentColor" : "none"} />
+      <Menu className={!isOpen && hasRunningServers ? "size-4 text-success" : "size-4"} fill={isOpen ? "currentColor" : "none"} />
     </Button>
   );
 }

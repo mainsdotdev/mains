@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ProviderDriver } from "../../../../shared/adapter.types";
 import type { ProviderResponse } from "../providers.dto";
 import { ResourceCleanupError } from "../../../runtime/resource-lifecycle";
+import { createCodexCapabilities } from "./codex/codex-capabilities";
+import type { CodexAppServer } from "./codex/codex-app-server.client";
 
 const createCodexDriver = vi.fn();
 const createClaudeDriver = vi.fn();
@@ -28,6 +30,7 @@ import {
   setPluginEnabledForProvider,
   updatePluginForProvider,
   listPluginsForProvider,
+  listInstalledPluginsForProvider,
 } from "./adapter.factory";
 
 function fakeDriver(): ProviderDriver & { updateConfig: ReturnType<typeof vi.fn> } {
@@ -271,6 +274,52 @@ describe("createWorkAdapter", () => {
     await getAccountInfoForProvider(provider);
     expect(driver.invalidateCatalogs).toHaveBeenCalledTimes(2);
     expect(createCodexDriver).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes pending Codex discovery after the first account check without surfacing retirement errors", async () => {
+    const oldReplies = new Map<string, (value: unknown) => void>();
+    const pluginList = { marketplaces: [{ name: "current", plugins: [
+      { id: "current@market", name: "current", installed: true, enabled: true },
+    ] }] };
+    const sendRequest = vi.fn(async (method: string) => {
+      if (method === "experimentalFeature/list") return { data: [{ name: "plugins", enabled: true }], nextCursor: null };
+      if (method === "account/read") return { account: { type: "chatgpt", email: "user@example.test", planType: "pro" }, requiresOpenaiAuth: false };
+      if (!oldReplies.has(method)) return new Promise((resolve) => { oldReplies.set(method, resolve); });
+      return method === "mcpServerStatus/list" ? { data: [], nextCursor: null } : pluginList;
+    });
+    const server = { sendRequest } as unknown as CodexAppServer;
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const capabilities = createCodexCapabilities({ ensureServer: async () => server, getRunningServer: () => server,
+      getCliHealth: async () => ({ version: "0.167.0", channel: null, outdated: false }), logger });
+    createCodexDriver.mockReturnValue({ ...fakeDriver(), ...capabilities });
+    const provider = codexProvider({});
+    const pending = Promise.allSettled([
+      listInstalledPluginsForProvider(provider), listInstalledPluginsForProvider(provider),
+      listPluginsForProvider(provider), capabilities.readMcpInventory(),
+    ]);
+    try {
+      await vi.waitFor(() => expect(oldReplies.size).toBe(3));
+      await getAccountInfoForProvider(provider);
+      const results = await pending;
+      expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled", "fulfilled", "fulfilled"]);
+      for (const result of results.slice(0, 3)) {
+        expect(result).toMatchObject({ value: { remoteSyncError: null,
+          marketplaces: [{ plugins: [expect.objectContaining({ id: "current@market" })] }] } });
+      }
+      expect(results[3]).toEqual({ status: "fulfilled", value: [] });
+      for (const method of oldReplies.keys()) {
+        expect(sendRequest.mock.calls.filter(([candidate]) => candidate === method)).toHaveLength(2);
+      }
+      // Old native replies must not publish data or continue obsolete paging.
+      for (const [method, finish] of oldReplies) {
+        finish(method === "mcpServerStatus/list" ? { data: [], nextCursor: "obsolete-page" }
+          : { marketplaces: [{ name: "obsolete", plugins: [{ id: "obsolete@market" }] }] });
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(await listInstalledPluginsForProvider(provider)).toMatchObject({ marketplaces: [{ name: "current" }] });
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(sendRequest.mock.calls.filter(([method]) => method === "mcpServerStatus/list")).toHaveLength(2);
+    } finally { capabilities.shutdown(); }
   });
 
   it("clears discovery only after a successful CLI update without replacing the adapter", async () => {

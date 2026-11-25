@@ -8,6 +8,13 @@ final class DemoBackend {
     static let backendID = "demo-mac"
     static let endpoint = URL(string: "demo://on-this-phone")!
     static let tourID = "demo-native-tour"
+    static let activityApprovalRunID = "demo-activity-approval"
+    static let activityQueueRunID = "demo-activity-queue"
+    static let launchBriefRunID = "demo-work-launch-brief"
+    static let mateID = "demo-release-mate"
+    static let mateChatID = "demo-release-mate-chat"
+    private static let mateTeamID = "demo-release-team"
+    private static let mateAssignmentResult = "The sample assignment is complete. Open Chat to preview the Markdown report."
     static let decisionPrompt = "Walk me through approvals and questions"
     static let changesPrompt = "Show sample file changes and diffs"
     static let subagentsPrompt = "Review the sample workspace with subagents"
@@ -20,9 +27,14 @@ final class DemoBackend {
     private var tools: [String: [[String: JSONValue]]]
     private var turns: [String: [[String: JSONValue]]]
     private var patches: [String: [Int: String]] = [:]
+    private var goals: [String: MobileGoalSummary] = [:]
     private var spaces: [[String: JSONValue]]
     private var images: [Int: JSONValue] = [:]
     private var attachments: [String: DemoFile] = [:]
+    private var outputs: [String: [Int: DemoFile]] = [DemoBackend.tourID: [-9001: .pdf, -9002: .notes]]
+    private var mates: [DemoMate] = []
+    private var assignments: [DemoAssignment] = []
+    private let atlas: DemoAtlas
     private var attachmentBytes = 0
     private var nextID = 10_000_000
     private let stepDelay: Duration
@@ -34,12 +46,13 @@ final class DemoBackend {
     private var emit: ((String, JSONValue) -> Void)?
     private var tasks: [String: Task<Void, Never>] = [:]
     private enum Step { case text(String), thinking(String), tool(String, JSONValue, JSONValue), approval(JSONValue), questions, changes, subagents(Int), finish }
+    private enum ReplayWait { case approval, followUp }
     private struct Replay {
         let steps: [Step]
         var index = 0
         var count = 0
         var streamID = UUID().uuidString
-        var waiting = false
+        var waitingFor: ReplayWait?
         var activeToolID: Int?
         var agentBaseID: Int?
         var agentsStartedAt: Double?
@@ -51,12 +64,71 @@ final class DemoBackend {
         let result: Result<JSONValue, MainsError>
     }
     private var receipts: [String: Receipt] = [:]
-    private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:abort", "space:update", "runs:updateConversationSettings",
-        "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions"]
+
+    private struct DemoAssignment {
+        enum Status: String { case running, completed, canceled }
+
+        let id: String
+        let mateID: String
+        let runID: String
+        let title: String
+        let brief: String
+        var status = Status.running
+    }
+
+    private struct DemoMate {
+        struct Setup {
+            var answer: String?
+            var draft: MateProfile?
+        }
+
+        let id: String
+        let name: String
+        let spaceID: String
+        let spaceName: String
+        let providerID: String
+        let model: String
+        let effort: String
+        let teamID: String?
+        let avatar: MateAvatar
+        var profile: MateProfile?
+        var setup: Setup?
+
+        var question: String { "Hi, I’m \(name). What would you like me to help with?" }
+        var welcomeRunID: String? { setup == nil ? nil : "welcome-\(id)" }
+
+        func projection() throws -> JSONValue {
+            var value: [String: JSONValue] = [
+                "id": .string(id), "name": .string(name), "description": .string(profile?.description ?? ""),
+                "avatar": try .encode(avatar), "teamId": teamID.map(JSONValue.string) ?? .null,
+                "providerId": .string(providerID), "model": .string(model), "needsSetup": .bool(profile == nil),
+                "details": .object(["spaceName": .string(spaceName), "effort": .string(effort),
+                                    "instructions": .string(profile?.instructions ?? "")]),
+            ]
+            if let setup, let welcomeRunID {
+                let turns: [JSONValue] = setup.answer.map { [.object(["question": .string(question), "answer": .string($0)])] } ?? []
+                value["welcome"] = .object([
+                    "runId": .string(welcomeRunID), "state": .string(profile == nil ? "ready" : "skipped"),
+                    "question": .object(["question": .string(question), "options": .array([]),
+                        "idleMessage": .string("Profile saved. What would you like me to do first?"),
+                        "profileSetup": .object(["turns": .array(turns), "draft": try .encode(profile ?? setup.draft),
+                                                 "saved": .bool(profile != nil)])]),
+                ])
+            }
+            return .object(value)
+        }
+    }
+    #if MAINS_GPT_LIVE || SWIFT_PACKAGE
+    private static let sampleVoices = ["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"]
+#endif
+
+    private let mutationChannels: Set<String> = ["assistants:create", "assistants:setupProfile", "assistants:send", "assistants:mobileManage",
+        "runs:execute", "runs:continue", "runs:fork", "runs:archive", "runs:delete", "runs:moveToCollection", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings", "providers:changeMobileGoal",
+        "runs:toolApprovalResponse", "runs:decidePlan", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:editMobileBookmark", "atlas:setMobileTrash", "atlas:deleteMobileTrash", "atlas:setMobileTags"]
 
     var pairing: PairedBackend {
         PairedBackend(descriptor: BackendDescriptor(backendId: Self.backendID, name: "Demo Mac",
-                      appVersion: "Demo", protocolVersion: Wire.protocolVersion, capabilities: ["runs","workspace","providers","space","projects","collections"],
+                      appVersion: "Demo", protocolVersion: Wire.protocolVersion, capabilities: ["runs","workspace","providers","space","projects","collections","mobileGoalSummary","mobileGoalControls","workspaceFileSearch","mobilePlanDecision","assistants"],
                       serverTime: Date().ISO8601Format()),
                       endpoints: [Self.endpoint], deviceId: "native-demo-device", deviceToken: "on-device-demo", pairedAt: Date())
     }
@@ -65,6 +137,7 @@ final class DemoBackend {
     }
 
     init(stepDelay: Duration = .milliseconds(450), streamDelay: Duration = .milliseconds(35), decisionLifetime: TimeInterval = 300) throws {
+        atlas = try DemoAtlas()
         #if SWIFT_PACKAGE
         let bundle = Bundle.module
         #else
@@ -105,14 +178,10 @@ final class DemoBackend {
         turns = data["turns"].objectValue.mapValues { $0.array.map(\.objectValue) }
         self.stepDelay = stepDelay; self.streamDelay = streamDelay; self.decisionLifetime = decisionLifetime
         for (id, image) in data["images"].objectValue { if let id = Int(id) { images[id] = image } }
-        for runID in artifacts.keys {
-            if let index = artifacts[runID]?.firstIndex(where: { $0["kind"]?.string == "user-prompt" }) {
-                var metadata = artifacts[runID]![index]["metadata"]?.objectValue ?? [:]
-                metadata["attachments"] = .array([attachmentMetadata(Self.pdfAttachmentID, file: .pdf)])
-                artifacts[runID]![index]["metadata"] = .object(metadata)
-            }
-        }
         addTour()
+        try addLaunchBrief()
+        addSampleMate()
+        addActivitySamples()
     }
 
     func attach(owner: UUID, emit: @escaping (String, JSONValue) -> Void) {
@@ -133,7 +202,13 @@ final class DemoBackend {
         for task in tasks.values { task.cancel() }
         tasks = [:]; replays = [:]; emit = nil; owner = nil; patches = [:]
         for timer in approvalTimers.values { timer.cancel() }; approvalTimers = [:]; approvals = [:]
-        attachments = [:]; attachmentBytes = 0
+        attachments = [:]; attachmentBytes = 0; mates = []; assignments = []
+    }
+
+    func didQueueFollowUp(_ runID: String) {
+        guard replays[runID]?.waitingFor == .followUp else { return }
+        replays[runID]?.waitingFor = nil
+        resume(runID)
     }
 
     func invoke(_ channel: String, args: [JSONValue], commandID: String? = nil) throws -> JSONValue {
@@ -159,14 +234,131 @@ final class DemoBackend {
         let first = args.first ?? .null
         let runID = first["runId"].string ?? first.string ?? ""
         switch channel {
+        case "runs:archive", "runs:delete", "runs:moveToCollection":
+            guard let index = runs.firstIndex(where: { $0["id"]?.string == runID }), runs[index]["isReplica"] != .bool(true) else {
+                throw MainsError.server("This demo chat is unavailable or read-only.")
+            }
+            if channel == "runs:moveToCollection" {
+                guard ["work", "chat"].contains(runs[index]["mode"]?.string ?? ""),
+                      first["accountId"].string == seed["account"]["id"].string,
+                      runs[index]["isArchived"] != .bool(true) else { throw MainsError.server("This chat cannot move to a project.") }
+                let projectID = first["collectionId"].string
+                guard first["collectionId"] == .null || projectID.map({ id in seed["collections"].array.contains { $0["id"].string == id && $0["isArchived"] != .bool(true) } }) == true else {
+                    throw MainsError.server("This project is unavailable.")
+                }
+                runs[index]["collectionId"] = projectID.map(JSONValue.string) ?? .null
+            } else {
+                guard !isRunning(runID), !["running", "queued"].contains(runs[index]["status"]?.string ?? "") else {
+                    throw MainsError.server("Stop the active reply before archiving or deleting this chat.")
+                }
+                let isMateChat = runs[index]["assistantId"]?.string != nil
+                if channel == "runs:delete" {
+                    runs.remove(at: index); tasks.removeValue(forKey: runID)?.cancel(); replays[runID] = nil
+                    artifacts[runID] = nil; tools[runID] = nil; turns[runID] = nil; patches[runID] = nil; goals[runID] = nil
+                    outputs[runID] = nil
+                    push("runs:updated", ["runId": .string(runID)])
+                    if isMateChat { push("assistants:changed", [:]) }
+                    return .null
+                }
+                runs[index]["isArchived"] = .bool(true)
+                if isMateChat { push("assistants:changed", [:]) }
+            }
+            push("runs:updated", ["runId": .string(runID)])
+            return .object(runs[index])
+        case "atlas:saveMobileFile" where first["sourceKey"].string == nil && first["itemId"].string == nil,
+             "atlas:readMobileSaveStatus" where first["sourceKey"].string == nil && first["itemId"].string == nil:
+            guard first["accountId"].string == seed["account"]["id"].string else { throw MainsError.server("Atlas account not found.") }
+            try requireRun(runID)
+            let file: DemoFile, source: String
+            if let attachmentID = first["attachmentId"].string {
+                guard first["artifactId"].number == nil else { throw MainsError.invalidReply }
+                file = try attachment(runID, id: attachmentID)
+                source = "attachment:\(runID):\(attachmentID)"
+            } else {
+                let output = try outputFile(runID, artifactID: first["artifactId"].number)
+                file = output.file
+                source = "output:\(runID):\(output.id)"
+            }
+            guard first["version"].string == file.version else { throw MainsError.server("This demo file changed.") }
+            if channel == "atlas:readMobileSaveStatus" { return .object(["saved": .bool(atlas.hasSavedCopy(source: source))]) }
+            let result = try atlas.save(file, source: source, runID: runID, collectionID: runs.first(where: { $0["id"]?.string == runID })?["collectionId"]?.string)
+            push("atlas:changed", [:]); return result
+        case "atlas:readMobileSaveStatus", "atlas:mobileLibrary", "atlas:readMobilePage", "atlas:readMobilePageCover", "atlas:readMobilePageImage", "atlas:describeMobileFile", "atlas:readMobileFile", "atlas:readMobileImage", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:readMobileBookmark", "atlas:editMobileBookmark", "atlas:mobileTrash", "atlas:setMobileTrash", "atlas:deleteMobileTrash", "atlas:mobileTags", "atlas:readMobileTags", "atlas:setMobileTags":
+            guard first["accountId"].string == seed["account"]["id"].string else { throw MainsError.server("Atlas account not found.") }
+            if let project = first["collectionId"].string, !seed["collections"].array.contains(where: { $0["id"].string == project }) { throw MainsError.server("Project unavailable.") }
+            let result = try atlas.answer(channel, input: first, runID: runs.first(where: { $0["mode"]?.string == "work" })?["id"]?.string ?? Self.tourID,
+                                          collectionID: seed["collections"].array.first?["id"].string, image: seed["images"].objectValue.values.first ?? .null)
+            if channel == "atlas:saveMobileFile" || channel == "atlas:saveMobileBookmark" || channel == "atlas:updateMobileItem" || channel == "atlas:editMobileBookmark" || channel == "atlas:setMobileTrash" || channel == "atlas:deleteMobileTrash" || channel == "atlas:setMobileTags" { push("atlas:changed", [:]) }
+            return result
         case "backend:describe": return try .encode(pairing.descriptor)
         case "account:get": return seed["account"]
+        case "assistants:mobileDirectory":
+            guard first == seed["account"]["id"] else { throw MainsError.server("Demo account unavailable.") }
+            let selected = args.dropFirst().first?.string
+            let archived = args.dropFirst(2).first?.bool == true
+            let profiles = try (archived ? [] : mates.filter { selected == nil || selected == $0.id }.map { try $0.projection() })
+            let team = JSONValue.object(["id": .string(Self.mateTeamID), "name": .string("Release team")])
+            return .object(["mates": .array(profiles), "teams": .array([team])])
+        case "assistants:conversations":
+            guard first == seed["account"]["id"], let id = args.dropFirst().first?.string, mates.contains(where: { $0.id == id }) else {
+                throw MainsError.server("This demo Mate is unavailable.")
+            }
+            let chats = runs.filter { $0["assistantId"]?.string == id && $0["isArchived"] != .bool(true) }
+                .sorted { time($0, "updatedAt") > time($1, "updatedAt") }
+                .prefix(100)
+                .map { JSONValue.object(["id": $0["id"] ?? .null, "title": $0["title"] ?? .null, "updatedAt": $0["updatedAt"] ?? .null]) }
+            return .array(chats)
+        case "assistants:create": return try createMate(first)
+        case "assistants:setupProfile": return try setupMate(args)
+        case "assistants:send": return try sendMate(first)
+        case "assistants:mobileAssignments": return try readMateAssignments(args)
+        case "assistants:mobileManage": return try manageMateAssignment(args)
         case "space:getAll": return .array(spaces.map(JSONValue.object))
         case "workspace:list", "workspace:listGitStates", "collections:list", "projects:list":
             let key = ["workspace:list":"workspaces", "workspace:listGitStates":"gitStates", "collections:list":"collections", "projects:list":"projects"][channel]!
             return seed[key]
         case "providers:getEnabled": return seed["providers"]
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
+        case "providers:getRealtimeVoices":
+            guard first.string == "codex" else { throw MainsError.server("Voice is available with Codex.") }
+            return .object(["voices": .array(Self.sampleVoices.map(JSONValue.string)), "defaultVoice": .string("sol")])
+        case "providers:updateRunSettings":
+            guard first.string == "codex", let voice = args.dropFirst().first?["realtimeVoice"].string,
+                  Self.sampleVoices.contains(voice) else { throw MainsError.server("Choose an available demo voice.") }
+            var providers = seed["providers"].array
+            guard let index = providers.firstIndex(where: { $0["id"].string == "codex" }) else { throw MainsError.invalidReply }
+            var provider = providers[index].objectValue
+            var config = provider["config"]?.objectValue ?? [:]
+            config["realtimeVoice"] = .string(voice); provider["config"] = .object(config)
+            providers[index] = .object(provider)
+            var updated = seed.objectValue; updated["providers"] = .array(providers); seed = .object(updated)
+            return .object(provider)
+#endif
+
         case "providers:getModels": return seed["models"][first.string ?? ""]
+        case "providers:getMobileGoalSummary":
+            guard let id = first.string, let goal = goals[id] else { return .null }
+            return try .encode(goal)
+        case "providers:changeMobileGoal":
+            guard let id = first.string, let current = goals[id],
+                  runs.contains(where: { $0["id"]?.string == id && $0["isArchived"] != .bool(true) }),
+                  let change = args.dropFirst().first, change["expectedRevision"].string == current.revision else {
+                throw MainsError.server("Couldn’t change this goal. Check its current state and try again.")
+            }
+            switch change["action"].string {
+            case "edit" where current.status != "complete":
+                guard let objective = change["objective"].string, !objective.isEmpty, objective.unicodeScalars.count <= 2048 else { throw MainsError.invalidReply }
+                setGoal(id, objective: objective, status: current.status)
+            case "pause" where current.status == "active":
+                setGoal(id, objective: current.objective, status: "paused", truncated: current.objectiveTruncated == true)
+            case "resume" where current.status == "paused":
+                setGoal(id, objective: current.objective, status: "active", truncated: current.objectiveTruncated == true)
+            case "clear":
+                goals[id] = nil
+                push("providers:mobileGoalChanged", ["runId": .string(id)])
+            default: throw MainsError.server("This goal cannot be changed right now.")
+            }
+            return .object(["applied": .bool(true)])
         case "providers:getSkills":
             guard seed["providers"].array.contains(where: { $0["id"].string == first.string }) else { throw MainsError.server("Choose a demo provider.") }
             return .object(["skills": .array(DemoContext.skills(workspace: args.dropFirst().first?.string != nil))])
@@ -176,11 +368,26 @@ final class DemoBackend {
                             "allowedSandboxModes": .array(["read-only","workspace-write","danger-full-access"].map(JSONValue.string))])
         case "runs:getAll":
             return .array(runs.sorted { time($0, "updatedAt") > time($1, "updatedAt") }.prefix(100).map(JSONValue.object))
+        case "runs:listActive":
+            return .array(runs.filter { ["running", "queued"].contains($0["status"]?.string ?? "") }.map(JSONValue.object))
         case "runs:getById": return runs.first { $0["id"]?.string == runID }.map(JSONValue.object) ?? .null
+        case "runs:getQueue": return .object(["queues": .array([])])
+        case "search:conversations": return searchConversations(first)
+        case "search:workspaceFiles":
+            guard let workspaceID = first["workspaceId"].string,
+                  seed["workspaces"].array.contains(where: { $0["id"].string == workspaceID && !$0["isArchived"].bool }),
+                  let query = first["query"].string, !query.isEmpty else { return .array([]) }
+            return .array(DemoContext.workspaceFiles(query, includeDirectories: first["includeDirectories"].bool))
+        case "runs:readTextFile":
+            try requireRun(runID)
+            guard runs.first(where: { $0["id"]?.string == runID })?["mode"]?.string != "developer",
+                  let reference = RunFileReference(first["filePath"].string ?? ""), reference.name == DemoFile.notes.name else { throw MainsError.server("Demo Markdown file not found.") }
+            return .object(["fileName": .string(DemoFile.notes.name), "relativePath": .string(DemoFile.notes.name), "content": .string(String(decoding: DemoFile.notes.bytes, as: UTF8.self))])
         case "runs:listPendingApprovals":
             expireApprovals()
             return .array(approvals.values.filter { runID.isEmpty || $0["runId"].string == runID }.sorted { ($0["timestamp"].number ?? 0) < ($1["timestamp"].number ?? 0) })
         case "runs:toolApprovalResponse": return try respondToApproval(first)
+        case "runs:decidePlan": return try decidePlan(first)
         case "runs:answerAsyncQuestions": return try answerQuestions(first)
         case "runs:dismissAsyncQuestions":
             try requireRun(runID)
@@ -206,24 +413,43 @@ final class DemoBackend {
             push("runs:updated", ["runId": .string(runID)])
             return try .encode(settings)
         case "runs:execute": return try execute(first)
+        case "runs:fork": return try fork(first)
         case "runs:continue":
             try requireRun(runID)
             guard !isRunning(runID) else { throw MainsError.server("Wait for the demo reply, or stop it first.") }
-            try start(runID, prompt: first["message"].string ?? "", files: first["attachments"].array, promptMetadata: ["skills": first["contextSkills"]])
+            try start(runID, prompt: first["message"].string ?? "", files: first["attachments"].array,
+                      promptMetadata: ["skills": first["contextSkills"], "files": first["contextFiles"], "clientUserMessageId": first["clientUserMessageId"], "delivery": .string("queue")])
             return .object(["runId": .string(runID), "resumed": .bool(true)])
+        case "runs:inputStatus":
+            try requireRun(runID)
+            guard let messageID = first["clientUserMessageId"].string, !messageID.isEmpty else { throw MainsError.invalidReply }
+            return .object(["accepted": .bool(artifacts[runID]?.contains { $0["metadata"]?["clientUserMessageId"].string == messageID } == true)])
+        case "runs:steer":
+            try requireRun(runID)
+            guard ["codex", "claude_code"].contains(runs.first { $0["id"]?.string == runID }?["providerId"]?.string ?? "") else {
+                throw MainsError.server("This provider does not support steering.")
+            }
+            guard isRunning(runID), let turnID = turns[runID]?.last?["id"],
+                  let messageID = first["clientUserMessageId"].string, !messageID.isEmpty else {
+                throw MainsError.server("There is no active turn to steer. The message stays queued.")
+            }
+            try recordPrompt(runID, prompt: first["message"].string ?? "", files: first["attachments"].array,
+                             promptMetadata: ["skills": first["contextSkills"], "files": first["contextFiles"], "clientUserMessageId": .string(messageID), "delivery": .string("steer"), "turnId": turnID])
+            return .object(["runId": .string(runID), "turnId": .string("demo-turn-\(Int(turnID.number ?? 0))")])
         case "runs:abort":
             try requireRun(runID); finish(runID, status: "canceled")
             return .null
         case "runs:listOutputs":
             try requireRun(runID)
-            let items: [JSONValue] = runID == Self.tourID ? [DemoFile.pdf.descriptor(runID: runID, artifactID: -9001), DemoFile.notes.descriptor(runID: runID, artifactID: -9002)] : []
             let requested = first["artifactId"].number
-            return .object(["items": .array((first["offset"].number ?? 0) > 0 ? [] : items.filter { requested == nil || $0["artifactId"].number == requested }), "nextOffset": .null])
+            let items = (outputs[runID] ?? [:]).sorted { $0.key > $1.key }
+                .filter { requested == nil || requested == Double($0.key) }
+                .map { $0.value.descriptor(runID: runID, artifactID: $0.key) }
+            return .object(["items": .array((first["offset"].number ?? 0) > 0 ? [] : items), "nextOffset": .null])
         case "runs:readOutputFile":
             try requireRun(runID)
-            let file: DemoFile
-            switch first["artifactId"].number { case -9001: file = .pdf; case -9002: file = .notes; default: throw MainsError.server("Demo output not found.") }
-            return try file.chunk(first)
+            let output = try outputFile(runID, artifactID: first["artifactId"].number)
+            return try output.file.chunk(first)
         case "runArtifacts:describeAttachmentFile", "runArtifacts:readAttachmentChunk", "runArtifacts:readAttachmentImage":
             try requireRun(runID)
             let id = first["attachmentId"].string ?? ""
@@ -243,32 +469,220 @@ final class DemoBackend {
         }
     }
 
-    private func execute(_ payload: JSONValue) throws -> JSONValue {
+    private func searchConversations(_ payload: JSONValue) -> JSONValue {
+        let query = (payload["query"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return .object(["items": .array([]), "nextCursor": .null]) }
+        let cursor = payload["cursor"]
+        let rows = runs.compactMap { run -> (Int, Double, String, JSONValue)? in
+            guard run["isArchived"] != .bool(true), run["accountId"] == payload["accountId"], let id = run["id"]?.string else { return nil }
+            let title = run["title"]?.string ?? "Untitled chat"
+            let message = artifacts[id]?.first { row in
+                ["user-prompt", "report", "result"].contains(row["kind"]?.string ?? "") &&
+                AgentActivity.foreground(row["metadata"] ?? .null) && !AgentActivity.thinking(kind: row["kind"]?.string ?? "", metadata: row["metadata"] ?? .null) &&
+                row["content"]?.string?.localizedCaseInsensitiveContains(query) == true
+            }
+            let titleMatches = title.localizedCaseInsensitiveContains(query)
+            guard titleMatches || message != nil else { return nil }
+            let rank = titleMatches ? 2 : 4, created = time(run).rounded(.down)
+            if let previousRank = cursor["rank"].number, let previousTime = cursor["createdAt"].number, let previousID = cursor["runId"].string {
+                guard Double(rank) > previousRank || Double(rank) == previousRank && (created < previousTime || created == previousTime && id > previousID) else { return nil }
+            }
+            let workspace = seed["workspaces"].array.first { $0["id"] == run["workspaceId"] }
+            let collection = seed["collections"].array.first { $0["id"] == run["collectionId"] }
+            let anchor = message.map { JSONValue.object(["timestamp": .number(time($0).rounded(.down)), "source": .string("artifact"), "id": $0["id"] ?? .number(0)]) } ?? .null
+            let hit: JSONValue = .object(["runId": .string(id), "title": .string(title), "providerId": run["providerId"] ?? .string("codex"),
+                "mode": run["mode"] ?? .string("chat"), "context": workspace?["name"] ?? collection?["name"] ?? .null,
+                "updatedAt": .number(time(run, "updatedAt").rounded(.down)), "snippet": message?["content"]?.string.map { .string(String($0.prefix(400))) } ?? .null, "messageCursor": anchor])
+            return (rank, created, id, hit)
+        }.sorted { $0.0 != $1.0 ? $0.0 < $1.0 : $0.1 != $1.1 ? $0.1 > $1.1 : $0.2 < $1.2 }
+        let page = Array(rows.prefix(25)), last = page.last
+        let next: JSONValue = rows.count > 25 && last != nil ? .object(["rank": .number(Double(last!.0)), "createdAt": .number(last!.1), "runId": .string(last!.2)]) : .null
+        return .object(["items": .array(page.map { $0.3 }), "nextCursor": next])
+    }
+
+    private func createMate(_ input: JSONValue) throws -> JSONValue {
+        guard input["accountId"] == seed["account"]["id"], input["profileSetup"].bool,
+              let name = mateText(input["name"], limit: 100),
+              let spaceID = input["spaceId"].string,
+              let space = spaces.first(where: { $0["id"]?.string == spaceID }),
+              let spaceName = space["name"]?.string, let provider = space["providerId"]?.string,
+              ["codex", "claude_code"].contains(provider),
+              let model = input["model"].string, seed["models"][provider].array.contains(where: { $0["id"].string == model }),
+              let effort = input["effort"].string, effort.utf16.count <= 40,
+              let avatar = try? input["avatar"].decode(MateAvatar.self),
+              mateText(.string(avatar.shape), limit: 100) != nil, mateText(.string(avatar.color), limit: 100) != nil,
+              input["teamId"] == .null || input["teamId"].string == Self.mateTeamID else {
+            throw MainsError.server("Choose a name, a demo model and an avatar to create this Mate.")
+        }
+        guard mates.count < 200 else { throw MainsError.server("Exit and reopen Demo Mode to reset the sample Mates.") }
+        let id = "demo-mate-" + UUID().uuidString.lowercased()
+        mates.append(DemoMate(id: id, name: name, spaceID: spaceID, spaceName: spaceName, providerID: provider,
+                              model: model, effort: effort, teamID: input["teamId"].string, avatar: avatar, setup: .init()))
+        return .object(["id": .string(id)])
+    }
+
+    private func setupMate(_ args: [JSONValue]) throws -> JSONValue {
+        guard args.count == 3, args[0] == seed["account"]["id"], let id = args[1].string,
+              let index = mates.firstIndex(where: { $0.id == id }),
+              var setup = mates[index].setup, mates[index].profile == nil else {
+            throw MainsError.server("This demo profile setup is no longer active.")
+        }
+        let input = args[2]
+        switch input["action"].string {
+        case "answer":
+            guard input["step"].number == 0, setup.answer == nil, let answer = mateText(input["answer"], limit: 24_000) else {
+                throw MainsError.server("Enter an answer to the current setup question.")
+            }
+            let summary = answer.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            setup.answer = answer
+            setup.draft = MateProfile(description: String(summary.unicodeScalars.prefix(180)),
+                                      instructions: "Use this role when helping in Demo Mode:\n\n" + String(answer.unicodeScalars.prefix(4_000)))
+            mates[index].setup = setup
+        case "save":
+            guard setup.draft != nil, let description = mateText(input["profile"]["description"], limit: 1_000),
+                  let instructions = mateText(input["profile"]["instructions"], limit: 16_000) else {
+                throw MainsError.server("Complete the profile description and instructions before saving.")
+            }
+            mates[index].profile = MateProfile(description: description, instructions: instructions)
+            setup.draft = nil
+            mates[index].setup = setup
+        default:
+            throw MainsError.server("This demo profile setup action is unavailable.")
+        }
+        return .null
+    }
+
+    private func mateText(_ value: JSONValue, limit: Int) -> String? {
+        guard let text = value.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty, text.utf16.count <= limit else { return nil }
+        return text
+    }
+
+    private func sendMate(_ input: JSONValue) throws -> JSONValue {
+        guard input["accountId"] == seed["account"]["id"], let id = input["assistantId"].string,
+              let index = mates.firstIndex(where: { $0.id == id }), mates[index].profile != nil,
+              let message = input["message"].string else {
+            throw MainsError.server("Finish setting up this demo Mate before sending a message.")
+        }
+        let mate = mates[index]
+        if let requested = input["runId"].string {
+            guard requested == mate.welcomeRunID, input["requestId"].string == requested else {
+                throw MainsError.server("This demo Mate’s first chat has already started.")
+            }
+        }
+        let result = try executeMate(mate, prompt: message, context: input["context"], runID: mate.welcomeRunID)
+        mates[index].setup = nil
+        push("assistants:changed", [:])
+        return result
+    }
+
+    private func executeMate(_ mate: DemoMate, title: String? = nil, prompt: String, context: JSONValue = .null,
+                             runID: String?) throws -> JSONValue {
+        var settings = ComposerSettings.defaults(provider: mate.providerID, model: mate.model, config: [:])
+        settings.setEffort(mate.effort, provider: mate.providerID)
+        let payload: JSONValue = .object(["spaceId": .string(mate.spaceID), "goal": .string(prompt),
+            "title": title.map(JSONValue.string) ?? .null, "conversationSettings": try .encode(settings),
+            "attachments": context["attachments"], "contextSkills": context["contextSkills"]])
+        return try execute(payload, mateID: mate.id, reservedRunID: runID)
+    }
+
+    private func readMateAssignments(_ args: [JSONValue]) throws -> JSONValue {
+        guard args.count == 3, args[0] == seed["account"]["id"], let mate = mates.first(where: { $0.id == args[1].string }) else {
+            throw MainsError.server("This demo Mate is unavailable.")
+        }
+        let tasks = assignments.filter { $0.mateID == mate.id }
+        let assignee = JSONValue.object(["id": .string(mate.id), "name": .string(mate.name),
+                                        "avatar": try .encode(mate.avatar), "isArchived": .bool(false)])
+        func projection(_ assignment: DemoAssignment, detailed: Bool) -> JSONValue {
+            let runIsAvailable = runs.contains { $0["id"]?.string == assignment.runID && $0["isArchived"] != .bool(true) }
+            let brief = detailed ? assignment.brief : String(assignment.brief.unicodeScalars.prefix(240))
+            return .object(["id": .string(assignment.id), "title": .string(assignment.title), "brief": .string(brief),
+                            "status": .string(assignment.status.rawValue), "assignee": assignee, "evidence": .array([]),
+                            "workerRunId": runIsAvailable ? .string(assignment.runID) : .null,
+                            "result": assignment.status == .completed ? .string(Self.mateAssignmentResult) : .null])
+        }
+        if let id = args[2].string {
+            guard let task = tasks.first(where: { $0.id == id }) else { throw MainsError.server("Demo assignment not found.") }
+            return projection(task, detailed: true)
+        }
+        guard let number = args[2].number, let offset = Int(exactly: number), offset >= 0 else { throw MainsError.invalidReply }
+        let remaining = tasks.dropFirst(min(offset, tasks.count))
+        return .object(["items": .array(remaining.prefix(100).map { projection($0, detailed: false) }),
+                        "activeCount": .number(Double(tasks.filter { $0.status == .running }.count)),
+                        "hasMore": .bool(remaining.count > 100)])
+    }
+
+    private func manageMateAssignment(_ args: [JSONValue]) throws -> JSONValue {
+        guard args.count == 4, args[0] == seed["account"]["id"],
+              let mate = mates.first(where: { $0.id == args[1].string && $0.profile != nil }) else {
+            throw MainsError.server("Finish setting up this demo Mate before assigning work.")
+        }
+        let change = args[2]
+        switch change["action"].string {
+        case "assign":
+            guard let title = mateText(change["title"], limit: 200), let brief = mateText(change["prompt"], limit: 24_000) else {
+                throw MainsError.server("Enter a title and a brief for the demo assignment.")
+            }
+            guard assignments.count < 100 else { throw MainsError.server("Exit and reopen Demo Mode to reset assignments.") }
+            let assignment = DemoAssignment(id: "demo-assignment-" + UUID().uuidString.lowercased(), mateID: mate.id,
+                                            runID: "demo-run-" + UUID().uuidString.lowercased(), title: title, brief: brief)
+            assignments.insert(assignment, at: 0)
+            do { _ = try executeMate(mate, title: title, prompt: brief, runID: assignment.runID) }
+            catch { assignments.removeFirst(); throw error }
+        case "cancelTask":
+            guard let assignment = assignments.first(where: { $0.id == change["id"].string && $0.mateID == mate.id }),
+                  assignment.status != .completed else { throw MainsError.server("This demo assignment can no longer be canceled.") }
+            if assignment.status == .running { finish(assignment.runID, status: "canceled") }
+        default:
+            throw MainsError.server("This action is unavailable in demo assignments.")
+        }
+        return .object(["accepted": .bool(true)])
+    }
+
+    private func execute(_ payload: JSONValue, mateID: String? = nil, reservedRunID: String? = nil) throws -> JSONValue {
         guard runs.filter({ $0["status"]?.string == "running" }).count < 8 else {
             throw MainsError.server("Finish or stop a demo reply before starting another.")
         }
         guard let space = spaces.first(where: { $0["id"]?.string == payload["spaceId"].string }) else { throw MainsError.server("Choose a demo space.") }
-        let id = "demo-run-" + UUID().uuidString.lowercased()
+        let id = reservedRunID ?? "demo-run-" + UUID().uuidString.lowercased()
         let settings = payload["conversationSettings"] == .null
             ? JSONValue.object(["model": space["model"] ?? .string(""), "config": .object([:])]) : payload["conversationSettings"]
         let run: [String: JSONValue] = [
             "id": .string(id), "accountId": seed["account"]["id"], "providerId": space["providerId"] ?? .string("codex"),
-            "spaceId": space["id"]!, "mode": space["mode"] ?? .string("chat"), "workspaceId": payload["workspaceId"],
+            "spaceId": space["id"]!, "mode": mateID == nil ? space["mode"] ?? .string("chat") : .string("work"), "workspaceId": payload["workspaceId"],
+            "assistantId": mateID.map(JSONValue.string) ?? .null,
             "collectionId": payload["collectionId"], "model": settings["model"], "configSnapshot": .object(["conversationSettings": settings]),
-            "title": .string(String((payload["goal"].string ?? "Demo conversation").prefix(56))),
+            "title": .string(String((payload["title"].string ?? payload["goal"].string ?? "Demo conversation").prefix(56))),
             "status": .string("succeeded"), "isArchived": .bool(false), "isReplica": .bool(false),
             "lastError": .null, "createdAt": Self.now, "updatedAt": Self.now,
         ]
         runs.append(run); artifacts[id] = []; tools[id] = []; turns[id] = []
-        do { try start(id, prompt: payload["goal"].string ?? "", files: payload["attachments"].array, promptMetadata: ["skills": payload["contextSkills"]]) }
+        do { try start(id, prompt: payload["goal"].string ?? "", files: payload["attachments"].array, promptMetadata: ["skills": payload["contextSkills"], "files": payload["contextFiles"]]) }
         catch { runs.removeAll { $0["id"]?.string == id }; artifacts[id] = nil; tools[id] = nil; turns[id] = nil; throw error }
         trimRuns()
         return .object(["runId": .string(id)])
     }
 
-    private func start(_ runID: String, prompt: String, files: [JSONValue], promptMetadata: [String: JSONValue] = [:]) throws {
-        guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, prompt.count <= 32_000 else {
-            throw MainsError.server("Write a demo message under 32,000 characters.")
+    private func fork(_ payload: JSONValue) throws -> JSONValue {
+        guard let sourceID = payload["sourceRunId"].string,
+              var source = runs.first(where: { $0["id"]?.string == sourceID }), source["accountId"] == payload["accountId"],
+              source["isReplica"] != .bool(true), source["isArchived"] != .bool(true), !isRunning(sourceID) else {
+            throw MainsError.server("Fork a finished, local demo conversation.")
+        }
+        guard runs.filter({ $0["status"]?.string == "running" }).count < 8 else { throw MainsError.server("Finish a demo reply before starting another.") }
+        let id = "demo-run-" + UUID().uuidString.lowercased()
+        source["id"] = .string(id); source["status"] = .string("succeeded")
+        source["title"] = .string("Fork of " + (source["title"]?.string ?? "conversation"))
+        source["createdAt"] = Self.now; source["updatedAt"] = Self.now; source["endedAt"] = .null; source["lastError"] = .null
+        runs.append(source); artifacts[id] = []; tools[id] = []; turns[id] = []
+        do { try start(id, prompt: payload["message"].string ?? "", files: []) }
+        catch { runs.removeAll { $0["id"]?.string == id }; artifacts[id] = nil; tools[id] = nil; turns[id] = nil; throw error }
+        trimRuns()
+        return .object(["runId": .string(id), "sourceRunId": .string(sourceID)])
+    }
+
+    private func recordPrompt(_ runID: String, prompt: String, files: [JSONValue], promptMetadata: [String: JSONValue]) throws {
+        guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !files.isEmpty, prompt.count <= 32_000 else {
+            throw MainsError.server("Write a demo message under 32,000 characters or attach a file.")
         }
         guard (artifacts[runID]?.count ?? 0) < 200, files.count <= 5 else { throw MainsError.server("Start a new demo conversation to continue.") }
         let uploaded = try files.map { file -> DemoFile in
@@ -290,18 +704,54 @@ final class DemoBackend {
         }
         attachmentBytes += bytes
         append(runID, kind: "user-prompt", text: prompt, metadata: promptMetadata.merging(["source": .string("user"), "attachments": .array(references)]) { existing, _ in existing })
+    }
+
+    private func start(_ runID: String, prompt: String, files: [JSONValue], promptMetadata: [String: JSONValue] = [:]) throws {
+        try recordPrompt(runID, prompt: prompt, files: files, promptMetadata: promptMetadata)
         if let index = runs.firstIndex(where: { $0["id"]?.string == runID }) {
             runs[index]["status"] = .string("running"); runs[index]["updatedAt"] = Self.now; runs[index]["endedAt"] = .null
+            let run = JSONValue.object(runs[index])
+            let objective = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if run["providerId"].string == "codex", run["mode"].string != "chat",
+               run["configSnapshot"]["conversationSettings"]["config"]["goalMode"].bool, !objective.isEmpty,
+               goals[runID] == nil || goals[runID]?.status == "complete" {
+                setGoal(runID, objective: objective, status: "active")
+            }
             let count = turns[runID]?.count ?? 0
             turns[runID, default: []].append(["id": .number(Double(takeID())), "turnIndex": .number(Double(count)),
                 "status": .string("active"), "model": runs[index]["model"] ?? .null, "startedAt": Self.now, "createdAt": Self.now])
         }
         let contextNames = promptMetadata["skills"]?.array.compactMap { $0["displayName"].string ?? $0["name"].string } ?? []
         let steps: [Step]
-        if !contextNames.isEmpty || prompt.hasPrefix("/review") {
+        if let run = runs.first(where: { $0["id"]?.string == runID }), run["providerId"]?.string == "codex",
+           run["configSnapshot"]?["conversationSettings"]["config"]["planMode"].bool == true {
+            steps = [.tool("Read", .object(["file_path": .string("Sources/MainsApp/HomeView.swift")]), .string("Read bundled demo source.")),
+                .tool("Plan", .object(["plan": .string("## Review the sample workspace\n\n1. Inspect `HomeView.swift`.\n2. Review the shared composer.\n3. Verify the conversation flow.")]),
+                      .object(["planStatus": .string("pending")])), .finish]
+        } else if assignments.contains(where: { $0.runID == runID && $0.status == .running }) {
+            steps = [
+                .thinking("Reviewing the assignment brief"),
+                .tool("Read", .object(["file_path": .string("/Demo/mains/demo-notes.md")]), .string("Reviewed bundled sample notes.")),
+                .thinking("Preparing the sample report"),
+                .tool("Write", .object(["file_path": .string("/Demo/mains/mate-assignment-report.md")]), .string("Prepared the sample Markdown report.")),
+                .text("The demo assignment is complete. Open **mate-assignment-report.md** below to see the sample output."),
+                .finish,
+            ]
+        } else if !contextNames.isEmpty || prompt.hasPrefix("/review") {
             steps = [.text("## Demo context received\n\n" + (contextNames.isEmpty ? "The /review command is included in your message." : "Selected context: **" + contextNames.joined(separator: ", ") + "**.") + "\n\nThe composer sent the canonical skill names and their metadata with this request. This is a prepared on-device demonstration; no plugin, command or AI service was executed."), .finish]
         } else {
-            steps = scenario(prompt, hasAttachments: !uploaded.isEmpty, mode: runs.first { $0["id"]?.string == runID }?["mode"]?.string ?? "chat")
+            let run = runs.first { $0["id"]?.string == runID }
+            if let mateID = run?["assistantId"]?.string, let mate = mates.first(where: { $0.id == mateID }) {
+                let reply: String
+                if mateID == Self.mateID {
+                    reply = "## Sample release review\n\nBefore sharing the iPhone build, verify pairing, open an example file, and confirm that approvals appear in Activity. This is a prepared Demo Mode reply."
+                } else {
+                    reply = "## Sample Mate reply\n\nI received your request. This demo conversation uses the role you approved:\n\n\(mate.profile?.description ?? "")\n\nThis is a prepared reply on your iPhone."
+                }
+                steps = [.text(reply), .finish]
+            } else {
+                steps = scenario(prompt, hasAttachments: !files.isEmpty, mode: run?["mode"]?.string ?? "chat")
+            }
         }
         replays[runID] = Replay(steps: steps)
         push("runs:statusChanged", ["runId": .string(runID), "status": .string("running")]); resume(runID)
@@ -361,8 +811,33 @@ final class DemoBackend {
         ]
     }
 
+    private func decidePlan(_ request: JSONValue) throws -> JSONValue {
+        guard let runID = request["runId"].string, let runIndex = runs.firstIndex(where: { $0["id"]?.string == runID }),
+              runs[runIndex]["accountId"] == request["accountId"], let decision = request["decision"].string.flatMap(PlanProposal.Decision.init),
+              let planIndex = tools[runID]?.lastIndex(where: { $0["toolName"]?.string == "Plan" }),
+              tools[runID]?[planIndex]["id"] == request["toolCallId"] else { throw MainsError.invalidReply }
+        var metadata = tools[runID]?[planIndex]["metadata"]?.objectValue ?? [:]
+        let status = decision.status.rawValue
+        if metadata["planStatus"]?.string == status { return .object(["status": .string(status)]) }
+        guard !request["checkOnly"].bool else { throw MainsError.server("Plan delivery has not been confirmed yet.") }
+        guard metadata["planStatus"] == nil, !isRunning(runID) else { throw MainsError.server("This demo plan is no longer pending.") }
+        if decision == .apply {
+            let before = runs[runIndex]["configSnapshot"]
+            var snapshot = before?.objectValue ?? [:]
+            var settings = snapshot["conversationSettings"]?.objectValue ?? [:]
+            var config = settings["config"]?.objectValue ?? [:]
+            config["planMode"] = .bool(false); settings["config"] = .object(config)
+            snapshot["conversationSettings"] = .object(settings); runs[runIndex]["configSnapshot"] = .object(snapshot)
+            do { try start(runID, prompt: "Execute the plan above.", files: []) }
+            catch { runs[runIndex]["configSnapshot"] = before; throw error }
+        }
+        metadata["planStatus"] = .string(status); tools[runID]![planIndex]["metadata"] = .object(metadata)
+        push("runs:eventPersisted", ["runId": .string(runID)])
+        return .object(["status": .string(status)])
+    }
+
     private func resume(_ runID: String) {
-        guard emit != nil, tasks[runID] == nil, let replay = replays[runID], !replay.waiting else { return }
+        guard emit != nil, tasks[runID] == nil, let replay = replays[runID], replay.waitingFor == nil else { return }
         tasks[runID] = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, let replay = self.replays[runID], replay.index < replay.steps.count else { return }
@@ -411,14 +886,10 @@ final class DemoBackend {
             }
             push("runs:eventPersisted", ["runId": .string(runID)])
         case .approval(let template):
-            let id = UUID().uuidString, token = UUID().uuidString
-            let request = JSONValue.object(template.objectValue.merging([
-                "requestId": .string(id), "approvalToken": .string(token), "runId": .string(runID),
-                "timestamp": Self.now, "expiresAt": .number((Date().timeIntervalSince1970 + decisionLifetime) * 1000),
-            ]) { _, next in next })
-            approvals[id] = request; replay.waiting = true; replay.index += 1
+            replay.waitingFor = .approval; replay.index += 1
             replays[runID] = replay; tasks.removeValue(forKey: runID)?.cancel()
-            armExpiry(request); push("runs:toolApprovalRequest", request.objectValue); return
+            requestApproval(template, runID: runID, expiresAt: Date().addingTimeInterval(decisionLifetime))
+            return
         case .questions:
             append(runID, kind: "report", text: "Choose the next step in the question card below.", metadata: [
                 "source": .string("codex_async_questions"), "questions": .array([
@@ -465,18 +936,38 @@ final class DemoBackend {
             turns[runID]![last]["status"] = .string(status == "succeeded" ? "completed" : "canceled")
             turns[runID]![last]["endedAt"] = Self.now
         }
+        if status == "succeeded", let goal = goals[runID], goal.status == "active" {
+            setGoal(runID, objective: goal.objective, status: "complete", truncated: goal.objectiveTruncated == true)
+        }
+        finishMateAssignment(runID, succeeded: status == "succeeded")
         push("runs:statusChanged", ["runId": .string(runID), "status": .string(status)])
+    }
+
+    private func finishMateAssignment(_ runID: String, succeeded: Bool) {
+        guard let index = assignments.firstIndex(where: { $0.runID == runID && $0.status == .running }) else { return }
+        if succeeded {
+            let assignment = assignments[index]
+            let file = DemoFile.assignmentReport(title: assignment.title, brief: assignment.brief)
+            let id = takeID()
+            outputs[runID, default: [:]][id] = file
+            artifacts[runID, default: []].append(documentArtifact(id: id, runID: runID, file: file, at: Self.now))
+        }
+        assignments[index].status = succeeded ? .completed : .canceled
+        push("assistants:changed", [:])
+    }
+
+    private func setGoal(_ runID: String, objective: String, status: String, truncated: Bool = false) {
+        let revision = SHA256.hash(data: Data(UUID().uuidString.utf8)).map { String(format: "%02x", $0) }.joined()
+        let text = String(objective.unicodeScalars.prefix(2048))
+        goals[runID] = MobileGoalSummary(objective: text, status: status, tokensUsed: nil, timeUsedSeconds: nil,
+                                         revision: revision, objectiveTruncated: truncated || text != objective)
+        push("providers:mobileGoalChanged", ["runId": .string(runID)])
     }
 
     private func decisionScenario() -> [Step] {
         [
             .text("This walkthrough uses the same approval and question cards as a paired computer. Nothing leaves this iPhone, and no command or external service is used."),
-            .approval(.object(["kind": .string("tool_approval"), "toolName": .string("Bash"), "toolInput": .object([
-                "message": .string("Allow this sample workspace check?"), "command": .string("/bin/zsh -lc \"swift test\""),
-                "cwd": .string("/Demo/mains"), "environmentId": .string("local"),
-                "commandActions": .array([.object(["command": .string("swift test"), "type": .string("unknown")])]),
-                "_meta": .object(["subtitle": .string("A simulated command; no process will start."), "riskLevel": .string("low")]),
-            ])])),
+            .approval(sampleCheckApproval(message: "Allow this sample workspace check?")),
             .approval(.object(["kind": .string("ask_user"), "toolName": .string("AskUserQuestion"), "header": .string("Choose a review style"),
                 "question": .string("Which sample result would you like?"), "multiSelect": .bool(true), "isOther": .bool(true),
                 "options": .array([.object(["label": .string("Review only"), "description": .string("Inspect the bundled sample.")]),
@@ -494,6 +985,26 @@ final class DemoBackend {
                 "description": .string("In Demo Mode this opens an on-device explanation instead of a browser.")])),
             .questions,
         ]
+    }
+
+    private func sampleCheckApproval(message: String) -> JSONValue {
+        .object(["kind": .string("tool_approval"), "toolName": .string("Bash"), "toolInput": .object([
+            "message": .string(message), "command": .string("/bin/zsh -lc \"swift test\""),
+            "cwd": .string("/Demo/mains"), "environmentId": .string("local"),
+            "commandActions": .array([.object(["command": .string("swift test"), "type": .string("unknown")])]),
+            "_meta": .object(["subtitle": .string("A simulated command; no process will start."), "riskLevel": .string("low")]),
+        ])])
+    }
+
+    private func requestApproval(_ template: JSONValue, runID: String, expiresAt: Date) {
+        let id = UUID().uuidString
+        let request = JSONValue.object(template.objectValue.merging([
+            "requestId": .string(id), "approvalToken": .string(UUID().uuidString), "runId": .string(runID),
+            "timestamp": Self.now, "expiresAt": .number(expiresAt.timeIntervalSince1970 * 1000),
+        ]) { _, next in next })
+        approvals[id] = request
+        armExpiry(request)
+        push("runs:toolApprovalRequest", request.objectValue)
     }
 
     private func respondToApproval(_ payload: JSONValue) throws -> JSONValue {
@@ -519,11 +1030,15 @@ final class DemoBackend {
         approvals[id] = nil; approvalTimers.removeValue(forKey: id)?.cancel()
         push("runs:toolApprovalResolved", ["requestId": .string(id), "approvalToken": request["approvalToken"]])
         append(runID, kind: "report", text: message, metadata: [:])
-        if replays[runID] != nil { replays[runID]!.waiting = false; resume(runID) }
+        if replays[runID]?.waitingFor == .approval {
+            replays[runID]?.waitingFor = nil
+            resume(runID)
+        }
     }
 
     private func armExpiry(_ request: JSONValue) {
-        guard let id = request["requestId"].string, let expiry = request["expiresAt"].number else { return }
+        guard let id = request["requestId"].string, let expiry = request["expiresAt"].number,
+              expiry < Date.distantFuture.timeIntervalSince1970 * 1000 else { return }
         approvalTimers[id]?.cancel()
         approvalTimers[id] = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(max(0, expiry / 1000 - Date().timeIntervalSince1970))) } catch { return }
@@ -570,6 +1085,12 @@ final class DemoBackend {
         .object(["attachmentId": .string(id), "name": .string(file.name), "type": .string(file.mime.hasPrefix("image/") ? "image" : "document"),
                  "mimeType": .string(file.mime), "byteSize": .number(Double(file.bytes.count))])
     }
+    private func outputFile(_ runID: String, artifactID: Double?) throws -> (id: Int, file: DemoFile) {
+        guard let artifactID, let id = Int(exactly: artifactID), let file = outputs[runID]?[id] else {
+            throw MainsError.server("Demo output not found.")
+        }
+        return (id, file)
+    }
     private func attachment(_ runID: String, id: String) throws -> DemoFile {
         guard artifacts[runID]?.contains(where: { ($0["metadata"]?["attachments"].array ?? []).contains { $0["attachmentId"].string == id } }) == true else {
             throw MainsError.server("Demo attachment not found in this conversation.")
@@ -593,10 +1114,14 @@ final class DemoBackend {
     }
     private func trimRuns() {
         while runs.count > 100 {
-            guard let index = runs.indices.filter({ runs[$0]["id"]?.string != Self.tourID && runs[$0]["status"]?.string != "running" })
+            guard let index = runs.indices.filter({ index in
+                let id = runs[index]["id"]?.string
+                return id != Self.tourID && id != Self.mateChatID && runs[index]["status"]?.string != "running"
+            })
                 .min(by: { time(runs[$0], "updatedAt") < time(runs[$1], "updatedAt") }),
                   let id = runs[index]["id"]?.string else { return }
-            runs.remove(at: index); artifacts[id] = nil; tools[id] = nil; turns[id] = nil; patches[id] = nil
+            runs.remove(at: index); artifacts[id] = nil; tools[id] = nil; turns[id] = nil; patches[id] = nil; goals[id] = nil
+            outputs[id] = nil
             let keys = attachments.keys.filter { $0.hasPrefix(id + ":") }
             for key in keys { if let file = attachments.removeValue(forKey: key) { attachmentBytes -= file.bytes.count } }
         }
@@ -621,8 +1146,7 @@ final class DemoBackend {
             ["id": .number(9_000_001), "runId": .string(Self.tourID), "kind": .string("report"),
              "content": .string("## Welcome to Mains\n\nExplore workspaces, switch between Code, Work and Chat, or send a message to try a simulated reply.\n\nThe image and PDF below are bundled samples. **Demo Mode stays on this iPhone.**"),
              "createdAt": .number(at + 100), "metadata": .object([:])],
-            ["id": .number(-9001), "runId": .string(Self.tourID), "kind": .string("document"), "content": .null, "createdAt": .number(at + 300),
-             "metadata": .object(["fileName": .string(DemoFile.pdf.name), "outputSelected": .bool(true), "byteSize": .number(Double(DemoFile.pdf.bytes.count))])],
+            documentArtifact(id: -9001, runID: Self.tourID, file: .pdf, at: .number(at + 300)),
         ]
         if image != nil {
             artifacts[Self.tourID]!.append(["id": .number(9_000_003), "runId": .string(Self.tourID), "kind": .string("image"), "content": .null,
@@ -634,6 +1158,90 @@ final class DemoBackend {
                               "startedAt": .number(at), "createdAt": .number(at), "endedAt": .number(at + 300)]]
         installChanges(Self.tourID, turnID: 9_000_001)
         installSubagents(Self.tourID, baseID: 9_100_000, at: at + 50, stage: 2)
+    }
+
+    private func addLaunchBrief() throws {
+        guard let collectionID = seed["collections"].array.first(where: { $0["name"].string == "Work" })?["id"].string else {
+            throw MainsError.server("The demo Work project is missing.")
+        }
+        addCompletedFileSample(Self.launchBriefRunID, title: "iPhone launch brief",
+                               prompt: "Prepare a one-page launch brief for the iPhone app.",
+                               reply: "The launch brief is ready. Open the PDF and choose **Keep in Atlas** from File options to save it to the Work project.",
+                               file: try DemoFile.launchBrief(), artifactID: -9003, collectionID: collectionID)
+    }
+
+    private func addSampleMate() {
+        mates.append(DemoMate(id: Self.mateID, name: "Release Reviewer", spaceID: "codex", spaceName: "Codex", providerID: "codex",
+                              model: seed["models"]["codex"].array.first?["id"].string ?? "", effort: "medium", teamID: Self.mateTeamID,
+                              avatar: MateAvatar(shape: "terminal-amber", color: "amber"),
+                              profile: MateProfile(description: "Reviews iPhone releases and prepares checklists.",
+                                                   instructions: "Check release readiness, flag missing validation, and provide a short checklist.")))
+        addCompletedFileSample(Self.mateChatID, title: "Release readiness review",
+                               prompt: "Put together a checklist for testing the iPhone release.",
+                               reply: "I prepared a release checklist with checks for pairing, Activity, and file previews. Open the checklist below before sharing the build.",
+                               file: .releaseChecklist, artifactID: -9004, mateID: Self.mateID)
+    }
+
+    private func addCompletedFileSample(_ runID: String, title: String, prompt: String, reply: String, file: DemoFile,
+                                        artifactID: Int, collectionID: String? = nil, mateID: String? = nil) {
+        let model = seed["models"]["codex"].array.first?["id"] ?? .null
+        let completionTime = Date().timeIntervalSince1970 * 1000
+        let startedAt = JSONValue.number(completionTime - 30_000)
+        let completedAt = JSONValue.number(completionTime)
+
+        runs.append(["id": .string(runID), "accountId": seed["account"]["id"], "spaceId": .string("codex"), "providerId": .string("codex"),
+                     "mode": .string("work"), "model": model, "collectionId": collectionID.map(JSONValue.string) ?? .null,
+                     "assistantId": mateID.map(JSONValue.string) ?? .null, "title": .string(title),
+                     "status": .string("succeeded"), "isArchived": .bool(false), "isReplica": .bool(false),
+                     "createdAt": startedAt, "updatedAt": completedAt, "endedAt": completedAt])
+        artifacts[runID] = [
+            ["id": .number(Double(takeID())), "runId": .string(runID), "kind": .string("user-prompt"), "createdAt": startedAt,
+             "content": .string(prompt), "metadata": .object(["source": .string("user")])],
+            ["id": .number(Double(takeID())), "runId": .string(runID), "kind": .string("report"), "createdAt": .number(completionTime - 1000),
+             "content": .string(reply),
+             "metadata": .object(["source": .string("assistant.message")])],
+            documentArtifact(id: artifactID, runID: runID, file: file, at: completedAt),
+        ]
+        turns[runID] = [["id": .number(Double(takeID())), "turnIndex": .number(0), "status": .string("completed"), "model": model,
+                         "createdAt": startedAt, "startedAt": startedAt, "endedAt": completedAt]]
+        outputs[runID] = [artifactID: file]
+    }
+
+    private func documentArtifact(id: Int, runID: String, file: DemoFile, at: JSONValue) -> [String: JSONValue] {
+        ["id": .number(Double(id)), "runId": .string(runID), "kind": .string("document"), "content": .null, "createdAt": at,
+         "metadata": .object(["fileName": .string(file.name), "outputSelected": .bool(true), "byteSize": .number(Double(file.bytes.count))])]
+    }
+
+    private func addActivitySamples() {
+        addActivityRun(Self.activityApprovalRunID, title: "Review release checks",
+                       prompt: "Run the release checks after I approve them.",
+                       message: "The sample release checks are ready for your review.", waitFor: .approval, steps: [.finish])
+        // Keep the prepared request available until the user reviews or stops the sample.
+        requestApproval(sampleCheckApproval(message: "Run the sample release checks?"),
+                        runID: Self.activityApprovalRunID, expiresAt: .distantFuture)
+
+        addActivityRun(Self.activityQueueRunID, title: "Draft release notes",
+                       prompt: "Draft a short set of release notes for the iPhone app.",
+                       message: "I’m drafting the sample release notes. Send a follow-up to queue it. This sample finishes after you add one.",
+                       waitFor: .followUp,
+                       steps: [
+                        .tool("Read", .object(["file_path": .string("/Demo/mains/release-notes.md")]), .string("Sample release highlights: Activity, Atlas and file previews.")),
+                        .text("## Sample release notes\n\n- Review approvals from Activity.\n- Keep useful files and links in Atlas."),
+                        .finish,
+                       ])
+    }
+
+    private func addActivityRun(_ runID: String, title: String, prompt: String, message: String, waitFor: ReplayWait, steps: [Step]) {
+        let at = Self.now
+        let model = seed["models"]["codex"].array.first?["id"] ?? .null
+        runs.append(["id": .string(runID), "accountId": seed["account"]["id"], "spaceId": .string("codex"), "providerId": .string("codex"),
+                     "mode": .string("work"), "model": model, "title": .string(title), "status": .string("running"),
+                     "isArchived": .bool(false), "isReplica": .bool(false), "createdAt": at, "updatedAt": at])
+        append(runID, kind: "user-prompt", text: prompt, metadata: ["source": .string("user")])
+        turns[runID] = [["id": .number(Double(takeID())), "turnIndex": .number(0), "status": .string("active"),
+                         "model": model, "startedAt": at, "createdAt": at]]
+        append(runID, kind: "report", text: message, metadata: ["source": .string("assistant.message")])
+        replays[runID] = Replay(steps: steps, waitingFor: waitFor)
     }
 
     private func installSubagents(_ runID: String, baseID: Int, at: Double, stage: Int) {
@@ -677,28 +1285,43 @@ final class DemoBackend {
     private func history(_ request: JSONValue) throws -> JSONValue {
         let id = request["runId"].string ?? ""
         let rows = artifacts[id] ?? [], calls = tools[id] ?? []
-        let keys = (rows.map { Key($0, source: "artifact") } + calls.map { Key($0, source: "tool") }).sorted()
+        let allKeys = (rows.map { Key($0, source: "artifact") } + calls.map { Key($0, source: "tool") }).sorted()
+        let rangeStart = Key(request["range"]["start"]), rangeEnd = Key(request["range"]["end"])
+        let keys = allKeys.filter { key in (rangeStart.map { key >= $0 } ?? true) && (rangeEnd.map { key < $0 } ?? true) }
         var anchors = rows.filter { $0["kind"]?.string == "user-prompt" }.map { Key($0, source: "artifact") }.sorted()
         if let first = keys.first, anchors.first.map({ first < $0 }) ?? true { anchors.insert(first, at: 0) }
         let cursor = Key(request["cursor"])
         let direction = request["direction"].string ?? "latest"
+        let conversation = request["conversationWindow"].bool
+        let pageSize = conversation ? 20 : 3, windowSize = conversation ? 60 : 9
         var lower: Key?, upper: Key?
-        switch direction {
+        if rangeStart != nil {
+            let eligible = keys.filter { key in
+                if direction == "older", let cursor { return key < cursor }
+                if direction == "newer", let cursor { return key >= cursor }
+                return true
+            }
+            let selected = direction == "newer" ? Array(eligible.prefix(200)) : Array(eligible.suffix(200))
+            lower = selected.first
+            if let last = selected.last, keys.last.map({ last < $0 }) == true {
+                var end = last.json.objectValue; end["id"] = .number(Double(last.id + 1)); upper = Key(.object(end))
+            } else { upper = rangeEnd }
+        } else { switch direction {
         case "older":
             let seek = cursor.flatMap { cursor in anchors.firstIndex { $0 >= cursor } } ?? anchors.count
-            let start = max(0, seek - 3), end = min(anchors.count, start + 9)
+            let start = max(0, seek - pageSize), end = min(anchors.count, start + windowSize)
             lower = anchors.indices.contains(start) ? anchors[start] : nil
             upper = anchors.indices.contains(end) ? anchors[end] : nil
         case "newer":
             let seek = cursor.flatMap { cursor in anchors.firstIndex { $0 >= cursor } } ?? anchors.count
-            let end = min(anchors.count, seek + 3), start = max(0, end - 9)
+            let end = min(anchors.count, seek + pageSize), start = max(0, end - windowSize)
             lower = anchors.indices.contains(start) ? anchors[start] : nil
             upper = anchors.indices.contains(end) ? anchors[end] : nil
-        case "refresh": lower = cursor ?? anchors.suffix(3).first; upper = Key(request["end"])
-        default: lower = anchors.suffix(3).first
-        }
+        case "refresh": lower = cursor ?? anchors.suffix(pageSize).first; upper = Key(request["end"])
+        default: lower = anchors.suffix(pageSize).first
+        } }
         func contains(_ key: Key) -> Bool { (lower.map { key >= $0 } ?? false) && (upper.map { key < $0 } ?? true) }
-        let selectedRows = rows.filter { contains(Key($0, source: "artifact")) }.map { row -> JSONValue in
+        var selectedRows = rows.filter { contains(Key($0, source: "artifact")) }.map { row -> JSONValue in
             var item = row
             if let text = row["content"]?.string, text.count > 8000 {
                 item["content"] = .string(String(text.prefix(4000)))
@@ -706,7 +1329,7 @@ final class DemoBackend {
             }
             return .object(item)
         }
-        let selectedCalls = calls.filter { contains(Key($0, source: "tool")) }.map { row -> JSONValue in
+        var selectedCalls = calls.filter { contains(Key($0, source: "tool")) }.map { row -> JSONValue in
             var item = row
             for (key, type) in [("input","mains/deferred-tool-input"),("output","mains/deferred-tool-output")] {
                 let text = Self.text(row[key] ?? .null)
@@ -720,11 +1343,44 @@ final class DemoBackend {
             let at = time(turn, "startedAt")
             return ((lower.map { at >= $0.time } ?? false) || turn["id"] == preceding) && (upper.map { at <= $0.time } ?? true)
         }
-        return .object(["artifacts": .array(selectedRows), "toolCalls": .array(selectedCalls),
+        var activity: JSONValue = .null
+        if conversation {
+            let newestRows = selectedRows.sorted { Key($0.objectValue, source: "artifact") > Key($1.objectValue, source: "artifact") }
+            let messages = newestRows.filter {
+                ["user-prompt", "report", "result", "command_result"].contains($0["kind"].string ?? "") &&
+                    AgentActivity.foreground($0["metadata"]) && !AgentActivity.thinking(kind: $0["kind"].string ?? "", metadata: $0["metadata"])
+            }
+            var priority: [JSONValue] = []
+            if let cursor, let row = selectedRows.first(where: { Key($0.objectValue, source: "artifact").id == cursor.id && cursor.source == "artifact" }) { priority.append(row) }
+            if let prompt = messages.first(where: { $0["kind"].string == "user-prompt" }) { priority.append(prompt) }
+            priority += messages + newestRows
+            let originalCount = selectedRows.count + selectedCalls.count
+            var retainedRows: [JSONValue] = [], retainedCalls: [JSONValue] = [], seen = Set<String>()
+            var bytes = try JSONEncoder().encode(selectedTurns.map(JSONValue.object)).count
+            for (source, values) in [("artifact", priority), ("tool", Array(selectedCalls.reversed()))] {
+                for row in values {
+                    let id = source + ":" + String(row["id"].number ?? 0)
+                    guard !seen.contains(id), seen.count < 400 else { continue }
+                    let count = try JSONEncoder().encode(row).count
+                    guard bytes + count < 2 * 1024 * 1024 - 16 * 1024 else { continue }
+                    seen.insert(id); bytes += count
+                    if source == "artifact" { retainedRows.append(row) } else { retainedCalls.append(row) }
+                }
+            }
+            selectedRows = retainedRows.sorted { Key($0.objectValue, source: "artifact") < Key($1.objectValue, source: "artifact") }
+            selectedCalls = retainedCalls.sorted { Key($0.objectValue, source: "tool") < Key($1.objectValue, source: "tool") }
+            if originalCount > seen.count, let lower, let last = keys.last {
+                var ending = last.json.objectValue; ending["id"] = .number(Double(last.id + 1))
+                activity = .object(["start": lower.json, "end": upper?.json ?? .object(ending), "omittedCount": .number(Double(originalCount - seen.count))])
+            }
+        }
+        var result: [String: JSONValue] = ["artifacts": .array(selectedRows), "toolCalls": .array(selectedCalls),
             "turns": .array(selectedTurns.map(JSONValue.object)),
             "start": lower?.json ?? .null, "end": upper?.json ?? .null, "last": keys.last?.json ?? .null,
             "hasOlder": .bool(keys.first.map { first in lower.map { first < $0 } ?? false } ?? false),
-            "hasNewer": .bool(keys.last.map { last in upper.map { last >= $0 } ?? false } ?? false)])
+            "hasNewer": .bool(keys.last.map { last in upper.map { last >= $0 } ?? false } ?? false)]
+        if activity != .null { result["activity"] = activity }
+        return .object(result)
     }
     private func content(_ request: JSONValue) throws -> JSONValue {
         let runID = request["runId"].string ?? "", source = request["source"].string ?? ""
@@ -734,8 +1390,9 @@ final class DemoBackend {
             value = patches[runID]?[Int(id)].map(JSONValue.string) ?? .null
         }
         else if source == "artifact" { value = artifacts[runID]?.first { $0["id"]?.number == id }?["content"] ?? .null }
-        else if ["tool-input","tool-output"].contains(source) {
-            value = tools[runID]?.first { $0["id"]?.number == id }?[source == "tool-input" ? "input" : "output"] ?? .null
+        else if ["tool-input","tool-output", "plan"].contains(source) {
+            let tool = tools[runID]?.first { $0["id"]?.number == id }
+            value = source == "plan" ? tool?["input"]?["plan"] ?? .null : tool?[source == "tool-input" ? "input" : "output"] ?? .null
         } else { throw MainsError.invalidReply }
         guard value != .null else { throw MainsError.server("Demo content not found in this conversation.") }
         let chars = Array(Self.text(value).unicodeScalars)

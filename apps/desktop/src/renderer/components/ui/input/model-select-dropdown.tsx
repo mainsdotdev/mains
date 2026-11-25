@@ -11,7 +11,7 @@ import Text from "../text";
 import DropdownWrapper from "../dropdown-wrapper";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import { getModelIcon } from "@/lib/model-icons";
-import { formatModelDisplayName, groupModelsByOpenCodeProvider, openCodeModelParts, selectableModelNames } from "@/lib/model-display";
+import { formatComposerModelName, formatModelDisplayName, groupModelsByOpenCodeProvider, openCodeModelParts, selectableModelNames } from "@/lib/model-display";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import { formatEffortLevel } from "@/lib/format";
 import { ArrowUp, Brain, Check } from "../icons";
@@ -111,6 +111,9 @@ interface ModelSelectDropdownProps {
   isLoading?: boolean;
   variant?: ProviderVariant;
   iconOnly?: boolean;
+  allowUltracode?: boolean;
+  /** Bound both model and effort lists; compact forms can use a shorter menu. */
+  maxMenuHeight?: number;
 }
 
 export function ModelSelectDropdown({
@@ -130,10 +133,12 @@ export function ModelSelectDropdown({
   isLoading = false,
   variant,
   iconOnly = false,
+  allowUltracode = true,
+  maxMenuHeight = 320,
 }: ModelSelectDropdownProps) {
   const modelList = selectableModelNames(models, variant);
   const noModels = !isLoading && modelList.length === 0;
-  const displayModel = formatModelDisplayName(model, variant);
+  const displayModel = formatComposerModelName(model, variant);
   const selectedModelEffortLevels =
     modelEffortLevelsByModel[model] ?? [];
   const selectedModelUsesThinkingToggle =
@@ -194,7 +199,7 @@ export function ModelSelectDropdown({
   const hoveredModelHasEffortMenu =
     !!hoveredModel && modelHasEffortMenu(hoveredModel);
   const hoveredModelSupportsUltracode =
-    variant === "claude" &&
+    allowUltracode && variant === "claude" &&
     hoveredModelEffortLevels.includes("xhigh");
   const hoveredModelHasSelectedUltracode =
     hoveredModel === model &&
@@ -401,7 +406,7 @@ export function ModelSelectDropdown({
         <Button
           tooltip={noModels
             ? "No models available"
-            : `${displayModel}${selectedEffortLabel ? ` · ${selectedEffortLabel}` : ""}`}
+            : `${formatModelDisplayName(model, variant)}${selectedEffortLabel ? ` · ${selectedEffortLabel}` : ""}`}
           tooltipPosition="top"
           type="button"
           onClick={
@@ -462,7 +467,8 @@ export function ModelSelectDropdown({
         dropdownRef={mainMenuRef}
       >
         <div
-          className="max-h-80 overflow-auto noscrollbar p-1"
+          className="overflow-y-auto overscroll-contain noscrollbar p-1"
+          style={{ maxHeight: `min(${maxMenuHeight}px, calc(100dvh - 6rem))` }}
           onMouseMove={(e) => {
             pointerRef.current = { x: e.clientX, y: e.clientY };
           }}
@@ -542,10 +548,11 @@ export function ModelSelectDropdown({
               clearEffortCloseTimer();
             }}
             onMouseLeave={scheduleEffortMenuClose}
-            className={`fixed z-(--z-dropdown-sub) overflow-hidden rounded-2xl glass-card animate-dropdown-in p-1 ${iconOnly ? "w-40" : "min-w-36"}`}
+            className={`fixed z-(--z-dropdown-sub) overflow-y-auto overscroll-contain noscrollbar rounded-2xl glass-card animate-dropdown-in p-1 ${iconOnly ? "w-40" : "min-w-36"}`}
             style={{
               top: effortMenuPosition.top,
               left: effortMenuPosition.left,
+              maxHeight: `min(${maxMenuHeight}px, calc(100dvh - 1rem))`,
             }}
             role="menu"
             aria-label={`${hoveredModelDisplayName} ${

@@ -17,8 +17,10 @@ public struct ContextText: Sendable {
         let string = source as NSString
         var candidates: [(NSRange, ContextSkill)] = []
         for skill in skills {
+            let suffix = skill.workspaceFile != nil ? #"(?![\w./\\-])"#
+                : (skill.mateID == nil ? #"(?::[\w-]+)?"# : "") + #"(?![\w/-])"#
             let pattern = canonical
-                ? #"\$"# + NSRegularExpression.escapedPattern(for: skill.name) + #"(?::[\w-]+)?(?![\w/-])"#
+                ? NSRegularExpression.escapedPattern(for: skill.wireToken) + suffix
                 : NSRegularExpression.escapedPattern(for: ContextMentions.mention(skill))
             guard let expression = try? NSRegularExpression(pattern: pattern) else { continue }
             candidates += expression.matches(in: source, range: NSRange(location: 0, length: string.length)).map { ($0.range, skill) }
@@ -37,8 +39,8 @@ public struct ContextText: Sendable {
 
     public var readable: String {
         var result = display as NSString
-        for mention in mentions.reversed() { result = result.replacingCharacters(in: mention.displayRange, with: mention.skill.title) as NSString }
-        return (result as String).replacingOccurrences(of: ContextMentions.marker, with: "")
+        for mention in mentions.reversed() { result = result.replacingCharacters(in: mention.displayRange, with: mention.skill.mentionTitle) as NSString }
+        return ContextMentions.strippingMarkers(result as String)
     }
     public func sourceOffset(_ displayOffset: Int) -> Int {
         let offset = max(0, min(display.utf16.count, displayOffset))

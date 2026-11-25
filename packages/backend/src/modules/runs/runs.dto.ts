@@ -19,6 +19,7 @@ export type ToolCallStatus = "queued" | "running" | "done" | "error" | "canceled
 // Run DTOs
 // ─────────────────────────────────────────────────────────────
 export interface CreateRunPayload {
+  assistantId?: string;
   id: string;
   accountId: string;
   workspaceId?: string;
@@ -61,6 +62,7 @@ export interface WorkspaceRunListOptions {
 }
 
 export interface RunResponse extends BackendOwnership {
+  assistantId?: string | null;
   id: string;
   accountId: string;
   workspaceId: string | null;
@@ -366,6 +368,9 @@ export interface StartRunContextItem {
 
 /** Payload for starting a new work run */
 export interface StartRunPayload {
+  assistantId?: string;
+  /** Internal durable assistant dispatch identity; must not already exist. */
+  reservedRunId?: string;
   providerTurnLineage?: ProviderTurnLineage;
   /** Correlates immediate local feedback with the persisted prompt. */
   clientPromptId?: string;
@@ -380,6 +385,8 @@ export interface StartRunPayload {
   goal: string;
   /** Page being worked on; its instructions stay outside the user prompt. */
   atlasPageId?: string;
+  /** Starts a run from the Atlas image creator. */
+  atlasImage?: true;
   model?: string;
   systemPrompt?: string;
   initialContext?: StartRunContextItem[];

@@ -33,8 +33,6 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run lint
-      - name: Verify Expo package compatibility
-        run: npx expo install --check
       - name: Export the iOS bundle
         run: npx expo export --platform ios --output-dir "${{ runner.temp }}/mains-mobile-ios"
 
@@ -185,7 +183,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        codex-version: ["0.153.0", "0.162.1", "0.166.0", "0.167.0", "latest"]
+        codex-version: ["0.167.0", "0.171.0", "0.172.0", "latest"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

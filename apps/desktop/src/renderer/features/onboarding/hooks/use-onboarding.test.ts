@@ -22,6 +22,7 @@ import {
   type AppSettings,
 } from "@/lib/redux/api/appSettingsApi";
 import type { DetectedClis } from "@/lib/redux/api/providersApi";
+import type { GitHubCliStatus } from "@mains/contracts/github-cli";
 import appSettingsReducer, {
   setTheme,
   setThemeChoice,
@@ -87,6 +88,7 @@ function createHarness(
     signedOut?: boolean;
     copilot?: boolean;
     copilotSignedOut?: boolean;
+    gitHubCli?: GitHubCliStatus;
   } = {},
 ) {
   let settings = {
@@ -105,6 +107,7 @@ function createHarness(
   };
   let signedOut = options.signedOut ?? false;
   let copilotSignedOut = options.copilotSignedOut ?? false;
+  let gitHubCli = options.gitHubCli ?? { status: "ready", login: "mains-user" };
   const spaces = [
     {
       id: "claude-space",
@@ -139,6 +142,7 @@ function createHarness(
       );
     if (channel === CHANNELS.providers.detectInstalled)
       return options.failDetection ? fail("Detection failed") : ok(detected);
+    if (channel === CHANNELS.gitFlow.getGitHubCliStatus) return ok(gitHubCli);
     if (channel === CHANNELS.providers.getAccountInfo && args[0] === "copilot_cli")
       return ok({
         account: copilotSignedOut ? null : { type: "copilot", login: "mains-user" },
@@ -194,6 +198,9 @@ function createHarness(
     },
     setCopilotSignedOut: (next: boolean) => {
       copilotSignedOut = next;
+    },
+    setGitHubCli: (next: GitHubCliStatus) => {
+      gitHubCli = next;
     },
   };
 }
@@ -482,6 +489,7 @@ describe("onboarding flow", () => {
     act(() => result.current.goNext());
     act(() => result.current.goNext());
     act(() => result.current.goNext());
+    act(() => result.current.goNext());
     expect(result.current.step).toBe("worktrees");
     expect(result.current.canContinue).toBe(false);
     options.failSettings = false;
@@ -630,7 +638,7 @@ describe("onboarding flow", () => {
     act(() => result.current.goNext());
     expect(result.current.step).toBe("providers");
     act(() => result.current.skipProvider());
-    expect(result.current.step).toBe("theme");
+    expect(result.current.step).toBe("github-cli");
     moveToLastStep(result);
     act(() => result.current.goNext());
     await waitFor(() =>
@@ -723,14 +731,15 @@ describe("onboarding flow", () => {
       ).toBe(false),
     );
     fireEvent.click(view.getByRole("button", { name: "Continue" }));
+    await view.findByText("Signed in as @mains-user.");
+    fireEvent.click(view.getByRole("button", { name: "Continue" }));
     await view.findByRole("radio", { name: "Light" });
     fireEvent.click(view.getByRole("button", { name: "Continue" }));
     await view.findByRole("radio", { name: /^Yes, use my current checkout\./ });
     fireEvent.click(view.getByRole("button", { name: "Continue" }));
     const finish = await view.findByRole("button", { name: "Get started" });
     const progress = view.getByRole("progressbar");
-    expect(progress.getAttribute("aria-valuenow")).toBe("5");
-    expect(progress.getAttribute("aria-valuemax")).toBe("5");
+    expect(progress.getAttribute("aria-valuetext")).toBe("Step 6 of 6");
     expect(view.queryByLabelText("Reserved card")).toBeNull();
     fireEvent.click(finish);
     await waitFor(() =>
@@ -740,8 +749,32 @@ describe("onboarding flow", () => {
     );
   });
 
+  it("checks GitHub CLI in step three and picks up installation and sign-in on recheck", async () => {
+    const harness = createHarness({ gitHubCli: { status: "missing" } });
+    const view = render(createElement(OnboardingScreen), { wrapper: harness.wrapper });
+    fireEvent.click(view.getByRole("button", { name: "Let’s begin" }));
+    expect(harness.invoke.mock.calls.some(([channel]) => channel === CHANNELS.gitFlow.getGitHubCliStatus)).toBe(false);
+    fireEvent.click(view.getByRole("button", { name: "Set up later" }));
+
+    await view.findByRole("button", { name: "Install GitHub CLI" });
+    expect(view.getByRole("progressbar").getAttribute("aria-valuetext")).toBe("Step 3 of 6");
+    expect(view.getByRole("button", { name: "Copy sign-in command" })).toBeTruthy();
+
+    harness.setGitHubCli({ status: "signed-out" });
+    fireEvent.click(view.getByRole("button", { name: "Recheck" }));
+    await view.findByRole("heading", { name: "Sign in to GitHub CLI" });
+    expect(view.queryByRole("button", { name: "Install GitHub CLI" })).toBeNull();
+    expect(view.getByText("gh auth login")).toBeTruthy();
+
+    harness.setGitHubCli({ status: "ready", login: "octocat" });
+    fireEvent.click(view.getByRole("button", { name: "Recheck" }));
+    await view.findByText("Signed in as @octocat.");
+    fireEvent.click(view.getByRole("button", { name: "Continue" }));
+    await view.findByRole("radio", { name: "Light" });
+  });
+
   it("uses the same provider guard for keyboard navigation and leaves radio arrows alone", async () => {
-    const harness = createHarness({ missing: true });
+    const harness = createHarness({ missing: true, gitHubCli: { status: "unavailable" } });
     const view = render(createElement(OnboardingScreen), {
       wrapper: harness.wrapper,
     });
@@ -756,6 +789,8 @@ describe("onboarding flow", () => {
       "2",
     );
     fireEvent.click(view.getByRole("button", { name: "Set up later" }));
+    await view.findByRole("heading", { name: "Couldn’t verify GitHub CLI" });
+    fireEvent.click(view.getByRole("button", { name: "Set up later" }));
     await waitFor(() =>
       expect(view.getByRole("radio", { name: /^Light$/ })).toBeTruthy(),
     );
@@ -763,7 +798,7 @@ describe("onboarding flow", () => {
       key: "ArrowRight",
     });
     expect(view.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
-      "3",
+      "4",
     );
   });
 
@@ -799,6 +834,8 @@ describe("onboarding flow", () => {
       ).toBe(false),
     );
     fireEvent.click(view.getByRole("button", { name: "Continue" }));
+    await view.findByText("Signed in as @mains-user.");
+    fireEvent.click(view.getByRole("button", { name: "Continue" }));
     const dark = await view.findByRole("radio", { name: "Dark" });
     expect(dark.getAttribute("aria-checked")).toBe("true");
     fireEvent.keyDown(dark, { key: "Home" });
@@ -815,7 +852,7 @@ describe("onboarding flow", () => {
     expect(dark.getAttribute("aria-checked")).toBe("true");
     expect(view.getByRole("main").getAttribute("data-appearance")).toBe("dark");
     expect(view.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
-      "3",
+      "4",
     );
     expect(harness.store.getState().appSettings.theme).toBe("dark");
     expect(

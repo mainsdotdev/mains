@@ -26,7 +26,60 @@ try {
       const { default: CopilotStatic } = require('./src/renderer/components/ui/icons/copilot.tsx');
       // Bridge is a status mark, rather than an option in the desktop icon picker.
       const { default: Bridge } = require('./src/renderer/components/ui/icons/bridge.tsx');
-      module.exports = Object.fromEntries(Object.entries({ ...iconRegistry, copilot: CopilotStatic, bridge: Bridge })
+      const { default: MainsFill } = require('./src/renderer/components/ui/icons/mains.tsx');
+      const { default: Queue } = require('./src/renderer/components/ui/icons/queue.tsx');
+      const { default: AssistantSteps } = require('./src/renderer/components/ui/icons/assistant-steps.tsx');
+      const ui = require('./src/renderer/components/ui/icons');
+      const tools = {
+        'arrow-up': ui.ArrowUp, bash: ui.Bash, read: ui.Read, view: ui.ViewFile,
+        edit: ui.Edit, write: ui.Write, trash: ui.Trash, glob: ui.Glob, grep: ui.Grep,
+        search: ui.Search, web: ui.Web, task: ui.Task, workflow: ui.Workflow,
+        'send-message': ui.SendMessage, monitor: ui.Infinite, sql: ui.Sql,
+        'enter-plan': ui.EnterPlan, 'exit-plan': ui.ExitPlan, check: ui.Check,
+        question: ui.Question, generic: ui.GenericTool, cursor: ui.BrowserCursor,
+        mains: ui.MainsStroke, notes: ui.Notes, layers: ui.Layers, file: ui.FileIcon,
+      };
+      const toolIcons = Object.fromEntries(Object.entries(tools)
+        .map(([name, Icon]) => ['tool-' + name, Icon]));
+      const files = require('./src/renderer/components/ui/icons/file-icons');
+      const toolFileIcons = {
+        'workspace-folder': files.FolderIcon,
+        'tool-file-swift': files.SwiftFileIcon,
+        'tool-file-typescript': files.TsFileIcon,
+        'tool-file-javascript': files.JsFileIcon,
+        'tool-file-react': files.ReactFileIcon,
+        'tool-file-json': files.JsonFileIcon,
+        'tool-file-python': files.PythonFileIcon,
+      };
+      // Atlas navigation uses its own outlined icons outside the space registry.
+      const atlasIcons = {
+        'atlas-all': require('./src/renderer/components/ui/icons/library.tsx').default,
+        'atlas-page': require('./src/renderer/components/ui/icons/page.tsx').default,
+        'atlas-file': require('./src/renderer/components/ui/icons/passport.tsx').default,
+        'atlas-image': require('./src/renderer/components/ui/icons/picture.tsx').default,
+        'atlas-bookmark': require('./src/renderer/components/ui/icons/space/bookmark.tsx').default,
+      };
+      // Use the same document-type marks as desktop's Atlas rows, independently
+      // of the generic Docs navigation icon.
+      const { DOC_TYPE_ICONS } = require('./src/renderer/features/workspace/components/document-viewer/doc-type-icons.ts');
+      const documentIcons = Object.fromEntries(Object.entries(DOC_TYPE_ICONS)
+        .map(([type, Icon]) => ['atlas-document-' + type, Icon]));
+      const modelIcons = {
+        'model-muse': require('./src/renderer/components/ui/icons/muse.tsx').default,
+        'model-deepseek': require('./src/renderer/components/ui/icons/deep-seek.tsx').default,
+        'model-gpt': require('./src/renderer/components/ui/icons/gpt.tsx').default,
+        'model-meta': require('./src/renderer/components/ui/icons/meta.tsx').default,
+        'model-gemini': require('./src/renderer/components/ui/icons/gemini.tsx').default,
+        'model-grok': require('./src/renderer/components/ui/icons/grok.tsx').default,
+        'model-kimi': require('./src/renderer/components/ui/icons/kimi.tsx').default,
+        'model-zai': require('./src/renderer/components/ui/icons/zai.tsx').default,
+        'model-bot': require('./src/renderer/components/ui/icons/bot.tsx').default,
+      };
+      module.exports = Object.fromEntries(Object.entries({
+        ...iconRegistry, copilot: CopilotStatic, bridge: Bridge, queue: Queue, 'mains-fill': MainsFill,
+        'assistant-steps': AssistantSteps, 'project-folder': ui.ProjectFolder, 'bolt-fill': ui.BoltFill,
+        ...atlasIcons, ...documentIcons, ...modelIcons, ...toolIcons, ...toolFileIcons,
+      })
         .map(([name, Icon]) => [name, renderToStaticMarkup(React.createElement(Icon))]));
     `, resolveDir: desktopRoot, loader: 'tsx' },
     bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic',
@@ -51,6 +104,8 @@ for (const [name, markup] of Object.entries(icons)) {
     // opacity, inherited strokes and masking rather than flattening to paths.
     for (const attr of ['width', 'height', 'class', 'style']) element.removeAttribute(attr);
     for (const title of element.querySelectorAll('title')) title.remove();
+    // Desktop's GPT icon has an off-canvas accessible name; native supplies its own.
+    for (const text of element.querySelectorAll('text[x="-9999"]')) text.remove();
     for (const child of element.querySelectorAll('[class]')) child.removeAttribute('class');
     // Desktop's Mains mark uses currentColor inside an alpha mask. Native SVG
     // template rendering reads the black paint as zero luminance instead.
@@ -77,7 +132,8 @@ for (const [name, markup] of Object.entries(icons)) {
     dom.window.close();
   }
   const folder = new URL(`registry-${name}.imageset/`, root);
-  const contents = JSON.stringify({ images: [{ filename: 'icon.svg', idiom: 'universal' }], info: { author: 'xcode', version: 1 }, properties: { 'preserves-vector-representation': true, 'template-rendering-intent': 'template' } }, null, 2) + '\n';
+  const rendering = name.startsWith('tool-file-') ? 'original' : 'template';
+  const contents = JSON.stringify({ images: [{ filename: 'icon.svg', idiom: 'universal' }], info: { author: 'xcode', version: 1 }, properties: { 'preserves-vector-representation': true, 'template-rendering-intent': rendering } }, null, 2) + '\n';
   if (check) {
     for (const [file, expected] of [['icon.svg', svg], ['Contents.json', contents]]) {
       if (await readFile(new URL(file, folder), 'utf8').catch(() => null) !== expected) {

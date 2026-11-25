@@ -70,6 +70,8 @@ const owner = { id: "voice", title: "Original voice chat", spaceId: "original-sp
 const destinations = {
   "Own chat": "/code/runs/voice",
   "Another chat": "/code/runs/worker",
+  "Own Mate chat": "/assistants?assistant=mate&run=voice",
+  "Another Mate chat": "/assistants?assistant=mate&run=worker",
   "Same workspace chat": "/code/workspace?chat=worker",
   "Editor": "/code/workspace?tab=editor",
   "Settings": "/settings?section=codex",
@@ -85,12 +87,13 @@ function Shell() {
   useRealtimeVoiceLifecycle();
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
+  const mateRunId = pathname === "/assistants" ? new URLSearchParams(search).get("run") : null;
   const displayedRunId = pathname === "/code/runs/voice" ? "voice"
-    : pathname === "/code/runs/worker" || search === "?chat=worker" ? "worker" : null;
+    : pathname === "/code/runs/worker" || search === "?chat=worker" ? "worker" : mateRunId;
   return <>
     {Object.entries(destinations).map(([label, path]) => <button key={label} onClick={() => navigate(path)}>{label}</button>)}
     <aside aria-label="Primary navigation"><RealtimeVoiceDock /></aside>
-    {pathname.startsWith("/code") && <ChatPage displayedRunId={displayedRunId} composerRunId={displayedRunId ?? "voice"} />}
+    {(pathname.startsWith("/code") || mateRunId) && <ChatPage displayedRunId={displayedRunId} composerRunId={displayedRunId ?? "voice"} />}
   </>;
 }
 
@@ -156,6 +159,21 @@ describe("voice call across navigation", () => {
     expect(h.voice.toggleMute).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByRole("menuitem", { name: "End voice chat" }));
     expect(h.voice.stop).toHaveBeenCalledOnce();
+  });
+
+  it("moves a Mate call between its chat and the dock when switching conversations", () => {
+    h.run = { ...owner, assistantId: "mate" };
+    mount(destinations["Own Mate chat"]);
+    expect(screen.getByTestId("orb").dataset.size).toBe("full");
+    fireEvent.click(screen.getByRole("button", { name: "Another Mate chat" }));
+    expect(screen.getByTestId("orb").dataset.size).toBe("compact");
+    openVoiceMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Return to voice chat" }));
+    expect(h.jump).toHaveBeenCalledExactlyOnceWith(h.run);
+    fireEvent.click(screen.getByRole("button", { name: "Own Mate chat" }));
+    expect(screen.getByTestId("orb").dataset.size).toBe("full");
+    expect(h.voice.stop).not.toHaveBeenCalled();
+    expect(h.voice.start).not.toHaveBeenCalled();
   });
 
   it("keeps connecting, pending closure, retry and error dismissal reachable outside the chat", () => {
@@ -252,7 +270,7 @@ describe("voice call across navigation", () => {
     expect(h.jump).not.toHaveBeenCalled();
   });
 
-  it.each([destinations.Settings, destinations["Another chat"]])("shows the dock during a route transition even with stale chat presence (%s)", (path) => {
+  it.each([destinations.Settings, destinations["Another chat"], destinations["Another Mate chat"]])("shows the dock during a route transition even with stale chat presence (%s)", (path) => {
     const hide = voiceChatPresence.show("voice");
     try {
       mount(path);

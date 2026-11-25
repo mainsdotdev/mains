@@ -200,7 +200,7 @@ export default function AddProjectModal({
           <Button
             isLoading={isCreating}
             type="submit"
-            variant="submit"
+            variant="primary"
             disabled={
               isBusy ||
               (isClone ? !url.trim() || !clonePath.trim() : invalidName)

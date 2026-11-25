@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Button, SegmentedTabs, Textarea, toast } from "@/components/ui";
 import { Close } from "@/components/ui/icons";
-import type { AnnotatableDocumentType } from "@mains/contracts/document-annotations";
-import { documentAnnotationPageLabel } from "@mains/contracts/document-annotations";
+import { documentAnnotationPageLabel, readDocumentAnnotations, type AnnotatableDocumentType, type DocumentAnnotationRect } from "@mains/contracts/document-annotations";
 import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
 import { addContextItemForKey } from "@/lib/redux/slices/workspaceSlice";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
@@ -12,7 +11,9 @@ import { annotationViewIdentity, createAnnotationCapture, documentIdentity } fro
 import { localDocumentUrlRevision, subscribeLocalDocumentUrls } from "@/lib/local-document-url";
 
 interface Outline { x: number; y: number; width: number; height: number; label: string; selected: boolean }
-interface Props { surface: DocumentAnnotationSurface; doc: DocumentViewerDoc; onExit: () => void }
+type OverlayRect = Pick<Outline, "x" | "y" | "width" | "height">;
+interface DraftOutline { id: string; number: number; label: string; rects: OverlayRect[] }
+interface Props { surface: DocumentAnnotationSurface; doc: DocumentViewerDoc; active?: boolean; onExit?: () => void }
 
 /** All document formats share themed selection chrome outside their rendering surface. */
 export function DocumentAnnotations(props: Props) {
@@ -21,10 +22,15 @@ export function DocumentAnnotations(props: Props) {
   const revision = useSyncExternalStore(subscribeLocalDocumentUrls, localDocumentUrlRevision);
   const source = documentIdentity(props.doc, revision);
   const key = annotationViewIdentity(ownerKey, source, props.surface);
-  return <DocumentAnnotationEditor key={key} {...props} ownerKey={ownerKey} ready={ready} />;
+  return <DocumentAnnotationEditor key={`${key}:${props.active ?? true}`} {...props} ownerKey={ownerKey} ready={ready} />;
 }
-function DocumentAnnotationEditor({ surface, doc, onExit, ownerKey, ready }: Props & { ownerKey: string; ready: boolean }) {
+function DocumentAnnotationEditor({ surface, doc, active = true, onExit, ownerKey, ready }: Props & { ownerKey: string; ready: boolean }) {
   const dispatch = useAppDispatch();
+  const contextItems = useAppSelector((state) => state.workspace.contextItems);
+  const pending = useMemo(() => ready ? readDocumentAnnotations(contextItems.filter(
+    (item) => item.kind === "document" || item.kind === "presentation",
+  )).filter((item) => item.filePath === doc.path && item.documentType === doc.docType) : [],
+  [contextItems, ready, doc.path, doc.docType]);
   const layer = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const [mode, setMode] = useState<DocumentSelectionMode>("content");
@@ -35,13 +41,14 @@ function DocumentAnnotationEditor({ surface, doc, onExit, ownerKey, ready }: Pro
   const [capture] = useState(createAnnotationCapture);
   useEffect(() => capture.attach(), [capture]);
   const [outlines, setOutlines] = useState<Outline[]>([]);
+  const [draftOutlines, setDraftOutlines] = useState<DraftOutline[]>([]);
   const [card, setCard] = useState({ x: 12, y: 12, width: 320 });
   const [hintBottom, setHintBottom] = useState(12);
   const documentType = doc.docType as AnnotatableDocumentType;
   const pageLabel = (pageNumber: number) => documentAnnotationPageLabel({ documentType, pageNumber });
 
   useEffect(() => {
-    if (busy) return;
+    if (!active || busy) return;
     return observeDocumentSelection(surface, mode, {
       hover: setHovered,
       select: (target) => {
@@ -52,21 +59,23 @@ function DocumentAnnotationEditor({ surface, doc, onExit, ownerKey, ready }: Pro
       },
       invalidRange: () => toast.error("Select text within one page at a time"),
     });
-  }, [surface, mode, busy]);
+  }, [surface, mode, busy, active]);
 
   useEffect(() => {
+    if (!active) return;
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       const path = event.composedPath();
       const viewer = layer.current?.closest("[data-document-viewer-panel]");
       if (!path.includes(surface.root) && !path.includes(layer.current!) && !(viewer && path.includes(viewer)) && event.target !== document.body) return;
-      event.preventDefault(); event.stopPropagation(); onExit();
+      event.preventDefault(); event.stopPropagation(); onExit?.();
     };
     document.addEventListener("keydown", key, true);
     return () => document.removeEventListener("keydown", key, true);
-  }, [surface, onExit]);
+  }, [surface, onExit, active]);
 
   useEffect(() => {
+    if (!active && !pending.length) return;
     let frame = 0;
     const update = () => {
       frame = 0;
@@ -75,18 +84,31 @@ function DocumentAnnotationEditor({ surface, doc, onExit, ownerKey, ready }: Pro
       const bounds = host.getBoundingClientRect();
       const viewport = surface.viewport.getBoundingClientRect();
       setHintBottom(Math.max(12, bounds.bottom - viewport.bottom + 12));
+      const project = (page: DOMRect, rect: DocumentAnnotationRect): OverlayRect[] => {
+        const left = Math.max(page.left + rect.x * page.width, viewport.left);
+        const top = Math.max(page.top + rect.y * page.height, viewport.top);
+        const right = Math.min(page.left + (rect.x + rect.width) * page.width, viewport.right);
+        const bottom = Math.min(page.top + (rect.y + rect.height) * page.height, viewport.bottom);
+        if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) return [];
+        return [{ x: left - bounds.left, y: top - bounds.top, width: right - left, height: bottom - top }];
+      };
+      // Composer context owns unsent requests. Read its saved page-relative
+      // geometry instead of holding PDF text nodes that zoom/virtualization replaces.
+      const pages = surface.pages();
+      setDraftOutlines(pending.flatMap((annotation, index) => {
+        const page = pages[annotation.pageNumber - 1];
+        if (!page?.isConnected) return [];
+        const pageBounds = page.getBoundingClientRect();
+        const rects = annotation.elements.flatMap((element) =>
+          (element.rects?.length ? element.rects : [element.rect]).flatMap((rect) => project(pageBounds, rect)));
+        return rects.length ? [{ id: annotation.id, number: index + 1,
+          label: annotation.comment || documentAnnotationPageLabel(annotation), rects }] : [];
+      }));
       const visible = [...selected, ...(hovered && !selected.includes(hovered) ? [hovered] : [])].flatMap((target) => {
         if (!target.page.isConnected || !target.node.isConnected) return [];
         const page = target.page.getBoundingClientRect();
-        return documentTargetRects(target).flatMap((rect) => {
-          const left = Math.max(page.left + rect.x * page.width, viewport.left);
-          const top = Math.max(page.top + rect.y * page.height, viewport.top);
-          const right = Math.min(page.left + (rect.x + rect.width) * page.width, viewport.right);
-          const bottom = Math.min(page.top + (rect.y + rect.height) * page.height, viewport.bottom);
-          if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) return [];
-          return [{ x: left - bounds.left, y: top - bounds.top, width: right - left, height: bottom - top,
-            label: `${documentAnnotationPageLabel({ documentType, pageNumber: target.pageNumber })} · ${target.element.name}`, selected: selected.includes(target) }];
-        });
+        return documentTargetRects(target).flatMap((rect) => project(page, rect).map((position) => ({ ...position,
+          label: `${documentAnnotationPageLabel({ documentType, pageNumber: target.pageNumber })} · ${target.element.name}`, selected: selected.includes(target) })));
       });
       setOutlines(visible);
       const anchor = [...visible].reverse().find((outline) => outline.selected);
@@ -101,12 +123,17 @@ function DocumentAnnotationEditor({ surface, doc, onExit, ownerKey, ready }: Pro
     if (layer.current) observer.observe(layer.current);
     const page = selected[0]?.page ?? hovered?.page;
     if (page) observer.observe(page);
+    const pages = surface.pages();
+    for (const annotation of pending) {
+      const page = pages[annotation.pageNumber - 1];
+      if (page) observer.observe(page);
+    }
     const mutations = new MutationObserver(schedule);
     mutations.observe(surface.root, { attributes: true, subtree: true, childList: true, attributeFilter: ["style"] });
     window.addEventListener("resize", schedule); update();
     return () => { observer.disconnect(); mutations.disconnect(); surface.viewport.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule); if (frame) cancelAnimationFrame(frame); };
-  }, [surface, selected, hovered, documentType]);
+  }, [surface, selected, hovered, documentType, pending, active]);
   useEffect(() => { if (selected.length) input.current?.focus({ preventScroll: true }); }, [selected.length]);
 
   const add = async () => {
@@ -130,6 +157,17 @@ function DocumentAnnotationEditor({ surface, doc, onExit, ownerKey, ready }: Pro
     finally { attempt.finish(); if (attempt.visible()) setBusy(false); }
   };
   return <div ref={layer} data-document-annotations="" className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
+    {draftOutlines.filter((annotation) => pending.some((item) => item.id === annotation.id)).map((annotation) => <div key={annotation.id} role="group" aria-label={`Pending edit ${annotation.number}: ${annotation.label}`}>
+      {annotation.rects.map((rect, index) => <div key={index} data-document-draft-outline=""
+        aria-hidden="true" className="absolute border border-accent/60 bg-accent/5"
+        style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}>
+        {index === 0 && <span title={annotation.label}
+          className="pointer-events-auto absolute -left-2 -top-2.5 flex size-5 items-center justify-center rounded-full bg-accent text-[10px] font-medium text-accent-foreground shadow-sm">
+          {annotation.number}
+        </span>}
+      </div>)}
+    </div>)}
+    {active && <>
     <div className="pointer-events-auto absolute right-3 top-3 rounded-full bg-primary-50 shadow-lg dark:bg-primary-900">
       <SegmentedTabs<DocumentSelectionMode>
         aria-label="Annotation selection" semantics="radiogroup"
@@ -169,5 +207,6 @@ function DocumentAnnotationEditor({ surface, doc, onExit, ownerKey, ready }: Pro
     </div> : <div style={{ bottom: hintBottom }} className="absolute left-1/2 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full bg-primary-50/95 px-3 py-1.5 text-center text-xs text-primary-600 shadow-lg dark:bg-primary-900/95 dark:text-primary-300">
       {mode === "region" ? "Drag to select an area" : surface.textSelection ? "Select text or click an item" : "Click a text box, image or shape"} · Esc to exit
     </div>}
+    </>}
   </div>;
 }

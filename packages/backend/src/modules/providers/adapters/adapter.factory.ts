@@ -557,6 +557,7 @@ export async function consumeRateLimitResetCreditForProvider(
 }
 
 type GoalInfo = import("../../../../shared/adapter.types").GoalInfo;
+type GoalWriteGuard = import("../../../../shared/adapter.types").GoalWriteGuard;
 type GoalSetParams = import("../../../../shared/adapter.types").GoalSetParams;
 type GoalMutationOrigin = import("@mains/contracts/provider-goals").GoalMutationOrigin;
 
@@ -564,10 +565,11 @@ export async function setGoalForProvider(
   provider: ProviderResponse,
   runId: string,
   params: GoalSetParams,
+  guard?: GoalWriteGuard,
 ): Promise<GoalInfo | null> {
   const adapter = createWorkAdapter(provider);
   if (!adapter.setGoal) return null;
-  return adapter.setGoal(runId, params);
+  return adapter.setGoal(runId, params, guard);
 }
 
 export async function getGoalForProvider(
@@ -583,8 +585,9 @@ export async function clearGoalForProvider(
   provider: ProviderResponse,
   runId: string,
   origin?: GoalMutationOrigin,
+  guard?: GoalWriteGuard,
 ): Promise<boolean> {
   const adapter = createWorkAdapter(provider);
   if (!adapter.clearGoal) return false;
-  return adapter.clearGoal(runId, origin);
+  return adapter.clearGoal(runId, origin, guard);
 }

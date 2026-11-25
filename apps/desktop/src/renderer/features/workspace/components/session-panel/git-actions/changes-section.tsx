@@ -222,7 +222,7 @@ export function ChangesSection({ panel }: { panel: GitActionsPanel }) {
                 dispatch(openReviewTab());
                 dispatch(setSessionPanelOpen(false));
               }}
-              className="glass-button flex w-full items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-medium text-primary-900 transition-colors hover:bg-primary-100 dark:text-primary-100 dark:hover:bg-primary/5"
+              className="button-neutral border-0 flex w-full items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-medium text-primary-900 dark:text-primary-100"
             >
               <Review className="size-3.5" />
               Open Review mode
