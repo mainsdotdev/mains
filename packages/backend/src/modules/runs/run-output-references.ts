@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { localFileReference } from "@mains/contracts/local-file-reference";
-import { OUTPUT_DOCUMENT_TYPES, OUTPUT_IMAGE_EXTENSIONS } from "@mains/contracts/output-files";
+import { OUTPUT_DOCUMENT_TYPES, OUTPUT_IMAGE_EXTENSIONS, outputMediaMimeType } from "@mains/contracts/output-files";
 
 export function resolveOutputReference(reference: string, root: string | null): string | null {
   let value = localFileReference(reference)?.path;
@@ -41,7 +41,7 @@ export function outputReferences(text: string, root: string | null) {
     const file = literal ? resolveOutputFilePath(value, root) : resolveOutputReference(value, root);
     if (!file) return;
     const extension = path.extname(file).slice(1).toLowerCase();
-    if (!Object.prototype.hasOwnProperty.call(OUTPUT_DOCUMENT_TYPES, extension) && !OUTPUT_IMAGE_EXTENSIONS.has(extension)) return;
+    if (!Object.prototype.hasOwnProperty.call(OUTPUT_DOCUMENT_TYPES, extension) && !OUTPUT_IMAGE_EXTENSIONS.has(extension) && !outputMediaMimeType(extension)) return;
     files.add(file);
     if (image) embedded.add(file);
   };

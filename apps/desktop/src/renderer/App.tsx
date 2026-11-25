@@ -66,6 +66,7 @@ import { useAppSettingsEvents } from "./hooks/use-app-settings-events";
 import { useOnboardingWindow } from "./features/onboarding/hooks/use-onboarding-window";
 import { useBridgeStatus } from "./features/bridge/hooks/use-bridge";
 import { useCreatedPullRequests } from "./features/pull-requests/hooks/use-created-pull-requests";
+import { useStartupWorkspaceDiffRefresh } from "./features/workspace/hooks/use-startup-workspace-diff-refresh";
 import { useGetRunByIdQuery, useGetWorkspaceQuery, useListWorkspacesQuery } from "./lib/redux/api";
 import {
   KeyboardShortcutsProvider,
@@ -164,7 +165,7 @@ function AppContent() {
   const sessionRunId = useAppSelector((state) =>
     selectSessionRunId(state.workspace),
   );
-  const { data: knownWorkspaces = [] } = useListWorkspacesQuery();
+  const { data: knownWorkspaces = [], currentData: currentWorkspaces } = useListWorkspacesQuery();
   const { currentData: selectedWorkspace } = useGetWorkspaceQuery(activeWorkspaceId ?? "", { skip: !activeWorkspaceId });
   const { currentData: selectedRun } = useGetRunByIdQuery(sessionRunId ?? "", { skip: !sessionRunId });
   const workspaceAccess = selectedWorkspace ?? knownWorkspaces.find((workspace) => workspace.id === activeWorkspaceId);
@@ -175,6 +176,7 @@ function AppContent() {
     (state) => state.appSettings.onboardingCompleted,
   );
   const shellVisible = onboardingCompleted || isWeb;
+  useStartupWorkspaceDiffRefresh(!isWeb && shellVisible && !!currentWorkspaces?.length);
   const serverSessions = useRunningServerSessions(shellVisible, workspaceRoute ? activeWorkspaceId : null);
   const hasRunningServers = serverSessions.length > 0;
   // The onboarding screen announces its native mode only once its lazy chunk

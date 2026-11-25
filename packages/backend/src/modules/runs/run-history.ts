@@ -2,6 +2,13 @@ import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload } from "@mains
 import { compareHistoryCursors } from "@mains/contracts/run-history";
 export { historyWindow, compareHistoryCursors } from "@mains/contracts/run-history";
 
+const MOBILE_ROW_PAGE = { rows: 200, bytes: 1024 * 1024 };
+const MOBILE_CONVERSATION_PAGE = { rows: 400, bytes: 2 * 1024 * 1024 };
+
+export function mobileHistoryLimits(request: ReadRunHistoryPayload) {
+  return request.conversationWindow ? MOBILE_CONVERSATION_PAGE : MOBILE_ROW_PAGE;
+}
+
 export function validateHistoryRequest(payload: ReadRunHistoryPayload): void {
   if (!payload || typeof payload.runId !== "string" || !payload.runId) throw new Error("Choose a conversation");
   if (payload.direction && !["latest", "older", "newer", "refresh"].includes(payload.direction)) throw new Error("Invalid history direction");

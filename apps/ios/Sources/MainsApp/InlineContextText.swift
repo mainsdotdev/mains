@@ -13,7 +13,15 @@ enum WorkspaceFileArtwork {
             return (UIImage(named: "registry-workspace-folder") ?? UIImage(systemName: "folder.fill")!)
                 .withTintColor(.systemOrange, renderingMode: .alwaysOriginal)
         }
-        let asset: String? = switch (file.name as NSString).pathExtension.lowercased() {
+        if let asset = fileTypeAssetName(for: file.name), let image = UIImage(named: asset) {
+            return image.withRenderingMode(.alwaysOriginal)
+        }
+        return (UIImage(named: "registry-tool-file") ?? UIImage(systemName: "doc.fill")!)
+            .withTintColor(tint, renderingMode: .alwaysOriginal)
+    }
+
+    static func fileTypeAssetName(for name: String) -> String? {
+        let asset: String? = switch (name as NSString).pathExtension.lowercased() {
         case "swift": "tool-file-swift"
         case "ts", "mts", "cts": "tool-file-typescript"
         case "js", "mjs", "cjs": "tool-file-javascript"
@@ -28,9 +36,7 @@ enum WorkspaceFileArtwork {
         case "pdf": "atlas-document-pdf"
         default: nil
         }
-        if let asset, let image = UIImage(named: "registry-" + asset) { return image.withRenderingMode(.alwaysOriginal) }
-        return (UIImage(named: "registry-tool-file") ?? UIImage(systemName: "doc.fill")!)
-            .withTintColor(tint, renderingMode: .alwaysOriginal)
+        return asset.map { "registry-" + $0 }
     }
 }
 

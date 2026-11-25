@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 import QuickLook
 import UniformTypeIdentifiers
 
@@ -80,6 +81,7 @@ struct OutputPreviewView: View {
     private var runID: String { output?.runId ?? media?.runID ?? linkedFile?.runID ?? "" }
     private var name: String { downloadedName ?? output?.name ?? media?.name ?? linkedFile.flatMap { RunFileReference($0.href)?.name } ?? "File" }
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.conversationOutputPaneVisible) private var outputPaneVisible
     @State private var url: URL?
     @State private var folder: URL?
     @State private var error: String?
@@ -118,7 +120,11 @@ struct OutputPreviewView: View {
                 if let url {
                     if previewType == "image" && !embedded { FullScreenFileImage(url: url) }
                     else if ["text", "markdown"].contains(previewType) { LocalTextFilePreview(url: url, markdown: previewType == "markdown") }
-                    else if previewType != "unsupported", QLPreviewController.canPreview(url as NSURL) { OutputQuickLook(url: url).accessibilityIdentifier("outputPreview") }
+                    else if isVideoFile(url) { OutputVideoPreview(url: url, visible: outputPaneVisible).id(url) }
+                    else if isAudioFile(url) && !outputPaneVisible { Color.clear }
+                    else if previewType != "unsupported" || isAudioFile(url), QLPreviewController.canPreview(url as NSURL) {
+                        OutputQuickLook(url: url).accessibilityIdentifier("outputPreview")
+                    }
                     else {
                         EmptyStateView(artwork: .documents, title: "File ready",
                                        description: Text("A preview isn’t available for this file. Share it or save it to Files.")) {
@@ -135,6 +141,11 @@ struct OutputPreviewView: View {
                         .accessibilityLabel("Opening \(name)").accessibilityValue(progress.formatted(.percent))
                 }
         }
+    }
+    private func isAudioFile(_ url: URL) -> Bool { UTType(filenameExtension: url.pathExtension)?.conforms(to: .audio) == true }
+    private func isVideoFile(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+        return type.conforms(to: .movie) || type.conforms(to: .video)
     }
     private func cleanup() { if let folder { try? FileManager.default.removeItem(at: folder) }; folder = nil; url = nil }
     private func download() async {
@@ -201,6 +212,72 @@ struct OutputPreviewView: View {
             if let destination { try? FileManager.default.removeItem(at: destination) }
             if ticket == loadID { cleanup(); if !Task.isCancelled { self.error = error.localizedDescription } }
         }
+    }
+}
+
+private struct OutputVideoPreview: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let url: URL
+    let visible: Bool
+    @State private var player: AVPlayer?
+    @State private var failed = false
+    @State private var started = false
+
+    var body: some View {
+        Group {
+            if let player {
+                OutputVideoPlayer(player: player, visible: visible)
+                    .accessibilityIdentifier("outputPreview")
+                    .overlay {
+                        if !started {
+                            Button("Play video", systemImage: "play.fill") { player.play() }
+                                .labelStyle(.iconOnly).font(.title2)
+                                .frame(minWidth: 56, minHeight: 56)
+                                .buttonBorderShape(.circle).buttonStyle(.glass)
+                                .environment(\.colorScheme, .dark)
+                        }
+                    }
+                    .onReceive(player.publisher(for: \.timeControlStatus)) { status in
+                        if status == .playing { started = true }
+                    }
+            } else if failed {
+                EmptyStateView(artwork: .documents, title: "Video preview unavailable",
+                               description: Text("Share or save the file to open it in another app.")).centered
+            } else {
+                MediaSkeleton(symbol: "film").accessibilityLabel("Opening video")
+            }
+        }
+        .task(id: url) {
+            let asset = AVURLAsset(url: url)
+            let playable = (try? await asset.load(.isPlayable)) == true
+            guard !Task.isCancelled else { return }
+            if playable { player = AVPlayer(playerItem: AVPlayerItem(asset: asset)) }
+            else { failed = true }
+        }
+    }
+}
+
+private struct OutputVideoPlayer: UIViewControllerRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let player: AVPlayer
+    let visible: Bool
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.allowsPictureInPicturePlayback = false
+        return controller
+    }
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        if controller.player !== player { controller.player = player }
+        if !visible { player.pause() }
+    }
+    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Void) {
+        controller.player?.pause()
+        controller.player = nil
     }
 }
 

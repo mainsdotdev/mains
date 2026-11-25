@@ -9,7 +9,7 @@ import { historyEndAfter } from "@mains/contracts/run-history";
 import { historyEntryTurn } from "@mains/contracts/run-progress";
 import { readAsyncQuestions, type AsyncQuestionAnswer } from "@mains/contracts/async-questions";
 import { PLAN_TOOL_NAMES } from "@mains/contracts/plan-decision";
-import { historyWindow, compareHistoryCursors as compareCursor } from "./run-history";
+import { historyWindow, compareHistoryCursors as compareCursor, mobileHistoryLimits } from "./run-history";
 import type { SQLWrapper, SQL } from "drizzle-orm";
 import {
   runs,
@@ -936,8 +936,6 @@ const artifactHistoryTime = sql`CASE WHEN json_valid(${runArtifacts.metadata})
   THEN CAST(json_extract(${runArtifacts.metadata}, '$.voiceStartedAt') AS INTEGER)
   ELSE ${runArtifacts.createdAt} * 1000 END`;
 
-const MOBILE_HISTORY_ROWS = 200;
-const MOBILE_HISTORY_BYTES = 1024 * 1024 - 16 * 1024;
 const planTool = inArray(sql`lower(replace(replace(replace(${toolCalls.toolName}, ' ', ''), '_', ''), '-', ''))`, PLAN_TOOL_NAMES);
 const planBody = sql`CASE WHEN json_valid(${toolCalls.input}) THEN
   CASE WHEN json_type(${toolCalls.input}, '$.plan') = 'text' THEN json_extract(${toolCalls.input}, '$.plan') END END`;
@@ -979,6 +977,7 @@ function mobileMetadata(column: SQLWrapper, kind?: SQLWrapper): SQL<string | nul
 
 /** A prompt can contain unbounded tools: phone navigation uses chronological rows. */
 function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHistoryPayload): RunHistoryPage {
+  const limits = mobileHistoryLimits(request);
   const allKeys = sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id FROM run_artifacts WHERE run_id = ${request.runId}
     UNION ALL SELECT created_at * 1000 AS timestamp, 'tool' AS source, id FROM tool_calls WHERE run_id = ${request.runId}`;
   const timeline = request.range ? sql`SELECT * FROM (${allKeys}) WHERE ${mobileKeyCut(request.range.start, false)} AND ${mobileKeyCut(request.range.end, true)}` : allKeys;
@@ -988,10 +987,10 @@ function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHis
   const lower = newer || request.direction === "refresh" ? request.cursor : undefined;
   const upper = request.direction === "older" ? request.cursor : request.direction === "refresh" || newer ? request.end : undefined;
   const order = newer ? sql`timestamp, source, id` : sql`timestamp DESC, source DESC, id DESC`;
-  const conversation = request.conversationWindow ? mobileConversationKeys(db, request, first, last) : undefined;
+  const conversation = request.conversationWindow ? mobileConversationKeys(db, request, limits.rows, first, last) : undefined;
   const keys = conversation?.keys ?? db.all<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) WHERE ${and(
     lower ? mobileKeyCut(lower, false) : undefined, upper ? mobileKeyCut(upper, true) : undefined,
-  ) ?? sql`1 = 1`} ORDER BY ${order} LIMIT ${MOBILE_HISTORY_ROWS}`);
+  ) ?? sql`1 = 1`} ORDER BY ${order} LIMIT ${limits.rows}`);
   const artifactIds = keys.filter((key) => key.source === "artifact").map((key) => key.id);
   const toolIds = keys.filter((key) => key.source === "tool").map((key) => key.id);
   const metadata = mobileMetadata(runArtifacts.metadata, runArtifacts.kind);
@@ -1017,6 +1016,7 @@ function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHis
     first: Math.min(...keys.map((key) => key.timestamp)),
     last: Math.max(...keys.map((key) => key.timestamp)),
     ids: explicitTurnIds,
+    limit: limits.rows + 1,
   }) : [];
   if (latestTurn && !turns.some((turn) => turn.id === latestTurn.id)) turns.push(latestTurn);
   const retainedTurns = new Map<number, RunTurnResponse>(latestTurn ? [[latestTurn.id, latestTurn]] : []);
@@ -1031,7 +1031,7 @@ function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHis
       typeof row.metadata?.turnId === "number" ? row.metadata.turnId : undefined);
     const turnBytes = turn && !retainedTurns.has(turn.id) ? Buffer.byteLength(JSON.stringify(turn)) : 0;
     const size = Buffer.byteLength(JSON.stringify(row)) + turnBytes;
-    if (bytes + size > MOBILE_HISTORY_BYTES) { if (conversation) continue; break; }
+    if (bytes + size > limits.bytes - 16 * 1024) { if (conversation) continue; break; }
     bytes += size;
     if (turn) retainedTurns.set(turn.id, turn);
     kept.push(key);
@@ -1074,7 +1074,7 @@ function mobileActivityArtifact(row: RunArtifactResponse): boolean {
 }
 
 /** Select keys first: hidden child activity can never evict the conversation's prompts/replies. */
-function mobileConversationKeys(db: ReturnType<typeof getDb>, request: ReadRunHistoryPayload, first?: RunHistoryCursor, last?: RunHistoryCursor) {
+function mobileConversationKeys(db: ReturnType<typeof getDb>, request: ReadRunHistoryPayload, rowLimit: number, first?: RunHistoryCursor, last?: RunHistoryCursor) {
   const metadata = sql`CASE WHEN json_valid(${runArtifacts.metadata}) THEN ${runArtifacts.metadata} ELSE '{}' END`;
   const foreground = sql`coalesce(json_extract(${metadata}, '$.isFromSubagent'), 0) <> 1
     AND json_extract(${metadata}, '$.agentId') IS NULL
@@ -1096,11 +1096,10 @@ function mobileConversationKeys(db: ReturnType<typeof getDb>, request: ReadRunHi
     WHERE run_id = ${request.runId} AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, from, false)}
       ${to ? sql`AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, to, true)}` : sql``} AND ${extra}
     ORDER BY timestamp DESC, id DESC LIMIT ${limit}`);
-  const prompts = anchors.filter(key => key.source === "artifact" && compareCursor(key, start) >= 0 && (!range.end || compareCursor(key, range.end) < 0));
-  // One final visible reply per block has priority over intermediate commentary.
-  const replies = prompts.map((prompt, index) => artifactKeys(prompt, prompts[index + 1] ?? range.end,
-    sql`kind IN ('report', 'result', 'command_result') AND ${visible}`, 1)[0]);
-  const messages = artifactKeys(start, range.end, visible, MOBILE_HISTORY_ROWS);
+  const dialogue = sql`kind IN ('user-prompt', 'report', 'result', 'command_result')`;
+  const latestPrompt = artifactKeys(start, range.end, sql`kind = 'user-prompt' AND ${foreground}`, 1);
+  const messages = artifactKeys(start, range.end, sql`${visible} AND ${dialogue}`, rowLimit);
+  const otherVisible = artifactKeys(start, range.end, sql`${visible} AND NOT ${dialogue}`, rowLimit);
   const toolsInWindow = sql`SELECT created_at * 1000 AS timestamp, 'tool' AS source, id FROM tool_calls
     WHERE run_id = ${request.runId} AND ${historyCut(sql`created_at * 1000`, "tool", toolCalls.id, start, false)}
     ${range.end ? sql`AND ${historyCut(sql`created_at * 1000`, "tool", toolCalls.id, range.end, true)}` : sql``}`;
@@ -1108,7 +1107,7 @@ function mobileConversationKeys(db: ReturnType<typeof getDb>, request: ReadRunHi
     AND coalesce(json_extract(CASE WHEN json_valid(${toolCalls.metadata}) THEN ${toolCalls.metadata} ELSE '{}' END, '$.isFromSubagent'), 0) <> 1
     ORDER BY timestamp DESC, id DESC LIMIT 20`);
   const calls = db.all<RunHistoryCursor>(sql`${toolsInWindow}
-    ORDER BY CASE WHEN parent_tool_call_id IS NULL THEN 0 ELSE 1 END, timestamp DESC, id DESC LIMIT ${MOBILE_HISTORY_ROWS}`);
+    ORDER BY CASE WHEN parent_tool_call_id IS NULL THEN 0 ELSE 1 END, timestamp DESC, id DESC LIMIT ${rowLimit}`);
   const other = artifactKeys(start, range.end, sql`1 = 1`, 4);
   const questions = artifactKeys(start, range.end, sql`${foreground} AND json_extract(${metadata}, '$.source') = 'codex_async_questions'`, 1);
   const thinking = artifactKeys(start, range.end, sql`${foreground} AND (kind = 'thinking' OR json_extract(${metadata}, '$.kind') = 'thinking'
@@ -1123,14 +1122,14 @@ function mobileConversationKeys(db: ReturnType<typeof getDb>, request: ReadRunHi
           WHERE run_id = ${request.runId} AND id = ${cursor.id} AND created_at * 1000 = ${cursor.timestamp}`)
     : undefined;
   const ordered: RunHistoryCursor[] = focus ? [focus] : [];
-  ordered.push(...questions);
-  for (let index = prompts.length - 1; index >= 0; index--) {
-    ordered.push(prompts[index]);
-    if (replies[index]) ordered.push(replies[index]);
-  }
-  ordered.push(...plans, ...thinking, ...messages, ...calls, ...other);
+  // Keep the newest prompt with its dialogue. Budget messages newest-first, then
+  // sort the retained rows chronologically for display.
+  ordered.push(...questions, ...latestPrompt, ...thinking, ...messages, ...plans, ...otherVisible, ...calls, ...other);
   const unique = new Map<string, RunHistoryCursor>();
-  for (const key of ordered) if (unique.size < MOBILE_HISTORY_ROWS) unique.set(`${key.source}:${key.id}`, key);
+  for (const key of ordered) {
+    if (unique.size === rowLimit) break;
+    unique.set(`${key.source}:${key.id}`, key);
+  }
   const counts = db.get<{ total: number }>(sql`SELECT (
     SELECT count(*) FROM run_artifacts WHERE run_id = ${request.runId} AND ${detail} AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, start, false)}
       ${range.end ? sql`AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, range.end, true)}` : sql``}) + (
@@ -1140,7 +1139,7 @@ function mobileConversationKeys(db: ReturnType<typeof getDb>, request: ReadRunHi
 }
 
 /** Only compact progress and file summaries enter a phone page; patches stay in SQLite. */
-function selectMobileTurns(runId: string, range?: { first: number; last: number; ids: number[] }, latest = false): RunTurnResponse[] {
+function selectMobileTurns(runId: string, range?: { first: number; last: number; ids: number[]; limit: number }, latest = false): RunTurnResponse[] {
   const time = sql`coalesce(${runTurns.startedAt}, ${runTurns.createdAt}) * 1000`;
   const rows = getDb().select({
     turn: { ...getTableColumns(runTurns),
@@ -1168,7 +1167,7 @@ function selectMobileTurns(runId: string, range?: { first: number; last: number;
       ${range.ids.length ? sql`OR ${inArray(runTurns.id, range.ids)}` : sql``}
     )` : undefined))
     .orderBy(latest ? desc(runTurns.turnIndex) : asc(runTurns.turnIndex))
-    .limit(latest ? 1 : MOBILE_HISTORY_ROWS + 1).all();
+    .limit(range?.limit ?? 1).all();
   return rows.map((row) => mapTurnRowToResponse(row.turn, row.changes?.id
     ? { ...mapTurnChangesSummary(row.changes), fileCount: row.fileCount } : null));
 }

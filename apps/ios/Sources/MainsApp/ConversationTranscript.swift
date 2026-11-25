@@ -155,7 +155,7 @@ struct ConversationTranscript: View {
             hasLocalContinuation: pending != nil && pending?.isSteering != true)
         let footers = isMate || run?.mode == "chat" ? [:] : TurnChangeFooters.build(sections: sections, turns: page?.turns ?? [], atLatest: page?.hasNewer != true)
         return ScrollView {
-            // The backend already caps this page at 200 rows / 1 MB. Eager
+            // The backend already caps this page at 400 rows / 2 MB. Eager
             // measurement avoids lazy height estimates shifting a live tail.
             VStack(alignment: .leading, spacing: TranscriptRowMetrics.spacing) {
                 if page?.hasOlder == true {
@@ -165,6 +165,15 @@ struct ConversationTranscript: View {
                             .opacity(loadingDirection == "older" ? 0.5 : 1)
                     }.buttonStyle(.plain).disabled(session.historyLoading || scroll.paging || !session.isConnected)
                         .accessibilityIdentifier("loadEarlierMessages")
+                }
+                if let activity = page?.activity {
+                    Button {
+                        activitySelection = ConversationActivitySelection(runID: runID, owner: session.ownership, range: activity)
+                    } label: {
+                        Label("More messages and activity", systemImage: "list.bullet.rectangle")
+                            .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 44)
+                    }.buttonStyle(ChatPressStyle()).disabled(!session.isConnected)
+                        .accessibilityIdentifier("moreConversationActivity")
                 }
                 if !centersEmptyState { Color.clear.frame(height: 1).id("transcript-top") }
                 if needsConnection {
@@ -190,15 +199,6 @@ struct ConversationTranscript: View {
                         Color.clear.preference(key: TranscriptFramesKey.self,
                             value: [section.id: TranscriptFrame(rect: geometry.frame(in: .named("transcript-content")), revision: landing?.id)])
                     })
-                }
-                if let activity = page?.activity {
-                    Button {
-                        activitySelection = ConversationActivitySelection(runID: runID, owner: session.ownership, range: activity)
-                    } label: {
-                        Label("More messages and activity", systemImage: "list.bullet.rectangle")
-                            .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 44)
-                    }.buttonStyle(ChatPressStyle()).disabled(!session.isConnected)
-                        .accessibilityIdentifier("moreConversationActivity")
                 }
                 if !needsConnection, let error = historyError {
                     ChatNotice(title: "Messages couldn't load", message: error, symbol: "wifi.exclamationmark", warning: true,

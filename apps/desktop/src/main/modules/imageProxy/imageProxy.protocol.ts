@@ -140,6 +140,7 @@ export function registerImageProxyScheme() {
         secure: true,
         supportFetchAPI: true,
         corsEnabled: true,
+        stream: true,
       },
     },
     {
@@ -242,7 +243,7 @@ export function registerImageProxyHandler() {
   protocol.handle("mains-localdoc", async (request) => {
     try {
       const requestUrl = new URL(request.url);
-      return await serveLocalDocument(requestUrl);
+      return await serveLocalDocument(requestUrl, request.headers.get("range"));
     } catch (error) {
       console.error("[mains-localdoc] handler error:", error);
       return new Response("Local document proxy error", { status: 500 });

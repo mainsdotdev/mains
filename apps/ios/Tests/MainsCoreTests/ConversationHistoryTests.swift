@@ -18,7 +18,7 @@ extension SessionIntegrationTests {
         #expect(main.artifacts.filter { $0.kind == "user-prompt" }.count == 20)
         #expect(session.transcript.rows.contains { $0.text == "Visible prompt 44" })
         #expect(session.transcript.rows.contains { $0.text == "Visible answer 44" })
-        #expect(main.artifacts.count + main.toolCalls.count <= 200)
+        #expect(main.artifacts.count + main.toolCalls.count == 400)
         let following = session.transcript.isFollowing
         var page = try await session.readHistoryActivity(runID: "fixture-run", range: range)
         var seen = Set(page.toolCalls.map(\.id)), count = 0

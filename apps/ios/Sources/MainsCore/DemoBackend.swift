@@ -1345,29 +1345,24 @@ final class DemoBackend {
         }
         var activity: JSONValue = .null
         if conversation {
-            let prompts = selectedRows.filter { $0["kind"].string == "user-prompt" }
+            let newestRows = selectedRows.sorted { Key($0.objectValue, source: "artifact") > Key($1.objectValue, source: "artifact") }
+            let messages = newestRows.filter {
+                ["user-prompt", "report", "result", "command_result"].contains($0["kind"].string ?? "") &&
+                    AgentActivity.foreground($0["metadata"]) && !AgentActivity.thinking(kind: $0["kind"].string ?? "", metadata: $0["metadata"])
+            }
             var priority: [JSONValue] = []
             if let cursor, let row = selectedRows.first(where: { Key($0.objectValue, source: "artifact").id == cursor.id && cursor.source == "artifact" }) { priority.append(row) }
-            for (index, prompt) in prompts.enumerated().reversed() {
-                priority.append(prompt)
-                let key = Key(prompt.objectValue, source: "artifact")
-                let next = index + 1 < prompts.count ? Key(prompts[index + 1].objectValue, source: "artifact") : nil
-                if let reply = selectedRows.last(where: {
-                    let candidate = Key($0.objectValue, source: "artifact")
-                    return ["report", "result"].contains($0["kind"].string ?? "") && AgentActivity.foreground($0["metadata"]) &&
-                        !AgentActivity.thinking(kind: $0["kind"].string ?? "", metadata: $0["metadata"]) && candidate >= key && (next.map { candidate < $0 } ?? true)
-                }) { priority.append(reply) }
-            }
-            priority += selectedRows.reversed()
+            if let prompt = messages.first(where: { $0["kind"].string == "user-prompt" }) { priority.append(prompt) }
+            priority += messages + newestRows
             let originalCount = selectedRows.count + selectedCalls.count
             var retainedRows: [JSONValue] = [], retainedCalls: [JSONValue] = [], seen = Set<String>()
             var bytes = try JSONEncoder().encode(selectedTurns.map(JSONValue.object)).count
             for (source, values) in [("artifact", priority), ("tool", Array(selectedCalls.reversed()))] {
                 for row in values {
                     let id = source + ":" + String(row["id"].number ?? 0)
-                    guard !seen.contains(id), seen.count < 200 else { continue }
+                    guard !seen.contains(id), seen.count < 400 else { continue }
                     let count = try JSONEncoder().encode(row).count
-                    guard bytes + count < 1024 * 1024 - 16 * 1024 else { continue }
+                    guard bytes + count < 2 * 1024 * 1024 - 16 * 1024 else { continue }
                     seen.insert(id); bytes += count
                     if source == "artifact" { retainedRows.append(row) } else { retainedCalls.append(row) }
                 }

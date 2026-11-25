@@ -2,6 +2,7 @@ import { Button, Text } from "@/components/ui";
 import { Download, RequestEdits } from "@/components/ui/icons";
 import { PreviewToolbar } from "@/components/layout/preview-toolbar";
 import { isTextDocType } from "@/lib/document-viewer";
+import { isOutputMediaType } from "@mains/contracts/output-files";
 import { clamp } from "@/lib/layout";
 import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
 
@@ -37,7 +38,7 @@ export function DocumentViewerToolbar({ doc, zoom, onZoomChange, isSaving, onSav
       </Button>}
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {/* Text uses the app's type scale; rendered pages have their own zoom. */}
-        {doc && !isTextDocType(doc.docType) && (
+        {doc && !isTextDocType(doc.docType) && !isOutputMediaType(doc.docType) && (
           <Text as="div" size="inherit" tone="muted" className="glass-card flex h-8 items-center gap-0.5 rounded-full px-0.5">
             <Button variant="icon" iconSize="sm" tooltip="Zoom out" tooltipPosition="bottom"
               onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out">

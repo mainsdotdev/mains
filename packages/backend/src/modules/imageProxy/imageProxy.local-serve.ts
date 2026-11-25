@@ -1,8 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
+import { Readable } from "node:stream";
 import { verifySignedPath } from "./imageProxy.signing";
 import { isLocalImagePreviewSize } from "@mains/contracts/image-preview";
-import { DOCUMENT_PREVIEW_MAX_BYTES } from "@mains/contracts/output-files";
+import { DOCUMENT_PREVIEW_MAX_BYTES, OUTPUT_FILE_MAX_BYTES, outputMediaMimeType } from "@mains/contracts/output-files";
 import { MAX_PREVIEW_SOURCE_BYTES, readImagePreview, UnsupportedImagePreviewError } from "./image-previews";
 
 // Serving signed local files (`mains-localimg://` / `mains-localdoc://` in
@@ -97,7 +98,7 @@ export async function serveLocalImage(requestUrl: URL): Promise<Response> {
   });
 }
 
-export async function serveLocalDocument(requestUrl: URL): Promise<Response> {
+export async function serveLocalDocument(requestUrl: URL, range: string | null = null): Promise<Response> {
   const rawPath = requestUrl.searchParams.get("path");
   const rawExp = requestUrl.searchParams.get("exp");
   const rawSig = requestUrl.searchParams.get("sig");
@@ -111,7 +112,8 @@ export async function serveLocalDocument(requestUrl: URL): Promise<Response> {
   if (resolved.includes("\0")) return new Response("Invalid path", { status: 400 });
 
   const ext = path.extname(resolved).toLowerCase();
-  const mime = LOCALDOC_EXT_MIME[ext];
+  const mediaMime = outputMediaMimeType(ext.slice(1));
+  const mime = LOCALDOC_EXT_MIME[ext] ?? mediaMime;
   if (!mime) return new Response("Unsupported file type", { status: 400 });
 
   let stat: fs.Stats;
@@ -126,6 +128,7 @@ export async function serveLocalDocument(requestUrl: URL): Promise<Response> {
   if (!stat.isFile()) {
     return new Response("Not a file", { status: 404 });
   }
+  if (mediaMime) return serveLocalMedia(resolved, mediaMime, stat, range);
   if (stat.size > MAX_DOCUMENT_SIZE) {
     return new Response("Document too large", { status: 413 });
   }
@@ -141,4 +144,48 @@ export async function serveLocalDocument(requestUrl: URL): Promise<Response> {
       "Access-Control-Allow-Origin": "*",
     },
   });
+}
+
+async function serveLocalMedia(file: string, mime: string, stat: fs.Stats, range: string | null): Promise<Response> {
+  const { size } = stat;
+  if (size > OUTPUT_FILE_MAX_BYTES) return new Response("Media file too large", { status: 413 });
+  const headers = new Headers({
+    "Accept-Ranges": "bytes",
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "private, no-store",
+    "Content-Type": mime,
+    "X-Content-Type-Options": "nosniff",
+  });
+  let start = 0;
+  let end = size - 1;
+  const span = range?.match(/^bytes=(?=\d|-\d)(\d*)-(\d*)$/i);
+  if (span) {
+    if (span[1]) {
+      start = Number(span[1]);
+      if (span[2]) end = Math.min(end, Number(span[2]));
+    } else {
+      start = Math.max(0, size - Number(span[2]));
+    }
+    if (start > end) {
+      headers.set("Content-Range", `bytes */${size}`);
+      return new Response(null, { status: 416, headers });
+    }
+    headers.set("Content-Range", `bytes ${start}-${end}/${size}`);
+  }
+  headers.set("Content-Length", String(end - start + 1));
+  if (size === 0) return new Response(null, { headers });
+  const handle = await fs.promises.open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK).catch(() => null);
+  if (!handle) return new Response("Media file unavailable", { status: 404 });
+  try {
+    const opened = await handle.stat();
+    if (opened.isFile() && opened.dev === stat.dev && opened.ino === stat.ino && opened.size === size && opened.mtimeMs === stat.mtimeMs) {
+      const body = Readable.toWeb(handle.createReadStream({ start, end }), { strategy: { highWaterMark: 1 } });
+      // Node and DOM declarations differ on BYOB readers, but share this stream at runtime.
+      return new Response(body as unknown as ReadableStream<Uint8Array>, { status: span ? 206 : 200, headers });
+    }
+  } catch {
+    // The file may have been removed or replaced between lookup and open.
+  }
+  await handle.close();
+  return new Response("Media file unavailable", { status: 404 });
 }

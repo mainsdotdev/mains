@@ -1034,9 +1034,11 @@ wss.on('connection', socket => {
               if (timeline[0] && (!anchors[0] || compareHistoryCursors(timeline[0], anchors[0]) < 0)) anchors.unshift(timeline[0]);
               ({ start, end } = historyWindow(anchors, input));
               const scoped = timeline.filter(item => (!start || compareHistoryCursors(item, start) >= 0) && (!end || compareHistoryCursors(item, end) < 0));
-              const messages = scoped.filter(item => item.source === 'artifact');
-              const priority = [...(input.cursor ? [input.cursor] : []), ...messages, ...scoped.filter(item => item.source === 'tool')];
-              keys = [...new Map(priority.map(item => [item.source + ':' + item.id, item])).values()].slice(0, 200);
+              const messages = scoped.filter(item => item.source === 'artifact').reverse();
+              const prompt = anchors.findLast(anchor => anchor.source === 'artifact' &&
+                (!start || compareHistoryCursors(start, anchor) <= 0) && (!end || compareHistoryCursors(anchor, end) < 0));
+              const priority = [...(input.cursor ? [input.cursor] : []), ...(prompt ? [prompt] : []), ...messages, ...scoped.filter(item => item.source === 'tool').reverse()];
+              keys = [...new Map(priority.map(item => [item.source + ':' + item.id, item])).values()].slice(0, 400);
               total = scoped.length;
             }
             const ids = new Set(keys.map(item => item.source + ':' + item.id));

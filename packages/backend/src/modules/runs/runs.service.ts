@@ -37,7 +37,7 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { runsRepo } from "./runs.repo";
-import { validateHistoryContentRequest, validateHistoryRequest } from "./run-history";
+import { mobileHistoryLimits, validateHistoryContentRequest, validateHistoryRequest } from "./run-history";
 import { describeRunOutput, readRunOutputChunk, validateOutputReference } from "./run-output-files";
 import type { ListRunOutputsPayload, ReadRunOutputPayload, RunOutputsPage } from "@mains/contracts/run-outputs";
 import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload } from "@mains/contracts/runs";
@@ -116,7 +116,7 @@ import { restoreRecordStorage, stageRecordStorage } from "../../runtime/record-s
 import { withImageContentHashes } from "./run-image-content-hashes";
 import { deliverableReplies, projectRunDeliverables } from "./run-deliverables";
 import { resolveOutputFilePath } from "./run-output-references";
-import { OUTPUT_FILE_MAX_BYTES, OUTPUT_DOCUMENT_TYPES, OUTPUT_IMAGE_EXTENSIONS, TEXT_PREVIEW_MAX_BYTES, type OutputRole } from "@mains/contracts/output-files";
+import { OUTPUT_FILE_MAX_BYTES, OUTPUT_DOCUMENT_TYPES, OUTPUT_IMAGE_EXTENSIONS, TEXT_PREVIEW_MAX_BYTES, outputMediaMimeType, type OutputRole } from "@mains/contracts/output-files";
 import type {
   CreateRunPayload,
   UpdateRunPayload,
@@ -1910,7 +1910,7 @@ export const runsService = {
     if (!candidate) throw new Error("Supply a local output file path");
     const extension = path.extname(candidate).slice(1).toLowerCase();
     const image = OUTPUT_IMAGE_EXTENSIONS.has(extension);
-    if (!image && !Object.prototype.hasOwnProperty.call(OUTPUT_DOCUMENT_TYPES, extension)) throw new Error("Unsupported output file type");
+    if (!image && !Object.prototype.hasOwnProperty.call(OUTPUT_DOCUMENT_TYPES, extension) && !outputMediaMimeType(extension)) throw new Error("Unsupported output file type");
     const roots = [root, path.join(getBackendRuntime().getPath("userData"), "generated-images", runId)];
     if (run.providerId === "codex" && run.sessionId && /^[\w-]+$/.test(run.sessionId))
       roots.push(path.join(os.homedir(), ".codex", "generated_images", run.sessionId));
@@ -1942,7 +1942,7 @@ export const runsService = {
       // Deliverable discovery may hydrate images that the bounded repo query
       // omitted. Pixels are loaded through readImage, never in a transcript page.
       result.artifacts = result.artifacts.map((artifact) => ({ ...artifact, blobData: null }));
-      if (Buffer.byteLength(JSON.stringify(result)) > 1024 * 1024) {
+      if (Buffer.byteLength(JSON.stringify(result)) > mobileHistoryLimits(payload).bytes) {
         throw new Error("Conversation page exceeds the mobile data limit");
       }
     }

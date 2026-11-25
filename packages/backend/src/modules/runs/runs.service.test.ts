@@ -2634,6 +2634,20 @@ describe("runsService", () => {
   // Run Artifact Operations
   // ─────────────────────────────────────────────────────────────
   describe("getArtifactsByRun", () => {
+    it("serves native conversation previews above the legacy mobile byte limit", async () => {
+      const runId = "native-history-budget";
+      createRun(db, { id: runId });
+      for (let index = 0; index < 180; index++) {
+        createRunArtifact(db, { runId, kind: "report", content: "x".repeat(7900) });
+      }
+
+      const native = await runsService.getHistoryPage({ runId, profile: "mobile", conversationWindow: true });
+      const legacy = await runsService.getHistoryPage({ runId, profile: "mobile" });
+      expect(native.artifacts).toHaveLength(180);
+      expect(Buffer.byteLength(JSON.stringify(native))).toBeGreaterThan(1024 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(legacy))).toBeLessThanOrEqual(1024 * 1024);
+    });
+
     it("keeps a large deliverable available for saving while rejecting its inline preview", async () => {
       const runId = "large-registered-document";
       createRun(db, { id: runId, mode: "work", status: "running" });

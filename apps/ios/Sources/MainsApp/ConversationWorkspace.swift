@@ -2,6 +2,7 @@ import SwiftUI
 
 extension EnvironmentValues {
     @Entry var conversationPaneVisible = true
+    @Entry var conversationOutputPaneVisible = true
 }
 
 struct ConversationWorkspace<ConversationContent: View, OutputContent: View>: View {
@@ -33,6 +34,7 @@ struct ConversationWorkspace<ConversationContent: View, OutputContent: View>: Vi
                 .accessibilityHidden(!plan.showsConversation)
             ZStack { output }
                 .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
+                .environment(\.conversationOutputPaneVisible, plan.showsOutput)
                 .opacity(plan.showsOutput ? 1 : 0).allowsHitTesting(plan.showsOutput)
                 .accessibilityHidden(!plan.showsOutput)
         }

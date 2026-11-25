@@ -230,7 +230,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
       webRoot,
       fetchProxiedImage: (url) => imageProxyService.proxyImage(url),
       serveLocalImage: (url) => serveLocalImage(url),
-      serveLocalDocument: (url) => serveLocalDocument(url),
+      serveLocalDocument,
       verifyDeviceToken: (deviceToken) =>
         backendService.verifyDeviceToken(deviceToken),
       retirePairingCodes: clearPairingCodes,

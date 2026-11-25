@@ -8,6 +8,7 @@ import {
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { createAuthFence } from "@mains/contracts/auth-lifecycle";
 import {
@@ -90,7 +91,7 @@ export interface WsHostOptions {
    */
   serveLocalImage?: (url: URL) => Promise<Response>;
   /** Signed local-document server — `GET /__localdoc?…`; mirrors `mains-localdoc://`. */
-  serveLocalDocument?: (url: URL) => Promise<Response>;
+  serveLocalDocument?: (url: URL, range: string | null) => Promise<Response>;
   /**
    * Authenticate a paired device's token (see modules/backend). Consulted only
    * when the presented token is not the shared one. Resolves the device on
@@ -389,24 +390,32 @@ const UNTRUSTED_CONTENT_HEADERS: Record<string, string> = {
 async function handleLocalFile(
   req: IncomingMessage,
   res: ServerResponse,
-  serve: (url: URL) => Promise<Response>,
+  serve: (url: URL, range: string | null) => Promise<Response>,
 ): Promise<void> {
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
-    const response = await serve(url);
-    const body = Buffer.from(await response.arrayBuffer());
+    const response = await serve(url, req.headers.range ?? null);
     const headers: Record<string, string> = {
       ...UNTRUSTED_CONTENT_HEADERS,
       "Content-Type":
         response.headers.get("content-type") ?? "application/octet-stream",
     };
-    const cache = response.headers.get("cache-control");
-    if (cache) headers["Cache-Control"] = cache;
+    for (const name of ["Cache-Control", "Accept-Ranges", "Content-Range", "Content-Length"]) {
+      const value = response.headers.get(name);
+      if (value) headers[name] = value;
+    }
+    if (res.destroyed || req.method === "HEAD") {
+      await response.body?.cancel();
+      if (!res.destroyed) res.writeHead(response.status, headers).end();
+      return;
+    }
     res.writeHead(response.status, headers);
-    res.end(body);
+    if (response.body) await pipeline(response.body, res);
+    else res.end();
   } catch {
-    res.writeHead(500);
-    res.end("Local file error");
+    if (res.destroyed) return;
+    if (res.headersSent) res.destroy();
+    else res.writeHead(500).end("Local file error");
   }
 }
 

@@ -649,10 +649,10 @@ underlying tooling.
 - Per-computer/provider AI data-sharing consent before sending.
 - Bounded mobile history with automatic directional edge paging and chunked full-message reading.
   Native conversation requests use desktop's last-20-prompt boundaries and overlapping
-  windows of at most 60 blocks, while previews remain capped at 200 rows/about 1 MB.
-  Prompts and the last visible reply in each block take priority over intermediate
-  commentary and child tools. Oversized windows expose **More messages and activity**:
-  a separate Earlier/Later reader for all omitted messages/tools within the frozen
+  windows of at most 60 blocks, with previews capped at 400 records/about 2 MB.
+  The latest prompt and newest visible dialogue take priority over older messages
+  and child tools. **More messages and activity** appears above the transcript when
+  records were omitted and opens a separate Earlier/Later reader for that frozen
   window. It keeps one bounded page, supports full-message/tool readers, and leaves
   the main conversation's reading position and following state untouched. Existing
   computers without this additive option retain their previous row-based pages.

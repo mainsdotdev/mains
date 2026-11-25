@@ -36,11 +36,32 @@ describe("conversation history pages", () => {
     const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
     expect(prompts(page)).toEqual(Array.from({ length: 20 }, (_, i) => `prompt-${i + 25}`));
     expect(page.artifacts.filter(row => row.content?.startsWith("reply-"))).toHaveLength(20);
-    expect(page.artifacts.length + page.toolCalls.length).toBeLessThanOrEqual(200);
-    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(1024 * 1024);
+    expect(page.artifacts.length + page.toolCalls.length).toBe(400);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(2 * 1024 * 1024);
     expect(page.activity?.omittedCount).toBeGreaterThan(0);
     expect(page.hasOlder).toBe(true);
     expect(page.hasNewer).toBe(false);
+  });
+
+  it.each(["rows", "bytes"])("retains the newest dialogue when the native window runs out of %s", (limit) => {
+    turn(0);
+    const prompt = createRunArtifact(db, { runId: "r", kind: "user-prompt" as "report", content: "Latest prompt", createdAt: at(1) });
+    const replies = Array.from({ length: 410 }, (_, index) => createRunArtifact(db, {
+      runId: "r", kind: "report", content: limit === "bytes" ? "x".repeat(7900) : `reply ${index}`,
+      createdAt: at(2, index),
+    }).id);
+
+    const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    const bytes = Buffer.byteLength(JSON.stringify(page));
+    expect(page.artifacts.map(row => row.id)).toEqual([prompt.id, ...replies.slice(1 - page.artifacts.length)]);
+    if (limit === "rows") {
+      expect(page.artifacts).toHaveLength(400);
+    } else {
+      expect(page.artifacts.length).toBeLessThan(400);
+      expect(bytes).toBeGreaterThan(1024 * 1024);
+      expect(bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    }
+    expect(page.activity).toMatchObject({ start: page.start, omittedCount: replies.length + 4 - page.artifacts.length - page.toolCalls.length });
   });
 
   it("rejects malformed native window and activity range options", () => {

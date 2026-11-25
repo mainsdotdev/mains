@@ -4,6 +4,7 @@ import * as dns from "node:dns";
 import { isIP, type LookupFunction } from "node:net";
 import { Agent } from "undici";
 import { isLocalImagePreviewSize, type LocalImagePreviewSize } from "@mains/contracts/image-preview";
+import { outputMediaMimeType } from "@mains/contracts/output-files";
 import { getConnectionWithSecrets } from "../connections";
 import {
   signLocalDocumentPath,
@@ -167,8 +168,7 @@ export const imageProxyService = {
 
   /**
    * Returns a signed `mains-localdoc://` URL the renderer can `fetch()` to get
-   * the raw bytes of an Office document or PDF. Mirrors {@link signLocalImageUrl}
-   * but with a document-extension allowlist. The HMAC signature authorizes the path;
+   * the raw bytes of a document or media file. The HMAC signature authorizes the path;
    * the protocol handler re-stats the file (symlink/size/mime guards).
    */
   signLocalDocumentUrl(rawPath: string, ttlMs?: number): string | null {
@@ -178,7 +178,7 @@ export const imageProxyService = {
     const resolved = path.resolve(expanded);
     if (resolved.includes("\0")) return null;
     const ext = path.extname(resolved).toLowerCase();
-    if (!DOCUMENT_EXTENSIONS.has(ext)) return null;
+    if (!DOCUMENT_EXTENSIONS.has(ext) && !outputMediaMimeType(ext.slice(1))) return null;
     return signLocalDocumentPath(resolved, ttlMs);
   },
 

@@ -35,11 +35,12 @@ struct TurnChangesCard: View {
                     }
                 Divider()
                 ForEach(Array((expanded ? changes.files : Array(changes.files.prefix(2))).enumerated()), id: \.offset) { _, file in
+                    let name = file.path.split(separator: "/").last.map(String.init) ?? file.path
                     Button { open(file) } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: file.binary ? "doc.zipper" : "doc.text").foregroundStyle(.secondary)
+                            fileIcon(name, binary: file.binary)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(file.path.split(separator: "/").last.map(String.init) ?? file.path)
+                                Text(name)
                                     .font(.footnote.weight(.medium)).lineLimit(1).truncationMode(.middle)
                                 let detail = context(file)
                                 if !detail.isEmpty { Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head) }
@@ -76,6 +77,14 @@ struct TurnChangesCard: View {
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 16))
             .clipShape(.rect(cornerRadius: 16))
         }
+    }
+    private func fileIcon(_ name: String, binary: Bool) -> some View {
+        let image = WorkspaceFileArtwork.fileTypeAssetName(for: name).map { Image(decorative: $0) }
+            ?? Image(systemName: binary ? "doc.zipper" : "doc.text")
+        return image.resizable().scaledToFit()
+            .foregroundStyle(.secondary)
+            .frame(width: 16, height: 16)
+            .accessibilityHidden(true)
     }
     private func context(_ file: TurnFileChange) -> String {
         let directory = file.path.split(separator: "/").dropLast().joined(separator: "/")
