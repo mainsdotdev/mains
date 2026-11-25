@@ -480,9 +480,10 @@ underlying tooling.
   Native identity merges continuations, provider lifecycle wins over detached launch
   acknowledgements, and known children follow their parent. This is read-only and
   limited to the current bounded mobile history window, explicitly labelled when
-  more messages exist. No full-history or host-file reads are introduced. Up to four
-  child message previews (8,192 characters each) stay in memory; they never enter
-  the cache or main transcript. **Try subagents** replays working/completed Security
+  more messages exist. Up to four live child messages keep their complete text in
+  memory. Long saved messages load in place through the paged history-content reader
+  as their rows appear. The complete text stays out of the cache and main transcript.
+  **Try subagents** replays working/completed Security
   and Tests agents; **Explore Mains** includes their prepared completed reports.
 - A sidebar with provider/space discs, Code workspaces and branch
   information, and Work/Chat project groups and recent conversations.

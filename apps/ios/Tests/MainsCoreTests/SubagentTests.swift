@@ -85,18 +85,19 @@ private func childEvent(_ id: String, text: String, ts: Double = 2000) -> JSONVa
     #expect(section.displayedRows(expanded: false).contains { $0.kind == .subagents })
 }
 
-@Test func childPreviewsAreBoundedIsolatedAndRetainDateWhenPersisted() throws {
+@Test func childStreamsKeepFullTextAndRetainDateWhenPersisted() throws {
     let initial = try agentPage(DemoSubagents.snapshot(runID: "run", baseID: 100, at: 1000, stage: 0, turnID: 1))
     var transcript = Transcript(); transcript.replace(initial)
     let agent = try #require(transcript.subagents.first { $0.title == "Security" })
     for index in 0..<6 { transcript.receive(childEvent("extra-\(index)", text: "preview", ts: Double(index))) }
-    transcript.receive(childEvent("demo-agent-100-report", text: String(repeating: "x", count: 20_000), ts: 2000))
+    let longMessage = String(repeating: "x", count: 20_000) + "\nEnd of live report."
+    transcript.receive(childEvent("demo-agent-100-report", text: longMessage, ts: 2000))
     let previews = try #require(transcript.subagentFlow(for: agent))
     #expect(previews.rows.filter { $0.kind == .response }.count == 4)
-    #expect(previews.rows.map(\.text.count).max() == 8192)
     #expect(transcript.rows.allSatisfy { $0.kind != .response })
     #expect(transcript.page == initial, "Live child text never mutates the cacheable page.")
     let before = try #require(previews.rows.first { $0.id == "stream:demo-agent-100-report" })
+    #expect(before.text == longMessage)
     let completed = try agentPage(DemoSubagents.snapshot(runID: "run", baseID: 100, at: 1000, stage: 1, turnID: 1))
     transcript.replace(completed)
     let persisted = try #require(transcript.subagentFlow(for: agent)?.rows.first { $0.id == before.id })
@@ -108,6 +109,31 @@ private func childEvent(_ id: String, text: String, ts: Double = 2000) -> JSONVa
     transcript.replace(try agentPage(DemoSubagents.snapshot(runID: "run", baseID: 100, at: 1000, stage: 0, turnID: 1), historical: true), direction: "older")
     transcript.receive(childEvent("historical-hidden", text: "Do not inject this into history"))
     #expect(transcript.subagentFlow(for: agent)?.rows.allSatisfy { $0.kind != .response } == true)
+}
+
+@Test @MainActor func deferredMessageReadJoinsEveryUnicodePageWithoutChangingHistory() async throws {
+    let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+    let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
+    session.restore(); session.setActive(true); try session.startDemo()
+    defer { session.exitDemo(); backend.shutdown() }
+    try await eventually { session.isConnected }
+    session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+    let message = String(repeating: "x", count: 8191) + "👩🏽‍💻" + String(repeating: "\ne\u{301} 🧪", count: 2000) + "\nEnd of stored message."
+    let runID = try await session.send(message, spaceID: "codex", workspaceID: backend.defaultWorkspaceID)
+    await session.selectConversation(runID)
+    try await eventually { session.conversations.first { $0.id == runID }?.isActive == false }
+    await session.loadHistory(direction: "refresh")
+    let history = try #require(session.transcript.page)
+    let artifactID = try #require(history.artifacts.first { $0.kind == "user-prompt" }?.id)
+    let owner = session.ownership
+    #expect(history.artifacts.first { $0.id == artifactID }?.content != message)
+    let loaded = try await session.readFullMessage(artifactID: artifactID, runID: runID, owner: owner)
+    #expect(loaded.utf8.elementsEqual(message.utf8))
+    #expect(session.transcript.page == history)
+    await session.selectConversation(DemoBackend.tourID)
+    await #expect(throws: MainsError.changedBackend) {
+        try await session.readFullMessage(artifactID: artifactID, runID: runID, owner: owner)
+    }
 }
 
 @Test func agentIdentityAnchorsChildMessagesWithoutParentToolIDAndPreservesDeferredReads() throws {

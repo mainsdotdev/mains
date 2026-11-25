@@ -17,16 +17,18 @@ struct ChatMessage: View {
     let session: BackendSession
     let row: TranscriptRow
     let providerID: String
-    let readContent: (Int) -> Void
+    var readContent: ((Int) -> Void)? = nil
     var isMate = false
     var openSubagents: () -> Void = {}
     var copyText: String? = nil
     var copyIsPreview = false
     var forkRunID: String? = nil
     var fork: () -> Void = {}
+    var fullText: String? = nil
     @Environment(\.openVoiceConversation) private var openVoiceConversation
     @Environment(\.mateChatTint) private var mateTint
     @Environment(ActionToast.self) private var actionToast: ActionToast?
+    private var isPreview: Bool { row.deferredArtifactID != nil && fullText == nil }
     var body: some View {
         VStack(alignment: row.kind == .prompt ? .trailing : .leading, spacing: row.kind == .response ? 4 : 10) {
             switch row.kind {
@@ -66,7 +68,7 @@ struct ChatMessage: View {
                         MateSetupHistory(turns: row.mateSetupTurns, tint: mateTint ?? Provider.accent(providerID))
                             .padding(.bottom, 12)
                     }
-                    ChatMessageBody(text: row.text).equatable()
+                    ChatMessageBody(text: fullText ?? row.text).equatable()
                         .padding(isMate ? 14 : 0)
                         .background(alignment: .center) {
                             if isMate { RoundedRectangle(cornerRadius: 22).fill(Color(.secondarySystemBackground)) }
@@ -79,7 +81,7 @@ struct ChatMessage: View {
             case .tool: EmptyView()
             case .subagents: SubagentSummaryRow(text: row.text, open: openSubagents)
             }
-            if let id = row.deferredArtifactID {
+            if isPreview, let id = row.deferredArtifactID, let readContent {
                 Button("Read full message", systemImage: "text.alignleft") { readContent(id) }
                     .font(.subheadline.weight(.medium))
             }
@@ -89,9 +91,9 @@ struct ChatMessage: View {
         }
         .frame(maxWidth: .infinity, alignment: row.kind == .prompt ? .trailing : .leading)
         .contextMenu {
-            Button(row.live ? "Copy current text" : row.deferredArtifactID != nil ? "Copy message preview" : "Copy message", systemImage: "doc.on.doc") {
-                UIPasteboard.general.string = row.text
-                actionToast?.show(row.deferredArtifactID != nil && !row.live ? "Message preview copied" : "Message copied")
+            Button(row.live ? "Copy current text" : isPreview ? "Copy message preview" : "Copy message", systemImage: "doc.on.doc") {
+                UIPasteboard.general.string = fullText ?? row.text
+                actionToast?.show(isPreview && !row.live ? "Message preview copied" : "Message copied")
             }
         }
     }

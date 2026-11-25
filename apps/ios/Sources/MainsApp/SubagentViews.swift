@@ -110,7 +110,6 @@ struct SubagentDetailSheet: View {
     let session: BackendSession
     let selection: SubagentSelection
     @Environment(\.dismiss) private var dismiss
-    @State private var fullMessage: AgentContentReference?
     private var valid: Bool { session.ownership == selection.owner && session.viewingRunID == selection.runID }
     private var agent: SessionSubagent? { valid ? session.transcript.subagents.first { $0.id == selection.agentID } : nil }
     private var subtitle: String {
@@ -124,7 +123,7 @@ struct SubagentDetailSheet: View {
         NavigationStack {
             ScrollView {
                 if let agent, let flow {
-                    VStack(alignment: .leading, spacing: 20) {
+                    LazyVStack(alignment: .leading, spacing: 20) {
                         if !agent.detail.isEmpty { Text(agent.detail).font(.footnote).foregroundStyle(.secondary) }
                         if let prompt = flow.prompt, !prompt.isEmpty {
                             DisclosureGroup("Task") { ChatMessageBody(text: prompt).padding(.top, 8) }.font(.subheadline)
@@ -132,7 +131,12 @@ struct SubagentDetailSheet: View {
                         ForEach(TranscriptGroup.build(flow.rows)) { group in
                             if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, live: agent.state == .running) }
                             else if let row = group.rows.first {
-                                ChatMessage(session: session, row: row, providerID: "", readContent: { fullMessage = AgentContentReference(id: $0) })
+                                if let artifactID = row.deferredArtifactID {
+                                    SubagentStoredMessage(session: session, selection: selection, row: row, artifactID: artifactID)
+                                        .id(artifactID)
+                                } else {
+                                    ChatMessage(session: session, row: row, providerID: "")
+                                }
                             }
                         }
                         if let report = flow.report, !report.isEmpty {
@@ -169,17 +173,55 @@ struct SubagentDetailSheet: View {
                     }.multilineTextAlignment(.center).accessibilityElement(children: .combine)
                 }
             }
-            .sheet(item: $fullMessage) { reference in
-                NavigationStack { FullMessageView(session: session, artifactID: reference.id) }
-            }
         }
         .presentationDetents([.fraction(0.55), .large]).presentationDragIndicator(.visible)
-        .onChange(of: valid, initial: true) { _, valid in if !valid { fullMessage = nil; dismiss() } }
+        .onChange(of: valid, initial: true) { _, valid in if !valid { dismiss() } }
         .accessibilityIdentifier("subagentDetail")
     }
 }
 
-private struct AgentContentReference: Identifiable { let id: Int }
+private struct SubagentStoredMessage: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let selection: SubagentSelection
+    let row: TranscriptRow
+    let artifactID: Int
+    @State private var fullText: String?
+    @State private var failure: String?
+    @State private var retry = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ChatMessage(session: session, row: row, providerID: "", fullText: fullText)
+            if fullText == nil {
+                if !session.isConnected {
+                    Text("Connect to load the full message.").font(.footnote).foregroundStyle(.secondary)
+                } else if let failure {
+                    Text(failure).font(.footnote).foregroundStyle(.secondary)
+                    Button("Retry") { retry += 1 }
+                } else {
+                    ProgressView("Loading full message…").font(.footnote)
+                }
+            }
+        }
+        .task(id: LoadRequest(connected: session.isConnected, retry: retry)) {
+            guard session.isConnected, fullText == nil else { return }
+            failure = nil
+            do {
+                fullText = try await session.readFullMessage(artifactID: artifactID, runID: selection.runID, owner: selection.owner)
+            } catch {
+                if !Task.isCancelled { failure = error.localizedDescription }
+            }
+        }
+    }
+
+    private struct LoadRequest: Equatable {
+        let connected: Bool
+        let retry: Int
+    }
+}
 
 private struct SubagentGlyph: View {
     #if DEBUG && targetEnvironment(simulator)

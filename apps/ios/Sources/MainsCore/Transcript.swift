@@ -111,7 +111,7 @@ public struct Transcript: Sendable {
                   !AgentActivity.thinking(kind: event["kind"].string ?? "", metadata: metadata),
                   let parent = metadata["parentToolUseId"].string ?? metadata["parentToolCallId"].string ?? metadata["agentId"].string,
                   let text = event["content"].string, !text.isEmpty else { return }
-            let row = TranscriptRow(id: "stream:" + id, kind: .response, text: String(text.prefix(8192)),
+            let row = TranscriptRow(id: "stream:" + id, kind: .response, text: text,
                 date: childStreams[id]?.row.date ?? Date(timeIntervalSince1970: (payload["ts"].number ?? 0) / 1000),
                 live: metadata["streaming"] != .bool(false), deferredArtifactID: nil)
             childStreams[id] = SubagentMessagePreview(streamID: id, parentID: parent, row: row)

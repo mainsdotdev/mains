@@ -2462,6 +2462,35 @@ public final class BackendSession {
         return result
     }
 
+    public func readFullMessage(artifactID: Int, runID: String, owner: Int) async throws -> String {
+        let current = generation
+        var offset = 0
+        var totalChars: Int?
+        var text = ""
+        while true {
+            try Task.checkCancellation()
+            guard owner == pairingOwner, current == generation, viewingRunID == runID else { throw MainsError.changedBackend }
+            let result = try await readContent(artifactID: artifactID, offset: offset, expectedRunID: runID)
+            try Task.checkCancellation()
+            guard owner == pairingOwner, current == generation, viewingRunID == runID else { throw MainsError.changedBackend }
+
+            let page = try result.decode(HistoryContentPage.self)
+            let count = page.text.unicodeScalars.count
+            guard page.offset == offset, page.totalChars >= offset, count <= page.totalChars - offset,
+                  totalChars == nil || totalChars == page.totalChars else { throw MainsError.invalidReply }
+            let end = offset + count
+            if end == page.totalChars {
+                guard page.nextOffset == nil else { throw MainsError.invalidReply }
+                text.append(page.text)
+                return text
+            }
+            guard count > 0, page.nextOffset == end else { throw MainsError.invalidReply }
+            text.append(page.text)
+            offset = end
+            totalChars = page.totalChars
+        }
+    }
+
     public func readFileDiff(runID: String, turnID: Int, file: TurnFileChange, owner: Int, cursor: FileDiffCursor? = nil) async throws -> FileDiffPage {
         guard owner == pairingOwner, viewingRunID == runID else { throw MainsError.changedBackend }
         guard let transport, isConnected else { throw MainsError.disconnected }
