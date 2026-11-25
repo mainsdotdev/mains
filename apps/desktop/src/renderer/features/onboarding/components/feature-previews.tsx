@@ -416,7 +416,7 @@ function RowWithFill({
  */
 function GeneratePill() {
   return (
-    <span className="absolute right-2 bottom-3 grid justify-items-end rounded-lg border-[0.5px] border-(--onboarding-border) bg-(--onboarding-button-fill) px-2 py-1 text-xs text-(--onboarding-muted)">
+    <span className="absolute right-2 bottom-3 grid justify-items-end rounded-lg bg-(--onboarding-button-fill) px-2 py-1 text-xs text-(--onboarding-muted)">
       <span className="preview-motion preview-git-idle col-start-1 row-start-1 flex items-center gap-1">
         <Sparkles className="size-3" />
         Generate

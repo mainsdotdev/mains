@@ -304,7 +304,6 @@ export function AgentsStep({
               </label>
               {(!option.available || needsSignIn) && (
                 <Button
-                  variant="secondary"
                   ref={(node) => {
                     setupTriggers.current[option.variant] = node;
                   }}

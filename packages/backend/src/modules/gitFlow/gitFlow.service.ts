@@ -31,6 +31,7 @@ import { appSettingsService } from "../appSettings";
 import { prAttachmentStorage } from "./pr-attachment-storage";
 import { budgetDiff } from "./diff-budget";
 import { assertGitOperationsOpen, runGitOperation } from "../../runtime/git-operation-lifecycle";
+import type { GitHubCliStatus } from "@mains/contracts/github-cli";
 import { PR_ATTACHMENT_LIMIT, mapPrAttachmentUrls, type CreatePrPayload, type CreatePrResult, type PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 // `createWorkAdapter` is imported lazily inside the generation methods to break
 // the gitFlow ↔ providers/adapters (mains-tools) require cycle.
@@ -865,6 +866,26 @@ export const gitFlowService = {
   // Publish (create the GitHub repo for a repo with no remote)
   // ───────────────────────────────────────────────────────────
 
+  async getGitHubCliStatus(): Promise<GitHubCliStatus> {
+    try {
+      const { stdout } = await execFileAsync(
+        "gh",
+        ["api", "user", "--jq", ".login"],
+        { timeout: 15_000, env: { ...process.env, GH_PROMPT_DISABLED: "1" } },
+      );
+      const login = stdout.trim();
+      return login ? { status: "ready", login } : { status: "unavailable" };
+    } catch (error) {
+      const { code, stderr } = error as { code?: string | number; stderr?: string };
+      if (code === "ENOENT") return { status: "missing" };
+      // Older gh versions can print the login hint without using exit code 4.
+      if (code === 4 || /gh auth login|\bHTTP 401\b/i.test(stderr ?? "")) {
+        return { status: "signed-out" };
+      }
+      return { status: "unavailable" };
+    }
+  },
+
   /**
    * Preflight for the Publish wizard: is `gh` installed + authenticated, what's
    * the authed login (default owner), a sanitized default repo name, and the
@@ -890,33 +911,17 @@ export const gitFlowService = {
     if (!name) name = workspace?.name || basename(rootPath);
     const suggestedName = sanitizeRepoName(name);
 
-    // `gh api user` succeeds only when gh is installed AND authenticated.
-    let ghReady = false;
-    let login: string | null = null;
-    let notReadyReason: string | undefined;
-    try {
-      const { stdout } = await execFileAsync(
-        "gh",
-        ["api", "user", "--jq", ".login"],
-        { timeout: 15_000 },
-      );
-      login = stdout.trim() || null;
-      ghReady = !!login;
-      if (!ghReady) notReadyReason = "Could not read your GitHub login.";
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException)?.code;
-      if (code === "ENOENT") {
-        notReadyReason =
-          "The GitHub CLI (gh) isn't installed. Install it, then run `gh auth login`.";
-      } else {
-        notReadyReason =
-          "You're not signed in to the GitHub CLI. Run `gh auth login` in your terminal.";
-      }
-    }
+    const gh = await this.getGitHubCliStatus();
+    const notReadyReason = {
+      ready: undefined,
+      missing: "The GitHub CLI (gh) isn't installed. Install it, then run `gh auth login`.",
+      "signed-out": "You're not signed in to the GitHub CLI. Run `gh auth login` in your terminal.",
+      unavailable: "Could not verify your GitHub login. Try again.",
+    }[gh.status];
 
     return {
-      ghReady,
-      login,
+      ghReady: gh.status === "ready",
+      login: gh.status === "ready" ? gh.login : null,
       suggestedName,
       branch,
       hasRemote,

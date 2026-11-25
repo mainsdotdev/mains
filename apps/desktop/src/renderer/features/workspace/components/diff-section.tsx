@@ -181,7 +181,7 @@ export function DiffSection({
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <Button type="button" onClick={() => dispatch(openReviewTab())}
-        className="button-neutral mb-2 flex shrink-0 items-center justify-center gap-2 rounded-xl px-3 py-2 text-s text-primary-900 dark:text-primary-100">
+        className="button-neutral border-0 mb-2 flex shrink-0 items-center justify-center gap-2 rounded-xl px-3 py-2 text-s text-primary-900 dark:text-primary-100">
         <Review className="size-4" />Review mode
       </Button>
 

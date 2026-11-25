@@ -89,7 +89,7 @@ export function GenerateButton({
       disabled={disabled}
       tooltip={tooltip}
       tooltipPosition="top-left"
-      className="absolute bottom-3 right-2 flex items-center gap-1 rounded-lg button-neutral px-2 py-1 text-xs text-primary-600 enabled:hover:text-primary-900 dark:text-primary-400 dark:enabled:hover:text-primary-100 disabled:opacity-40"
+      className="absolute bottom-3 right-2 flex items-center gap-1 rounded-lg button-neutral border-0 px-2 py-1 text-xs text-primary-600 enabled:hover:text-primary-900 dark:text-primary-400 dark:enabled:hover:text-primary-100 disabled:opacity-40"
     >
       {generating ? (
         <>

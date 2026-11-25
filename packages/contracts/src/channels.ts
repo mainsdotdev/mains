@@ -243,6 +243,7 @@ export const CHANNELS = {
     discardPrAttachments: "gitFlow:discardPrAttachments",
     generateCommitMessage: "gitFlow:generateCommitMessage",
     generatePrBody: "gitFlow:generatePrBody",
+    getGitHubCliStatus: "gitFlow:getGitHubCliStatus",
     getPublishPreflight: "gitFlow:getPublishPreflight",
     publish: "gitFlow:publish",
   },
