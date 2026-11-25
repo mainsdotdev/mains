@@ -747,11 +747,7 @@ export function WorkspaceEvents({
                 onDismissPlan={onDismissPlan}
               />
             ) : (
-              <ToolCallGroup
-                group={group}
-                defaultExpanded={index === eventGroups.length - 1}
-                variant={variant}
-              />
+              <ToolCallGroup group={group} />
             )
           ) : (
             <InfoGroup

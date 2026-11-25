@@ -33,8 +33,11 @@ struct VoiceAppearancePreview: View {
                 guard let run = session.conversations.first(where: { $0.providerId == "codex" && !$0.isActive }) else { return }
                 runID = run.id
                 session.voice.makeMedia = { VoicePreviewMedia() }
+                session.voice.onConnectedFeedback = VoiceCallSounds.playOpening
+                session.voice.onClosing = VoiceCallSounds.playClosing
                 await session.voice.start(label: run.displayTitle) {
                     RealtimeVoiceSignaling(runID: run.id, start: { _, id in
+                        try await Task.sleep(for: .seconds(2))
                         session.voice.receive(.object(["runId": .string(run.id), "connectionId": .string(id), "type": .string("started")]))
                     }, stop: { _ in })
                 }

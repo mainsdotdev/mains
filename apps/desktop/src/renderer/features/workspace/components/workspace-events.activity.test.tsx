@@ -17,6 +17,7 @@ vi.mock("./provider-auth-notice", () => ({ ProviderAuthNotice: () => null }));
 vi.mock("./turn-changes-card", () => ({ TurnChangesCard: () => <div>Workspace edited files</div> }));
 vi.mock("../hooks/use-plugin-logos", () => ({ usePluginLogoMap: () => new Map(), normalizeSlug: (name: string) => name, renderPluginIcon: () => null }));
 vi.mock("../hooks/use-open-file-in-editor", () => ({ useOpenFileInEditor: () => vi.fn() }));
+vi.mock("@/hooks/use-local-image-url", () => ({ useLocalImageUrl: () => undefined }));
 vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => ({ showTurnChanges: settings.showTurnChanges }) }));
 vi.mock("@/lib/redux/api", () => ({
   useGetAppSettingsQuery: () => ({ data: settings }),
@@ -30,19 +31,47 @@ const run: Run = { id: "run", workspaceId: "ws", status: "running", providerId: 
 const prompt: RunEvent = { id: "prompt", type: "artifact", content: "Refactor", timestamp: new Date(1000), metadata: { kind: "user-prompt" } };
 const read: RunEvent = { id: "read", type: "tool_call", content: "Read:", timestamp: new Date(2000), metadata: { toolName: "Read", status: "done", input: { file_path: "hero.tsx" } } };
 const command: RunEvent = { id: "command", type: "tool_call", content: "Bash:", timestamp: new Date(3000), metadata: { toolName: "Bash", status: "running", input: { command: "npm test" } } };
+const image: RunEvent = { id: "view", type: "tool_call", content: "ImageView:", timestamp: new Date(3500), metadata: {
+  toolName: "ImageView", codexItemType: "imageView", status: "done", input: { path: "/tmp/screenshot.png" },
+} };
 const props = { runs: [run], activeTab: run.id, currentEvents: [prompt, read, command], currentWorkspace: null,
   eventsEndRef: createRef<HTMLDivElement>() as RefObject<HTMLDivElement>, issueTabs: [], variant: "codex" as const };
 
-it("shows the active command once in an open group and restores footer activity when closed", () => {
-  const view = render(<WorkspaceEvents {...props} />);
-  expect(view.getByText("npm test")).toBeTruthy();
-  expect(view.queryByText("Running npm test")).toBeNull();
-  fireEvent.click(view.getByRole("button", { name: /read a file, ran a command/i }));
+it("starts a growing live tool group closed and shows the active command once", () => {
+  const view = render(<WorkspaceEvents {...props} currentEvents={[prompt, read]} />);
+  expect(view.getByText("hero.tsx")).toBeTruthy();
+  view.rerender(<WorkspaceEvents {...props} />);
+  const group = view.getByRole("button", { name: /read a file, ran a command/i });
+  expect(group.getAttribute("aria-expanded")).toBe("false");
   expect(view.queryByText("npm test")).toBeNull();
   expect(view.getByText("Running npm test")).toBeTruthy();
-  fireEvent.click(view.getByRole("button", { name: /read a file, ran a command/i }));
-  expect(view.queryByText("Running npm test")).toBeNull();
+
+  fireEvent.click(group);
+  expect(group.getAttribute("aria-expanded")).toBe("true");
   expect(view.getByText("npm test")).toBeTruthy();
+  expect(view.queryByText("Running npm test")).toBeNull();
+
+  view.rerender(<WorkspaceEvents {...props} currentEvents={[...props.currentEvents, image]} />);
+  const mixedGroup = view.getByRole("button", { name: /read a file, viewed an image, ran a command/i });
+  expect(mixedGroup).toBe(group);
+  expect(mixedGroup.getAttribute("aria-expanded")).toBe("true");
+  expect(view.getByText("screenshot.png")).toBeTruthy();
+
+  fireEvent.click(mixedGroup);
+  expect(view.queryByText("screenshot.png")).toBeNull();
+  expect(view.queryByText("npm test")).toBeNull();
+  expect(view.getByText("Running npm test")).toBeTruthy();
+});
+
+it("starts image-only groups closed too", () => {
+  const secondImage = { ...image, id: "view-2", timestamp: new Date(3600), metadata: { ...image.metadata, input: { path: "/tmp/second.png" } } };
+  const view = render(<WorkspaceEvents {...props} currentEvents={[prompt, image, secondImage]} />);
+  const group = view.getByRole("button", { name: "Viewed 2 images" });
+  expect(group.getAttribute("aria-expanded")).toBe("false");
+  expect(view.queryByText("screenshot.png")).toBeNull();
+  fireEvent.click(group);
+  expect(view.getByText("screenshot.png")).toBeTruthy();
+  expect(view.getByText("second.png")).toBeTruthy();
 });
 
 it("handles a single visible tool and the tools-hidden setting", () => {
@@ -103,13 +132,15 @@ it("keeps an in-flight row running when thought and progress snapshots arrive", 
   const thought: RunEvent = { id: "thought", type: "artifact", content: "Checking exports", timestamp: new Date(4000), metadata: { kind: "thinking", streaming: true } };
   const progress: RunEvent = { ...thought, id: "progress", content: "Compiling", metadata: { kind: "tool_progress", streaming: true } };
   const view = render(<WorkspaceEvents {...props} currentEvents={[prompt, read, command, thought, progress]} />);
-  expect(view.getByRole("button", { name: /Running\s*npm test/ })).toBeTruthy();
-  expect(view.queryByText("Running npm test")).toBeNull();
+  expect(view.queryByRole("button", { name: /Running\s*npm test/ })).toBeNull();
   expect(view.getByText("Checking exports")).toBeTruthy();
   fireEvent.click(view.getByRole("button", { name: /read a file, ran a command/i }));
+  expect(view.getByRole("button", { name: /Running\s*npm test/ })).toBeTruthy();
   expect(view.getByText("Checking exports")).toBeTruthy();
   expect(view.queryByText("Running npm test")).toBeNull();
   view.rerender(<WorkspaceEvents {...props} currentEvents={[prompt, read, command]} />);
+  expect(view.queryByText("Running npm test")).toBeNull();
+  fireEvent.click(view.getByRole("button", { name: /read a file, ran a command/i }));
   expect(view.getByText("Running npm test")).toBeTruthy();
 });
 

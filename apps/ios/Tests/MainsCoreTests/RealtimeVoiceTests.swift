@@ -10,6 +10,7 @@ import Testing
     var answerSDPs: [String] = []
     var sent: [JSONValue] = []
     var muted = false
+    var muteChanges: [Bool] = []
     var closes = 0
     var channelOpen = true
     var holdOffer = false
@@ -20,7 +21,7 @@ import Testing
     }
     func answer(_ sdp: String) async throws { answerSDPs.append(sdp) }
     func send(_ event: JSONValue) throws -> Bool { if !channelOpen { return false }; sent.append(event); return true }
-    func setMuted(_ muted: Bool) { self.muted = muted }
+    func setMuted(_ muted: Bool) { self.muted = muted; muteChanges.append(muted) }
     func close() { closes += 1 }
 }
 
@@ -74,6 +75,40 @@ import Testing
         #expect(preparations == 0 && voice.phase == .idle)
     }
 
+    @Test @MainActor func openingFeedbackStartsWhenConnectedAndHoldsTheOutgoingTrack() async throws {
+        let voice = RealtimeVoiceController(), media = VoiceMediaProbe(), backend = VoiceSignalingProbe()
+        var finishFeedback: CheckedContinuation<Void, Never>?
+        var openings = 0
+        voice.makeMedia = { media }
+        voice.onConnectedFeedback = {
+            #expect(voice.phase == .connected)
+            openings += 1
+            await withCheckedContinuation { finishFeedback = $0 }
+        }
+
+        await voice.start(label: "New") { backend.signaling() }
+        #expect(voice.phase == .connecting && openings == 0 && media.muted)
+        voice.receive(backend.event("started"))
+        #expect(voice.phase == .connecting && openings == 0)
+        media.onConnected?()
+        try await eventually { finishFeedback != nil }
+        voice.receive(backend.event("started"))
+        media.onConnected?()
+        voice.toggleMute()
+        voice.toggleMute()
+        #expect(!voice.muted && media.muted)
+        media.onLevels?(1, 0)
+        #expect(voice.inputLevel == 0)
+        voice.toggleMute()
+        let changes = media.muteChanges.count
+        finishFeedback?.resume()
+        try await eventually { media.muteChanges.count > changes }
+        #expect(openings == 1 && voice.muted && media.muted)
+        voice.toggleMute()
+        #expect(!media.muted)
+        await voice.stop()
+    }
+
     @Test @MainActor func stoppingWhileNativeStartIsPendingRetainsOwnershipAndClosesAgainAfterItSettles() async throws {
         let voice = RealtimeVoiceController(), media = VoiceMediaProbe(), backend = VoiceSignalingProbe()
         backend.holdStart = true; voice.makeMedia = { media }
@@ -101,6 +136,8 @@ import Testing
 
     @Test @MainActor func failedClosureReleasesMicBlocksReplacementAndRetriesTheOriginalIdentity() async throws {
         let voice = RealtimeVoiceController(), media = VoiceMediaProbe(), backend = VoiceSignalingProbe()
+        var closings = 0
+        voice.onClosing = { #expect(media.closes == 1); closings += 1 }
         voice.makeMedia = { media }
         await voice.start(label: "First") { backend.signaling() }
         backend.stopFailure = .timeout
@@ -111,6 +148,7 @@ import Testing
         backend.stopFailure = nil
         await voice.stop()
         #expect(!voice.ownsCall && Set(backend.stops).count == 1)
+        #expect(closings == 1)
     }
 
     @Test @MainActor func oldEventsAndCallbacksCannotRetireAReplacementCall() async throws {

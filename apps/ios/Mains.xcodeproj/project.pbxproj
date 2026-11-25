@@ -45,6 +45,7 @@
 		48BD84AC2AF4247C5D562B75A91337AF /* AtlasSaveControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67EC3237D2AAAC51FED8CADDCF53020A /* AtlasSaveControls.swift */; };
 		4E9E091D63A4E59EB0E05775B58B4399 /* MateInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6AB8DB8C8DBFF7AF2B87F0A8007B662 /* MateInfoView.swift */; };
 		4EC78FAF02B306E8F91D4DB1ADFBB6C1 /* VoicePreviews in Resources */ = {isa = PBXBuildFile; fileRef = BD5F7B35AB8E980F14D3AA7BDCA2BD58 /* VoicePreviews */; };
+		E958B4E78DC53B6D33D97F22C60E11DD /* VoiceSounds in Resources */ = {isa = PBXBuildFile; fileRef = 9A4A7B3AC84038F0F76C8BB92D4A68CD /* VoiceSounds */; };
 		4EF5CF2AE4762FCCA7B55E414B8E459C /* WebRTC-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = A8EDF4622E441471133DBF427C22D146 /* WebRTC-LICENSE.txt */; };
 		5646CD95D3C3A8DF082C142A67A0AF78 /* RunDecisions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0744E33FC98D3D6B6D6388649D675E28 /* RunDecisions.swift */; };
 		56ABB89C7A1167FEA492A658B110A210 /* DemoAtlas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28AE87502A1FAD0F97BC07728523F9FB /* DemoAtlas.swift */; };
@@ -242,6 +243,7 @@
 		B582662EA362154D0ACC1631D7444B22 /* ComputerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ComputerView.swift; sourceTree = "<group>"; };
 		BC19D028E762BD8217A9B103F7EF3190 /* VoiceSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VoiceSettingsView.swift; sourceTree = "<group>"; };
 		BD5F7B35AB8E980F14D3AA7BDCA2BD58 /* VoicePreviews */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; path = VoicePreviews; sourceTree = "<group>"; };
+		9A4A7B3AC84038F0F76C8BB92D4A68CD /* VoiceSounds */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; path = VoiceSounds; sourceTree = "<group>"; };
 		BEE98270A5C52A819849BC36C73523A3 /* WebSocketTransport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WebSocketTransport.swift; sourceTree = "<group>"; };
 		BF778B8E71F87DB2606B1B3848A76268 /* LaunchIntro.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LaunchIntro.swift; sourceTree = "<group>"; };
 		C0E1E82CE4D7581DC4A3E6A2BE2DE6EF /* ConversationDraft.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationDraft.swift; sourceTree = "<group>"; };
@@ -487,6 +489,7 @@
 				CBE6270C4DBEF0C7972495997EA044B2 /* RobotAvatars */,
 				40411086626C0F7253CE3E3943128E5E /* robots */,
 				BD5F7B35AB8E980F14D3AA7BDCA2BD58 /* VoicePreviews */,
+				9A4A7B3AC84038F0F76C8BB92D4A68CD /* VoiceSounds */,
 			);
 			name = Resources;
 			path = Resources;
@@ -598,6 +601,7 @@
 				A589A69C21E947EA755A9E713E7556E0 /* RobotAvatars in Resources */,
 				76BD83B4DE72C9D20C0E44D1143E992E /* robots in Resources */,
 				4EC78FAF02B306E8F91D4DB1ADFBB6C1 /* VoicePreviews in Resources */,
+				E958B4E78DC53B6D33D97F22C60E11DD /* VoiceSounds in Resources */,
 				A33BBFC126FD9B270D225D851493C365 /* DemoSnapshot.json in Resources */,
 				B7C00E0D0DCB6B7868A5CD142DD2FBC1 /* DemoMedia in Resources */,
 			);

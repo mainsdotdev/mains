@@ -25,14 +25,15 @@ struct HomeView: View {
     var body: some View {
         VStack(spacing: 0) {
             #if MAINS_GPT_LIVE
-            if preparingVoice && voicePresentation == .focus {
-                VoiceFocusStage(voice: session.voice)
-            } else { homeContent }
+            if !preparingVoice || voicePresentation != .focus { homeContent }
             #else
             homeContent
             #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #if MAINS_GPT_LIVE
+        .overlay { VoiceFocusStage(voice: session.voice, presented: preparingVoice && voicePresentation == .focus) }
+        #endif
         .background(alignment: .center) { KeyboardDismissBackground(color: Color(.systemBackground)) }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)

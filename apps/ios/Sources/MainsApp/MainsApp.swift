@@ -35,6 +35,8 @@ struct MainsApp: App {
 #if MAINS_GPT_LIVE
                 if AppFeatures.gptLiveEnabled {
                     session.voice.makeMedia = { NativeRealtimeVoiceMedia() }
+                    session.voice.onConnectedFeedback = VoiceCallSounds.playOpening
+                    session.voice.onClosing = VoiceCallSounds.playClosing
                 }
 #endif
 

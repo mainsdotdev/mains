@@ -69,6 +69,9 @@ app.resources_build_phase.add_file_reference(robot_thumbnails)
 voice_previews = resources.new_file('VoicePreviews')
 voice_previews.last_known_file_type = 'folder'
 app.resources_build_phase.add_file_reference(voice_previews) if voice_enabled
+voice_sounds = resources.new_file('VoiceSounds')
+voice_sounds.last_known_file_type = 'folder'
+app.resources_build_phase.add_file_reference(voice_sounds) if voice_enabled
 demo = project.main_group.new_file('Sources/MainsCore/Resources/DemoSnapshot.json')
 app.resources_build_phase.add_file_reference(demo)
 demo_media = project.main_group.new_file('Sources/MainsCore/Resources/DemoMedia')

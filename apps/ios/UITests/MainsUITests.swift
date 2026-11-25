@@ -2370,6 +2370,7 @@ final class MainsUITests: XCTestCase {
         let transcript = app.scrollViews["conversationTranscript"]
         XCTAssertFalse(transcript.staticTexts.firstMatch.isHittable)
         let orb = app.descendants(matching: .any).matching(identifier: "voiceOrb").firstMatch
+        waitForVoiceConnection(orb, minimumWidth: 180)
         XCTAssertEqual(orb.value as? String, "Water")
         XCTAssertGreaterThan(orb.frame.width, 180)
         let focusedOrbWidth = orb.frame.width
@@ -2394,6 +2395,18 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(app.buttons["muteVoice"].label, "Unmute microphone")
         app.buttons["endVoice"].tap()
         XCTAssertTrue(stage.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.scrollViews["conversationTranscript"].exists)
+    }
+
+    func testVoiceOrbDisappearsWhenEndingInConversation() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments = ["--voice-preview", "--voice-preview-conversation"]
+        app.launch()
+        let orb = app.descendants(matching: .any)["voiceComposerOrb"].firstMatch
+        waitForVoiceConnection(orb, minimumWidth: 80)
+        app.buttons["endVoice"].tap()
+        XCTAssertTrue(orb.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.scrollViews["conversationTranscript"].exists)
     }
 
@@ -2429,7 +2442,7 @@ final class MainsUITests: XCTestCase {
         app.launchArguments = ["--voice-preview", "--voice-preview-reduced-motion", "--voice-preview-orb", key]
         app.launch()
         let orb = app.descendants(matching: .any).matching(identifier: "voiceOrb").firstMatch
-        XCTAssertTrue(orb.waitForExistence(timeout: 15))
+        waitForVoiceConnection(orb, minimumWidth: 180)
         XCTAssertEqual(orb.value as? String, name)
         func pixels() throws -> Data {
             let screenshot = try XCTUnwrap(app.screenshot().image.cgImage)
@@ -2443,6 +2456,11 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(first, try pixels(), "\(name) should stay still with Reduce Motion.")
         attachScreenshot(app, name: "GPT Live – \(name) with Reduce Motion")
         app.buttons["endVoice"].tap()
+    }
+
+    private func waitForVoiceConnection(_ orb: XCUIElement, minimumWidth: CGFloat) {
+        let connected = NSPredicate { _, _ in orb.exists && orb.label == "Voice chat connected" && orb.frame.width > minimumWidth }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: connected, object: nil)], timeout: 15), .completed)
     }
 
     func testGPTLiveOrbStylePickerPersistsSelection() {

@@ -1,3 +1,4 @@
+import AudioToolbox
 import AVFAudio
 @preconcurrency import WebRTC
 
@@ -176,4 +177,27 @@ extension NativeRealtimeVoiceMedia: RTCPeerConnectionDelegate, RTCDataChannelDel
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
+}
+
+@MainActor enum VoiceCallSounds {
+    private static let opening = soundID("Opening")
+    private static let closing = soundID("Closing")
+    static func playOpening() async {
+        guard let opening else { return }
+        await withCheckedContinuation { continuation in
+            AudioServicesPlaySystemSoundWithCompletion(opening) { @Sendable in continuation.resume() }
+        }
+    }
+
+    static func playClosing() {
+        guard let closing else { return }
+        AudioServicesPlaySystemSoundWithCompletion(closing, nil)
+    }
+
+    // System sounds leave the WebRTC audio session and its activation count alone.
+    private static func soundID(_ name: String) -> SystemSoundID? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "wav", subdirectory: "VoiceSounds") else { return nil }
+        var id: SystemSoundID = 0
+        return AudioServicesCreateSystemSoundID(url as CFURL, &id) == kAudioServicesNoError ? id : nil
+    }
 }

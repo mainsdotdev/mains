@@ -71,13 +71,47 @@ struct VoiceFocusStage: View {
     @ObserveHotReload private var hotReload
     #endif
     let voice: RealtimeVoiceController
+    let presented: Bool
+
     var body: some View {
         GeometryReader { geometry in
-            VoiceOrb(voice: voice, size: max(80, min(geometry.size.width * 0.70, geometry.size.height * 0.72, 300)))
+            let size = max(80, min(geometry.size.width * 0.70, geometry.size.height * 0.72, 300))
+            VoiceOrbSlot(voice: voice, size: size, presented: presented)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .allowsHitTesting(false)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("voiceFocusStage")
+        .accessibilityIdentifier("voiceFocusStage", isEnabled: presented)
+        .accessibilityHidden(!presented)
+    }
+}
+
+struct VoiceOrbSlot: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let voice: RealtimeVoiceController
+    let size: CGFloat
+    let presented: Bool
+    var bottomInset: CGFloat = 0
+    var orbIdentifier = "voiceOrb"
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.voiceReduceMotionPreview) private var reduceMotionPreview
+
+    var body: some View {
+        let inCall = voice.phase == .connecting || voice.phase == .connected
+        let motionAllowed = !reduceMotion && !reduceMotionPreview
+        let disappearance: AnyTransition = motionAllowed ? .scale(scale: 0.16).combined(with: .opacity) : .opacity
+        // Keep the slot alive when the controller releases a call so its removal can finish.
+        VStack(spacing: 0) {
+            if presented && inCall {
+                VoiceOrb(voice: voice, size: size)
+                    .accessibilityIdentifier(orbIdentifier)
+                    .transition(.asymmetric(insertion: .identity, removal: disappearance))
+                    .padding(.bottom, bottomInset)
+            }
+        }
+        .animation(.easeInOut(duration: motionAllowed ? 0.17 : 0.10), value: inCall)
     }
 }
 
@@ -94,17 +128,55 @@ struct VoiceOrb: View {
     @Environment(\.voiceReduceMotionPreview) private var reduceMotionPreview
     @State private var visible = false
     @State private var envelope = VoiceOrbEnvelope()
+
+    private var statusLabel: LocalizedStringKey {
+        switch voice.phase {
+        case .connecting: "Connecting voice chat"
+        case .connected: voice.muted ? "Voice chat, microphone muted" : "Voice chat connected"
+        case .ending: "Ending voice chat"
+        case .stopFailed: "Ending voice chat could not be confirmed"
+        case .idle, .error: "Voice chat"
+        }
+    }
+
     var body: some View {
-        let moving = visible && surfaceVisible && !reduceMotion && !reduceMotionPreview && scenePhase == .active
-        TimelineView(.animation(minimumInterval: ProcessInfo.processInfo.isLowPowerModeEnabled ? 1.0 / 15 : 1.0 / 30,
-                                paused: !moving)) { timeline in
+        let connecting = voice.phase == .connecting
+        let connected = voice.phase == .connected
+        let waitingDiameter = min(size, 24)
+        let motionAllowed = !reduceMotion && !reduceMotionPreview
+        let moving = visible && surfaceVisible && motionAllowed && scenePhase == .active
+        let artwork = TimelineView(.animation(minimumInterval: ProcessInfo.processInfo.isLowPowerModeEnabled ? 1.0 / 15 : 1.0 / 30,
+                                              paused: !moving)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
             let frame = moving ? envelope.sample(input: voice.muted ? 0 : voice.inputLevel, output: voice.outputLevel,
-                                                time: timeline.date.timeIntervalSinceReferenceDate, style: style) : VoiceOrbFrame()
+                                                time: time, style: style) : VoiceOrbFrame()
             VoiceOrbArtwork(style: style, size: size, frame: frame)
+                .opacity(connecting && moving ? 0.84 + 0.16 * cos(time * .pi / 0.8) : 1)
         }
         .frame(width: size, height: size)
+
+        Group {
+            if motionAllowed, size > waitingDiameter {
+                let growth = size - waitingDiameter
+                artwork.keyframeAnimator(initialValue: connected ? CGFloat(1) : 0, trigger: connected) { content, progress in
+                    let diameter = waitingDiameter + progress * growth
+                    content.scaleEffect(diameter / size)
+                        .frame(width: min(diameter, size), height: min(diameter, size))
+                } keyframes: { current in
+                    if connected {
+                        CubicKeyframe(1 + 0.05 * size / growth, duration: 0.16, startVelocity: 0, endVelocity: 0)
+                        CubicKeyframe(1, duration: 0.09, startVelocity: 0, endVelocity: 0)
+                    } else {
+                        MoveKeyframe(current)
+                    }
+                }
+            } else {
+                let diameter = connected ? size : waitingDiameter
+                artwork.scaleEffect(diameter / size).frame(width: diameter, height: diameter)
+            }
+        }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(voice.muted ? "Voice chat, microphone muted" : voice.phase == .connected ? "Voice chat connected" : "Connecting voice chat")
+        .accessibilityLabel(statusLabel)
         .accessibilityValue(style.title)
         .accessibilityIdentifier("voiceOrb")
         .onAppear { visible = true }.onDisappear { visible = false }

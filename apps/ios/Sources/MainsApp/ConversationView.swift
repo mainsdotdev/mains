@@ -479,11 +479,8 @@ struct ConversationView: View {
             .allowsHitTesting(!focusedVoice)
             .accessibilityHidden(focusedVoice)
             #if MAINS_GPT_LIVE
-            if focusedVoice {
-                VoiceFocusStage(voice: session.voice)
-                    .background(alignment: .center) { KeyboardDismissBackground(color: Color(.systemBackground)) }
-                    .transition(.opacity)
-            }
+            if focusedVoice { KeyboardDismissBackground(color: Color(.systemBackground)) }
+            VoiceFocusStage(voice: session.voice, presented: focusedVoice)
             #endif
         }
         .background(alignment: .center) { KeyboardDismissBackground(color: Color(.systemBackground)) }

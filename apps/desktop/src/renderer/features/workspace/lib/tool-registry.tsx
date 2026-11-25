@@ -105,8 +105,8 @@ export const ATLAS_PAGE_TOOLS: BuiltinTool[] = [
 export interface ToolPhrase {
   /** Past tense, exactly one call: "edited a file". */
   one: string;
-  /** Past tense, several calls: "edited files". Same as `one` when uncountable. */
-  many: string;
+  /** Past tense for several calls, with a count where it belongs in the label. */
+  many: string | ((count: number) => string);
   /**
    * Where the clause sits in the sentence; lower comes first. Ordering by rank
    * rather than by when the call happened keeps the header still while a group
@@ -560,7 +560,7 @@ export const PHRASES_BY_GROUP_KEY: Record<string, ToolPhrase> = {
   // Reads and searches.
   read: { one: "read a file", many: "read files", rank: 30 },
   view: { one: "viewed a file", many: "viewed files", rank: 30 },
-  imageview: { one: "viewed an image", many: "viewed images", rank: 30 },
+  imageview: { one: "viewed an image", many: (count) => `viewed ${count} images`, rank: 30 },
   glob: { one: "looked for files", many: "looked for files", rank: 32 },
   grep: { one: "searched the code", many: "searched the code", rank: 32 },
   search: { one: "searched", many: "searched", rank: 32 },

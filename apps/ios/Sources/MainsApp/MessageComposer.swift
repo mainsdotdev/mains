@@ -97,16 +97,11 @@ struct MessageComposer: View {
         return speed?.isFast(in: settings) == true ? ComposerSpeed.activeTint(in: colorScheme) : .secondary
     }
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
             #if MAINS_GPT_LIVE
-            if ownsVoice && voicePresentation == .conversation {
-                VoiceOrb(voice: session.voice, size: 104)
-                    .accessibilityIdentifier("voiceComposerOrb")
-                    .frame(maxWidth: .infinity).padding(.bottom, 4)
-            }
-            if ownsVoice && session.voice.phase == .connecting {
-                Text("Connecting voice…").font(.footnote).foregroundStyle(.secondary)
-            }
+            VoiceOrbSlot(voice: session.voice, size: 104, presented: ownsVoice && voicePresentation == .conversation,
+                         bottomInset: 12, orbIdentifier: "voiceComposerOrb")
+                .frame(maxWidth: .infinity)
             if ownsVoice && voicePresentation == .focus { focusComposer }
             else { standardComposer }
             #else

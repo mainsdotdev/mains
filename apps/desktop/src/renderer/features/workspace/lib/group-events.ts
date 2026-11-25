@@ -183,12 +183,6 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
           endTime: event.timestamp,
         });
       } else {
-        // Image inspection is its own activity. Keep adjacent image views
-        // together and separate them from commands that created the files.
-        if (
-          currentToolGroup.length > 0 &&
-          isImageViewToolEvent(currentToolGroup[0]) !== isImageViewToolEvent(event)
-        ) flushToolGroup();
         currentToolGroup.push(event);
       }
     } else if (event.type === "artifact") {

@@ -252,6 +252,7 @@ class ReleaseTest < Minitest::Test
     assert_empty project.root_object.package_references
     resources = app.resources_build_phase.files_references.map(&:path)
     refute_includes resources, 'VoicePreviews'
+    refute_includes resources, 'VoiceSounds'
     refute_includes resources, 'WebRTC-LICENSE.txt'
     app.build_configurations.each do |config|
       refute_includes config.build_settings.fetch('SWIFT_ACTIVE_COMPILATION_CONDITIONS'), 'MAINS_GPT_LIVE'

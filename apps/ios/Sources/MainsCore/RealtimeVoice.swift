@@ -66,6 +66,8 @@ public final class RealtimeVoiceController {
     public var ownsCall: Bool { [.connecting, .connected, .ending, .stopFailed].contains(phase) }
     public var keepsConnectionAlive: Bool { phase == .connecting || phase == .connected }
     @ObservationIgnored public var makeMedia: (() -> any RealtimeVoiceMedia)?
+    @ObservationIgnored var onConnectedFeedback: (() async -> Void)?
+    @ObservationIgnored var onClosing: (() -> Void)?
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored private var attempt: Attempt?
     private let timeout: Duration
@@ -82,6 +84,7 @@ public final class RealtimeVoiceController {
         var stop: Task<Void, Never>?
         var timer: Task<Void, Never>?
         var signals: Task<Void, Never>?
+        var connectedFeedback: Task<Void, Never>?
         var context: [JSONValue] = []
         var contextIDs: [String] = []
         var contextTask: Task<Void, Never>?
@@ -114,12 +117,14 @@ public final class RealtimeVoiceController {
             }
             media.onLevels = { [weak self, weak call] input, output in
                 guard let self, let call, self.current(call), self.phase == .connected else { return }
-                self.inputLevel = self.muted ? 0 : min(1, max(0, input))
+                self.inputLevel = self.muted || call.connectedFeedback != nil ? 0 : min(1, max(0, input))
                 self.outputLevel = min(1, max(0, output))
             }
             // Obtain mic permission before creating a new conversation.
             let offer = try await media.offer()
             guard current(call) else { return }
+            // Hold the outgoing track through the local connection sound.
+            if onConnectedFeedback != nil { media.setMuted(true) }
             let signaling = try await prepare()
             guard current(call) else { return }
             call.signaling = signaling; runID = signaling.runID
@@ -188,7 +193,7 @@ public final class RealtimeVoiceController {
     }
     public func toggleMute() {
         guard let call = attempt, phase == .connected else { return }
-        muted.toggle(); call.media?.setMuted(muted)
+        muted.toggle(); call.media?.setMuted(muted || call.connectedFeedback != nil)
         if muted { inputLevel = 0 }
     }
     func retire() {
@@ -197,17 +202,31 @@ public final class RealtimeVoiceController {
     }
     private func current(_ call: Attempt) -> Bool { attempt === call && !call.ending }
     private func connected(_ call: Attempt) {
-        guard current(call), call.serverReady, call.mediaReady else { return }
-        call.timer?.cancel(); phase = .connected; onChange?()
+        guard current(call), phase == .connecting, call.serverReady, call.mediaReady else { return }
+        call.timer?.cancel()
+        if let feedback = onConnectedFeedback {
+            call.connectedFeedback = Task { [weak self, weak call] in
+                guard !Task.isCancelled else { return }
+                await feedback()
+                guard let self, let call, self.current(call) else { return }
+                call.connectedFeedback = nil
+                call.media?.setMuted(self.muted)
+            }
+        } else { call.media?.setMuted(muted) }
+        phase = .connected
+        onChange?()
     }
     private func end(_ call: Attempt, error: String? = nil) async {
         guard current(call) else { return }
         call.ending = true; self.error = error
-        release(call); phase = .ending; onChange?()
+        release(call); phase = .ending
+        if error == nil { onClosing?() }
+        onChange?()
         await confirm(call)
     }
     private func release(_ call: Attempt) {
         call.timer?.cancel(); call.signals?.cancel(); call.contextTask?.cancel()
+        call.connectedFeedback?.cancel(); call.connectedFeedback = nil
         call.media?.close(); call.media = nil; call.context = []; call.contextIDs = []
         inputLevel = 0; outputLevel = 0; muted = false
     }
@@ -235,8 +254,11 @@ public final class RealtimeVoiceController {
     }
     private func complete(_ call: Attempt) {
         guard attempt === call else { return }
+        let closedNormally = !call.ending && error == nil
         release(call); attempt = nil; runID = nil
-        phase = error == nil ? .idle : .error; onChange?()
+        phase = error == nil ? .idle : .error
+        if closedNormally { onClosing?() }
+        onChange?()
     }
     private func flush(_ call: Attempt) {
         guard current(call), call.contextTask == nil else { return }

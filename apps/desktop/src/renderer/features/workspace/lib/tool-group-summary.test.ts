@@ -44,10 +44,12 @@ describe("summarizeToolCalls", () => {
       content: [{ type: "text", text: "Page changed elsewhere" }] }) };
     expect(summarizeToolCalls([failed])).toBe("Tried to update an Atlas page");
   });
-  it("counts inspected images in their own tool group", () => {
+  it("counts inspected images in both image-only and mixed groups", () => {
     const first = { ...call("v1", "ImageView: {}"), metadata: { codexItemType: "imageView" } };
     const second = { ...call("v2", "ImageView: {}"), metadata: { codexItemType: "imageView" } };
     expect(summarizeToolCalls([first, second])).toBe("Viewed 2 images");
+    expect(summarizeToolCalls([call("b", "Bash: {}"), first, call("e", "Edit: {}"), second]))
+      .toBe("Edited a file, viewed 2 images, ran a command");
   });
 
   it("counts each kind of work once, in sentence form", () => {
