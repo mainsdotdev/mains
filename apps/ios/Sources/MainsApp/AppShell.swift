@@ -43,9 +43,6 @@ struct AppShell: View {
     @State private var collapsedCollections: Set<String> = []
     @State private var wideSidebarHidden = false
     @State private var inlineSidebarVisible = false
-    #if MAINS_GPT_LIVE
-    @State private var demoVoiceOrbStyle = VoiceOrbStyle.water
-    #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var colorScheme
@@ -107,12 +104,7 @@ struct AppShell: View {
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
                                 case .project(let id): TargetConversationsView(session: session, target: .project(id),
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
-                                case .settings:
-                                    #if MAINS_GPT_LIVE
-                                    ComputerView(session: session, demoVoiceOrbStyle: $demoVoiceOrbStyle)
-                                    #else
-                                    ComputerView(session: session)
-                                    #endif
+                                case .settings: ComputerView(session: session)
                                 case .workInbox: WorkInboxView(session: session, openConversation: { path.append(.conversation($0)) }, openSettings: showSettings)
                                 case .atlas: AtlasView(session: session, openPage: { path.append(.atlasPage($0)) }, openConversation: { path.append(.conversation($0)) })
                                     .id(session.ownership)
@@ -184,20 +176,17 @@ struct AppShell: View {
                                 .accessibilityHidden(true)
                                 .zIndex(1)
                         }
-                        if isHome || sidebar.isInline || sidebar.blocksContent || progress > 0 {
-                            SidebarView(session: session, collapsed: $collapsedCollections, isVisible: sidebarVisible, menuWidth: width,
-                                        openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
-                                        openProject: { open(.project($0)) },
-                                        selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) }, openMates: { open(.mates) })
-                                .frame(width: sidebarLayoutWidth)
-                                .background(sidebar.isInline ? Color(.systemBackground) : .clear)
-                                .opacity(sidebar.isInline ? 1 : progress)
-                                .offset(x: sidebar.isInline || reduceMotion ? 0 : -sidebarLayoutWidth * (1 - progress))
-                                .transition(sidebar.isInline || reduceMotion ? .opacity : .offset(x: -sidebarLayoutWidth))
-                                .simultaneousGesture(drawerClosingGesture(width: width, edge: width - 24),
-                                                     isEnabled: sidebar.isInline && drawerOpen && !pinned && !searchMounted)
-                                .zIndex(2)
-                        }
+                        SidebarView(session: session, collapsed: $collapsedCollections, isVisible: sidebarVisible,
+                                    showsContent: isHome || sidebar.isInline || sidebar.blocksContent || progress > 0,
+                                    menuWidth: width, layoutWidth: sidebarLayoutWidth, overlayProgress: sidebar.isInline ? nil : progress,
+                                    openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
+                                    openProject: { open(.project($0)) },
+                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) }, openMates: { open(.mates) })
+                            .background(sidebar.isInline ? Color(.systemBackground) : .clear)
+                            .opacity(sidebar.isInline ? 1 : progress)
+                            .simultaneousGesture(drawerClosingGesture(width: width, edge: width - 24),
+                                                 isEnabled: sidebar.isInline && drawerOpen && !pinned && !searchMounted)
+                            .zIndex(2)
                         if sidebar.blocksContent {
                             closeSidebarControl
                                 .padding(.trailing, SidebarView.controlInset)

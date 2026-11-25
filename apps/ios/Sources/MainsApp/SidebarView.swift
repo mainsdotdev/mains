@@ -7,7 +7,10 @@ struct SidebarView: View {
     let session: BackendSession
     @Binding var collapsed: Set<String>
     let isVisible: Bool
+    let showsContent: Bool
     let menuWidth: CGFloat
+    let layoutWidth: CGFloat
+    let overlayProgress: CGFloat?
     let openConversation: (String) -> Void
     let openWorkspace: (String) -> Void
     let openProject: (String) -> Void
@@ -31,6 +34,7 @@ struct SidebarView: View {
     private let menuIconWidth: CGFloat = 22
     private let menuIconSize: CGFloat = 20
     private let menuIconSpacing: CGFloat = 10
+    private let bottomBarTravel: CGFloat = 96
     private let folderAsset = "registry-project-folder"
     private var space: Space? { session.selectedSpace }
     private var modes: [String] { space.map { Experience.modes(for: $0.providerId) } ?? [] }
@@ -44,6 +48,31 @@ struct SidebarView: View {
         return Array(chats.filter { $0.collectionId == nil || !collections.contains($0.collectionId!) }.prefix(20))
     }
     var body: some View {
+        let slides = overlayProgress != nil && !reduceMotion
+        let hiddenFraction = slides ? 1 - (overlayProgress ?? 1) : 0
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                if showsContent {
+                    menu
+                        .offset(x: -layoutWidth * hiddenFraction)
+                        .transition(slides ? .offset(x: -layoutWidth) : .opacity)
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .topLeading)
+            if showsContent {
+                bottomBar.padding(.horizontal, Self.controlInset).padding(.top, 10).padding(.bottom, 16)
+                    .offset(y: bottomBarTravel * hiddenFraction)
+                    .transition(slides ? .offset(y: bottomBarTravel) : .opacity)
+            }
+        }
+        .frame(width: layoutWidth)
+        .onChange(of: space?.id) { _, _ in providersExpanded = false }
+        .onChange(of: session.ownership) { _, _ in providersExpanded = false; pendingMode = nil }
+        .onChange(of: isVisible) { _, visible in
+            if !visible { providersExpanded = false }
+        }
+    }
+    private var menu: some View {
         VStack(alignment: .leading, spacing: 0) {
             header.padding(.horizontal, Self.controlInset).padding(.bottom, 21)
                 .frame(width: menuWidth)
@@ -89,12 +118,6 @@ struct SidebarView: View {
             .modifier(SidebarScrollFade())
             .frame(width: menuWidth)
             .id("\(space?.id ?? ""):\(space?.mode ?? "")")
-            bottomBar.padding(.horizontal, Self.controlInset).padding(.top, 10).padding(.bottom, 16)
-        }
-        .onChange(of: space?.id) { _, _ in providersExpanded = false }
-        .onChange(of: session.ownership) { _, _ in providersExpanded = false; pendingMode = nil }
-        .onChange(of: isVisible) { _, visible in
-            if !visible { providersExpanded = false }
         }
     }
     private var shortcuts: some View {

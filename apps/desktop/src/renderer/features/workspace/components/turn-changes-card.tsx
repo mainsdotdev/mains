@@ -266,7 +266,7 @@ export function TurnChangesCard({
   return (
     <div className="overflow-hidden rounded-2xl">
       <div
-        className={`flex items-center gap-3 px-3 py-2.5 glass-card ${
+        className={`flex items-center gap-3 px-3 py-2.5 glass-card not-dark:[--glass-fill:var(--color-primary-50)] ${
           hasContentBelowHeader ? "rounded-t-2xl" : "rounded-2xl"
         }`}
       >

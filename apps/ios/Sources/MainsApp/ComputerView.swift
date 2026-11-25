@@ -23,7 +23,6 @@ struct ComputerView: View {
     #endif
     let session: BackendSession
     #if MAINS_GPT_LIVE
-    @Binding var demoVoiceOrbStyle: VoiceOrbStyle
     @AppStorage(VoiceOrbStyle.storageKey) private var voiceOrbStyle = VoiceOrbStyle.water
     #endif
     @AppStorage("appearancePreference") private var appearance = AppAppearance.system
@@ -94,16 +93,15 @@ struct ComputerView: View {
                 }
             }
             #if MAINS_GPT_LIVE
-            if AppFeatures.gptLiveEnabled && session.pairing != nil {
+            if AppFeatures.gptLiveEnabled && session.pairing != nil && !session.isDemo {
                 SettingsSection("GPT Live") {
                     NavigationLink { VoiceSettingsView(session: session) } label: {
                         SettingsRow(title: "Voice", symbol: "chevron.right", subtitle: "Choose a voice and listen to samples",
                                     value: session.selectedRealtimeVoice?.capitalized)
                     }
                     .accessibilityIdentifier("voiceSettings")
-                    let style = session.isDemo ? $demoVoiceOrbStyle : $voiceOrbStyle
-                    NavigationLink { VoiceOrbSettingsView(selection: style) } label: {
-                        SettingsRow(title: "Orb Style", value: style.wrappedValue.title)
+                    NavigationLink { VoiceOrbSettingsView(selection: $voiceOrbStyle) } label: {
+                        SettingsRow(title: "Orb Style", value: voiceOrbStyle.title)
                     }
                     .accessibilityIdentifier("voiceOrbSettings")
                 }

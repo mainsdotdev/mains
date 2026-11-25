@@ -2463,6 +2463,24 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: connected, object: nil)], timeout: 15), .completed)
     }
 
+    func testDemoSettingsHideGPTLive() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        XCTAssertTrue(app.buttons["connectionPill"].waitForExistence(timeout: 10))
+        openSidebar(app)
+        app.buttons["openSettings"].tap()
+
+        let exit = app.buttons["exitDemo"]
+        XCTAssertTrue(exit.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["GPT Live"].exists)
+        XCTAssertFalse(app.buttons["voiceSettings"].exists)
+        XCTAssertFalse(app.buttons["voiceOrbSettings"].exists)
+        scrollTo(exit, in: app); exit.tap()
+        XCTAssertTrue(app.buttons["scanPairingCode"].waitForExistence(timeout: 5))
+    }
+
     func testGPTLiveOrbStylePickerPersistsSelection() {
         continueAfterFailure = false
         let app = makeApplication()

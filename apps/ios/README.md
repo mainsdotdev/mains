@@ -122,7 +122,8 @@ above (outside) the normal composer. This local display preference is remembered
 switching never reconnects audio, changes mute state or clears history. Ending
 the call restores the normal chat. Hidden speech still persists normally.
 
-**Settings → GPT Live → Voice** opens the voice picker before or during a call.
+**Settings → GPT Live** is available when paired with a computer outside Demo Mode.
+**Voice** opens the voice picker before or during a call.
 The native sheet loads Codex's supported voices from the computer and saves the
 selection to that computer's existing Codex preference, shared with desktop.
 Changes apply to the next voice session without ending or muting the current one.
@@ -131,12 +132,11 @@ locally; voices without a recording say so. Sample playback is available outside
 an active call so the microphone cannot feed a sample into the conversation, and
 stops when the voice settings page closes or the app becomes inactive. An unconfirmed save
 retains its original command identity for **Check saved voice** before another
-selection or a new voice call. Demo voice preferences remain in memory only.
+selection or a new voice call.
 
 **Settings → GPT Live → Orb Style** previews Water and the desktop Cloud, Sphere
 and Aurora styles in the stock desktop palette. Water is the default. The phone
 remembers the style and applies it to Focus, Conversation and the call dock.
-Demo selections stay in memory.
 The bundled Metal shaders use the existing microphone and GPT audio-level
 meters through a local attack/release envelope.
 Rendering pauses offscreen/inactive, uses 30 fps (15 in Low Power Mode), and becomes
