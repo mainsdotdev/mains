@@ -1109,8 +1109,10 @@ struct MateView: View {
             .simultaneousGesture(TapGesture().onEnded {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             }, isEnabled: composerFocused)
+        }
+        .composerInset { editorExpanded in
             if let mate, mate.ready {
-                firstTaskComposer(mate) { composerFocused = $0 }
+                firstTaskComposer(mate, editorExpanded: editorExpanded) { composerFocused = $0 }
                     .onDisappear { composerFocused = false }
             }
         }
@@ -1218,8 +1220,8 @@ struct MateView: View {
             .accessibilityIdentifier("mateSetupConversation")
         }
         .safeAreaPadding(.top, 44)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if setup.saved == true, mate.ready { firstTaskComposer(mate) }
+        .composerInset { editorExpanded in
+            if setup.saved == true, mate.ready { firstTaskComposer(mate, editorExpanded: editorExpanded) }
             else if canAnswer { setupComposer(mate, question: question.question, step: setup.turns.count) }
         }
     }
@@ -1327,9 +1329,9 @@ struct MateView: View {
         }.disabled(!session.isConnected)
     }
 
-    private func firstTaskComposer(_ mate: Mate, focusChanged: ((Bool) -> Void)? = nil) -> some View {
+    private func firstTaskComposer(_ mate: Mate, editorExpanded: Bool, focusChanged: ((Bool) -> Void)? = nil) -> some View {
         VStack(spacing: 8) {
-            if session.pendingMessage?.status == .uncertain {
+            if !editorExpanded, session.pendingMessage?.status == .uncertain {
                 Button("Check message delivery", systemImage: "arrow.clockwise") {
                     Task {
                         let owner = session.ownership

@@ -2819,6 +2819,55 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "planDisclosure-", "Applied")).firstMatch.waitForExistence(timeout: 10))
     }
 
+    func testDemoLongMessageEditorExpandsWithoutLosingDraftOrCaret() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app); app.buttons["startDemo"].tap()
+
+        let input = app.textViews["homeMessageInput"]
+        let expand = app.buttons["expandMessageEditor"]
+        let collapse = app.buttons["collapseMessageEditor"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10))
+        input.tap()
+        input.typeText("First line")
+        XCTAssertFalse(expand.exists)
+        let fullWidth = input.frame.width
+
+        let moreLines = "\nSecond\nThird\nFourth\nFifth\nSixth\nSeventh\nEighth"
+        input.typeText(moreLines)
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        let compactHeight = input.frame.height
+        XCTAssertLessThan(input.frame.width, fullWidth)
+        XCTAssertGreaterThanOrEqual(expand.frame.minX, input.frame.maxX - 1)
+        XCTAssertLessThan(expand.frame.minY, input.frame.minY)
+        let composer = app.descendants(matching: .any)["messageComposer"].firstMatch
+        XCTAssertTrue(composer.exists)
+        let topInset = expand.frame.minY - composer.frame.minY
+        let rightInset = composer.frame.maxX - expand.frame.maxX
+        XCTAssertEqual(topInset, rightInset, accuracy: 1)
+        expand.tap()
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5))
+        assertKeyboardVisible(app)
+        XCTAssertGreaterThan(input.frame.height, compactHeight)
+        XCTAssertEqual(input.frame.width, fullWidth, accuracy: 1)
+        XCTAssertEqual(input.value as? String, "First line" + moreLines)
+
+        app.keyboards.firstMatch.keys["a"].tap()
+        collapse.tap()
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        assertKeyboardVisible(app)
+        XCTAssertEqual(input.frame.height, compactHeight, accuracy: 1)
+        XCTAssertEqual(input.value as? String, "First line" + moreLines + "a")
+
+        expand.tap()
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5))
+        app.buttons["startConversation"].tap()
+        let consent = app.buttons["allowDataSharing"]
+        if consent.waitForExistence(timeout: 4) { consent.tap() }
+        XCTAssertTrue(app.textViews["messageInput"].waitForExistence(timeout: 10))
+        XCTAssertFalse(collapse.exists)
+    }
+
     func testDemoAtPickerKeepsWorkspaceMentionsInComposerAndPrompt() {
         continueAfterFailure = false
         let app = makeApplication()

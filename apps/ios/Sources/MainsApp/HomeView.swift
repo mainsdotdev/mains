@@ -53,10 +53,10 @@ struct HomeView: View {
             }
             #endif
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .composerInset { editorExpanded in
             if let space {
                 HomeComposerArea(session: session, space: space, targetPicker: $targetPicker, modelSheet: $modelSheet,
-                                 optionsSheet: $optionsSheet, consent: $consent, onCreated: onCreated)
+                                 optionsSheet: $optionsSheet, consent: $consent, editorExpanded: editorExpanded, onCreated: onCreated)
                     .id(space.id)
             } else if session.pairing == nil {
                 UnpairedHomeArea(session: session, pair: openPairing)
@@ -179,6 +179,7 @@ private struct HomeComposerArea: View {
     @Binding var modelSheet: Bool
     @Binding var optionsSheet: Bool
     @Binding var consent: ConsentContext?
+    let editorExpanded: Bool
     let onCreated: (String) -> Void
     @Bindable private var draft: ConversationDraft
     @State private var workspaceRequired = false
@@ -190,89 +191,91 @@ private struct HomeComposerArea: View {
     private var ready: Bool { session.isConnected && !session.changingMode && !session.sending && !uncertain && session.pendingFork == nil && session.pendingConversationAction == nil }
     private var targetReady: Bool { space.mode != "developer" || workspace != nil && session.gitStates.first(where: { $0.workspaceId == workspace?.id })?.pathExists != false }
     init(session: BackendSession, space: Space, targetPicker: Binding<Bool>, modelSheet: Binding<Bool>, optionsSheet: Binding<Bool>,
-         consent: Binding<ConsentContext?>, onCreated: @escaping (String) -> Void) {
+         consent: Binding<ConsentContext?>, editorExpanded: Bool, onCreated: @escaping (String) -> Void) {
         self.session = session; self.space = space; _targetPicker = targetPicker; _modelSheet = modelSheet; _optionsSheet = optionsSheet
-        _consent = consent; self.onCreated = onCreated; draft = session.homeDraft(for: space.id)
+        _consent = consent; self.editorExpanded = editorExpanded; self.onCreated = onCreated; draft = session.homeDraft(for: space.id)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if session.isDemo, draft.text.isEmpty {
-                Button {
-                    draft.text = "Review this workspace and suggest the next steps"
-                } label: {
-                    Label("Try a sample request", systemImage: "sparkles").font(.footnote.weight(.medium))
-                        .frame(maxWidth: .infinity, minHeight: 32)
-                }
-                .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
-                .accessibilityIdentifier("demoSuggestedPrompt")
-                Button {
-                    draft.text = DemoBackend.decisionPrompt
-                } label: {
-                    Label("Try approvals and questions", systemImage: "hand.raised").font(.footnote.weight(.medium))
-                        .frame(maxWidth: .infinity, minHeight: 32)
-                }
-                .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
-                .accessibilityIdentifier("demoDecisionsPrompt")
-                Button { draft.text = DemoBackend.subagentsPrompt } label: {
-                    Label("Try subagents", systemImage: "person.crop.rectangle.stack").font(.footnote.weight(.medium))
-                        .frame(maxWidth: .infinity, minHeight: 32)
-                }
-                .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
-                .accessibilityIdentifier("demoSubagentsPrompt")
-                if space.mode != "chat" {
+            if !editorExpanded {
+                if session.isDemo, draft.text.isEmpty {
                     Button {
-                        draft.text = DemoBackend.changesPrompt
+                        draft.text = "Review this workspace and suggest the next steps"
                     } label: {
-                        Label("Try file changes", systemImage: "doc.badge.plus").font(.footnote.weight(.medium))
+                        Label("Try a sample request", systemImage: "sparkles").font(.footnote.weight(.medium))
                             .frame(maxWidth: .infinity, minHeight: 32)
                     }
                     .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
-                    .accessibilityIdentifier("demoChangesPrompt")
-                }
-            }
-            if uncertain, let pending = session.pendingMessage {
-                ChatNotice(title: "Delivery unconfirmed", message: "“\(pending.text.prefix(160))”\nCheck this message before starting another conversation.", symbol: "exclamationmark.circle", warning: true) {
-                    Button(session.sending ? "Checking…" : "Check delivery") {
-                        Task {
-                            let owner = session.pairing?.deviceId
-                            do {
-                                let id = try await session.checkDelivery()
-                                guard owner == session.pairing?.deviceId else { return }
-                                draft.dismissFailure(); onCreated(id)
-                            } catch { draft.showFailure(error.localizedDescription) }
+                    .accessibilityIdentifier("demoSuggestedPrompt")
+                    Button {
+                        draft.text = DemoBackend.decisionPrompt
+                    } label: {
+                        Label("Try approvals and questions", systemImage: "hand.raised").font(.footnote.weight(.medium))
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
+                    .accessibilityIdentifier("demoDecisionsPrompt")
+                    Button { draft.text = DemoBackend.subagentsPrompt } label: {
+                        Label("Try subagents", systemImage: "person.crop.rectangle.stack").font(.footnote.weight(.medium))
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
+                    .accessibilityIdentifier("demoSubagentsPrompt")
+                    if space.mode != "chat" {
+                        Button {
+                            draft.text = DemoBackend.changesPrompt
+                        } label: {
+                            Label("Try file changes", systemImage: "doc.badge.plus").font(.footnote.weight(.medium))
+                                .frame(maxWidth: .infinity, minHeight: 32)
                         }
-                    }.disabled(!session.isConnected || session.sending).accessibilityIdentifier("checkDelivery")
-                }
-            } else if workspaceRequired && !targetReady {
-                ChatNotice(title: "Workspace required", message: workspaceRequiredMessage, symbol: "exclamationmark.circle", warning: true) {
-                    Button("Choose a workspace") { targetPicker = true }.accessibilityIdentifier("chooseRequiredWorkspace")
-                    Button("Dismiss") { workspaceRequired = false }
-                }
-            } else if let failure = draft.failure {
-                ChatNotice(title: draft.failureTitle, message: failure, symbol: "exclamationmark.circle", warning: true) {
-                    if !targetReady { Button("Choose a workspace") { targetPicker = true }.accessibilityIdentifier("chooseRequiredWorkspace") }
-                    if let unsent = draft.unsentText {
-                        Button("Copy unsent message") { UIPasteboard.general.string = unsent }
-                        if !draft.unsentAttachments.isEmpty { Button("Use failed message and files") { draft.restoreUnsent() } }
+                        .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
+                        .accessibilityIdentifier("demoChangesPrompt")
                     }
-                    Button("Dismiss") { draft.dismissFailure() }
                 }
-            }
-            Button { targetPicker = true } label: {
-                HStack(spacing: 8) {
-                    if space.mode == "developer" {
-                        RegistryIcon(token: workspaceIcon, size: 15)
+                if uncertain, let pending = session.pendingMessage {
+                    ChatNotice(title: "Delivery unconfirmed", message: "“\(pending.text.prefix(160))”\nCheck this message before starting another conversation.", symbol: "exclamationmark.circle", warning: true) {
+                        Button(session.sending ? "Checking…" : "Check delivery") {
+                            Task {
+                                let owner = session.pairing?.deviceId
+                                do {
+                                    let id = try await session.checkDelivery()
+                                    guard owner == session.pairing?.deviceId else { return }
+                                    draft.dismissFailure(); onCreated(id)
+                                } catch { draft.showFailure(error.localizedDescription) }
+                            }
+                        }.disabled(!session.isConnected || session.sending).accessibilityIdentifier("checkDelivery")
                     }
-                    else { RegistryIcon(token: collection?.icon, fallback: "tray", size: 15) }
-                    Text(space.mode == "developer" ? workspace?.name ?? "Choose a workspace" : collection?.name ?? "No project")
-                        .font(.footnote.weight(.semibold)).lineLimit(1)
-                    Image(systemName: "chevron.down").font(.caption).foregroundStyle(.secondary)
+                } else if workspaceRequired && !targetReady {
+                    ChatNotice(title: "Workspace required", message: workspaceRequiredMessage, symbol: "exclamationmark.circle", warning: true) {
+                        Button("Choose a workspace") { targetPicker = true }.accessibilityIdentifier("chooseRequiredWorkspace")
+                        Button("Dismiss") { workspaceRequired = false }
+                    }
+                } else if let failure = draft.failure {
+                    ChatNotice(title: draft.failureTitle, message: failure, symbol: "exclamationmark.circle", warning: true) {
+                        if !targetReady { Button("Choose a workspace") { targetPicker = true }.accessibilityIdentifier("chooseRequiredWorkspace") }
+                        if let unsent = draft.unsentText {
+                            Button("Copy unsent message") { UIPasteboard.general.string = unsent }
+                            if !draft.unsentAttachments.isEmpty { Button("Use failed message and files") { draft.restoreUnsent() } }
+                        }
+                        Button("Dismiss") { draft.dismissFailure() }
+                    }
                 }
-                .foregroundStyle(.primary).padding(.horizontal, 14).frame(minHeight: 36)
+                Button { targetPicker = true } label: {
+                    HStack(spacing: 8) {
+                        if space.mode == "developer" {
+                            RegistryIcon(token: workspaceIcon, size: 15)
+                        }
+                        else { RegistryIcon(token: collection?.icon, fallback: "tray", size: 15) }
+                        Text(space.mode == "developer" ? workspace?.name ?? "Choose a workspace" : collection?.name ?? "No project")
+                            .font(.footnote.weight(.semibold)).lineLimit(1)
+                        Image(systemName: "chevron.down").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .foregroundStyle(.primary).padding(.horizontal, 14).frame(minHeight: 36)
+                }
+                .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 20))
+                .composerPickerSource(.target)
+                .disabled(!ready).padding(.horizontal, 16).accessibilityIdentifier("chooseTarget")
             }
-            .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 20))
-            .composerPickerSource(.target)
-            .disabled(!ready).padding(.horizontal, 16).accessibilityIdentifier("chooseTarget")
             MessageComposer(session: session, context: ComposerContext(space: space), draft: draft, canSend: ready,
                          model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend,
                          onVoiceWorkspaceRequired: showWorkspaceRequired, voiceCreated: onCreated)

@@ -435,7 +435,7 @@ struct ConversationView: View {
         if waitsForMateConversation {
             #if MAINS_GPT_LIVE
             mateConversationLoading
-                .safeAreaInset(edge: .bottom, spacing: 0) { if ownsVoice { composerArea } }
+                .composerInset { editorExpanded in if ownsVoice { composerArea(editorExpanded: editorExpanded) } }
                 .environment(\.mateChatTint, composerMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
             #else
             mateConversationLoading
@@ -484,7 +484,7 @@ struct ConversationView: View {
             #endif
         }
         .background(alignment: .center) { KeyboardDismissBackground(color: Color(.systemBackground)) }
-        .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
+        .composerInset { composerArea(editorExpanded: $0) }
         .environment(\.mateChatTint, composerMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
         .environment(\.solidChatNotices, true)
         .composerPickers(model: $modelSheet, options: $optionsSheet, session: session,
@@ -572,11 +572,11 @@ struct ConversationView: View {
             .accessibilityIdentifier("conversationOutputs")
     }
 
-    @ViewBuilder private var composerArea: some View {
+    @ViewBuilder private func composerArea(editorExpanded: Bool) -> some View {
         if archivedMate {
             archivedMateNotice
         } else {
-            composerControls
+            composerControls(editorExpanded: editorExpanded)
         }
     }
 
@@ -653,70 +653,72 @@ struct ConversationView: View {
         }
     }
 
-    private var composerControls: some View {
+    private func composerControls(editorExpanded: Bool) -> some View {
         VStack(spacing: 8) {
+            if !editorExpanded {
             #if MAINS_GPT_LIVE
-            if focusedVoice && (session.waitingForDecision || session.pendingQuestions != nil) {
-                Button { voicePresentation = .conversation } label: {
-                    Label("Response needed", systemImage: "hand.raised")
-                        .font(.footnote.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 40)
-                        .background(Color(.secondarySystemBackground), in: .capsule)
-                }.buttonStyle(ChatPressStyle())
-                    .accessibilityHint("Open the conversation to answer the pending request.")
-                    .accessibilityIdentifier("voiceNeedsResponse")
-            }
+                if focusedVoice && (session.waitingForDecision || session.pendingQuestions != nil) {
+                    Button { voicePresentation = .conversation } label: {
+                        Label("Response needed", systemImage: "hand.raised")
+                            .font(.footnote.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 40)
+                            .background(Color(.secondarySystemBackground), in: .capsule)
+                    }.buttonStyle(ChatPressStyle())
+                        .accessibilityHint("Open the conversation to answer the pending request.")
+                        .accessibilityIdentifier("voiceNeedsResponse")
+                }
             #endif
-            if !focusedVoice && !agents.isEmpty {
-                SubagentDock(agents: agents, partial: session.transcript.page?.hasOlder == true || session.transcript.page?.hasNewer == true,
-                             expanded: $agentsExpanded) { agent in
-                    guard owner == session.ownership, session.viewingRunID == runID else { return }
-                    agentsExpanded = false
-                    selectedAgent = SubagentSelection(runID: runID, agentID: agent.id, owner: session.ownership)
-                }.zIndex(1)
-            }
-            SettingsRecoveryNotice(session: session, runID: runID)
-            if let decision = session.pendingPlanDecision, decision.uncertain {
-                ChatNotice(title: "Plan decision unconfirmed", message: "Check whether the computer received the plan decision.", symbol: "exclamationmark.circle", warning: true) {
-                    Button(decision.checking ? "Checking…" : "Check decision") {
-                        let owner = session.ownership
-                        Task {
-                            do { try await session.checkPlanDecision() }
-                            catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
-                        }
-                    }
-                    .disabled(decision.checking || !session.isConnected)
-                    .accessibilityIdentifier("checkPlanDecision")
+                if !focusedVoice && !agents.isEmpty {
+                    SubagentDock(agents: agents, partial: session.transcript.page?.hasOlder == true || session.transcript.page?.hasNewer == true,
+                                 expanded: $agentsExpanded) { agent in
+                        guard owner == session.ownership, session.viewingRunID == runID else { return }
+                        agentsExpanded = false
+                        selectedAgent = SubagentSelection(runID: runID, agentID: agent.id, owner: session.ownership)
+                    }.zIndex(1)
                 }
-            }
-            if !focusedVoice {
-                RemoteConversationQueueView(queues: session.viewingRunID == runID ? session.remoteQueues : [])
-            }
-            if !focusedVoice, run?.supportsSteering == true, run?.isReplica != true {
-                ConversationQueueView(session: session, queue: queue, canSteer: run?.canSteer == true && session.pendingPlanDecision?.runID != runID, resume: prepareQueueResume)
-            }
-            if uncertain, let pending = session.pendingMessage,
-               !pending.isQueueOwned || pending.runID != runID || !queue.messages.contains(where: { $0.id == pending.queueInputID }) {
-                ChatNotice(title: "Delivery unconfirmed", message: "“\(pending.text.prefix(160))”\nCheck this message before sending another." + (draft.failure.map { "\n" + $0 } ?? ""), symbol: "exclamationmark.circle", warning: true) {
-                    Button(session.sending ? "Checking…" : "Check delivery") {
-                        Task {
-                            do {
-                                if let id = pending.queueInputID { _ = try await session.checkQueuedInput(id) }
-                                else { _ = try await session.checkDelivery() }
-                                draft.dismissFailure()
+                SettingsRecoveryNotice(session: session, runID: runID)
+                if let decision = session.pendingPlanDecision, decision.uncertain {
+                    ChatNotice(title: "Plan decision unconfirmed", message: "Check whether the computer received the plan decision.", symbol: "exclamationmark.circle", warning: true) {
+                        Button(decision.checking ? "Checking…" : "Check decision") {
+                            let owner = session.ownership
+                            Task {
+                                do { try await session.checkPlanDecision() }
+                                catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
                             }
-                            catch { draft.showFailure(error.localizedDescription) }
                         }
+                        .disabled(decision.checking || !session.isConnected)
+                        .accessibilityIdentifier("checkPlanDecision")
                     }
-                    .disabled(session.sending || !session.isConnected)
-                    .accessibilityIdentifier("checkDelivery")
                 }
-            } else if let failure = draft.failure, failure != run?.archivedReplyError {
-                ChatNotice(title: draft.failureTitle, message: failure, symbol: "exclamationmark.circle", warning: true) {
-                    if let unsent = draft.unsentText {
-                        Button("Copy unsent message", systemImage: "doc.on.doc") { UIPasteboard.general.string = unsent }
-                        if !draft.unsentAttachments.isEmpty { Button("Use failed message and files") { draft.restoreUnsent() } }
+                if !focusedVoice {
+                    RemoteConversationQueueView(queues: session.viewingRunID == runID ? session.remoteQueues : [])
+                }
+                if !focusedVoice, run?.supportsSteering == true, run?.isReplica != true {
+                    ConversationQueueView(session: session, queue: queue, canSteer: run?.canSteer == true && session.pendingPlanDecision?.runID != runID, resume: prepareQueueResume)
+                }
+                if uncertain, let pending = session.pendingMessage,
+                   !pending.isQueueOwned || pending.runID != runID || !queue.messages.contains(where: { $0.id == pending.queueInputID }) {
+                    ChatNotice(title: "Delivery unconfirmed", message: "“\(pending.text.prefix(160))”\nCheck this message before sending another." + (draft.failure.map { "\n" + $0 } ?? ""), symbol: "exclamationmark.circle", warning: true) {
+                        Button(session.sending ? "Checking…" : "Check delivery") {
+                            Task {
+                                do {
+                                    if let id = pending.queueInputID { _ = try await session.checkQueuedInput(id) }
+                                    else { _ = try await session.checkDelivery() }
+                                    draft.dismissFailure()
+                                }
+                                catch { draft.showFailure(error.localizedDescription) }
+                            }
+                        }
+                        .disabled(session.sending || !session.isConnected)
+                        .accessibilityIdentifier("checkDelivery")
                     }
-                    Button("Dismiss") { draft.dismissFailure() }
+                } else if let failure = draft.failure, failure != run?.archivedReplyError {
+                    ChatNotice(title: draft.failureTitle, message: failure, symbol: "exclamationmark.circle", warning: true) {
+                        if let unsent = draft.unsentText {
+                            Button("Copy unsent message", systemImage: "doc.on.doc") { UIPasteboard.general.string = unsent }
+                            if !draft.unsentAttachments.isEmpty { Button("Use failed message and files") { draft.restoreUnsent() } }
+                        }
+                        Button("Dismiss") { draft.dismissFailure() }
+                    }
                 }
             }
             if run?.isReplica == true {
@@ -726,7 +728,7 @@ struct ConversationView: View {
                 ChatNotice(title: "Reply interrupted", message: message, symbol: "exclamationmark.circle", warning: true) { EmptyView() }
                     .accessibilityIdentifier("archivedConversationNotice")
             } else if let context = composerContext {
-                if !focusedVoice, goalRequest.canRead, let goalSummary, goalSummary.owner == session.ownership {
+                if !editorExpanded, !focusedVoice, goalRequest.canRead, let goalSummary, goalSummary.owner == session.ownership {
                     ConversationGoalBar(summary: goalSummary.value, running: run?.status == "running",
                                         supportsControls: session.supportsMobileGoalControls, enabled: session.canChangeGoal(runID),
                                         edit: { revision in

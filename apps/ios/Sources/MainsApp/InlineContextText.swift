@@ -179,13 +179,18 @@ struct ContextTextEditor: View {
     @Binding var focused: Bool
     let placeholder: String
     let identifier: String
+    var fillsHeight = false
+    var reservedTrailingWidth: CGFloat = 0
+    var onOverflowChange: ((Bool) -> Void)? = nil
     @State private var artwork = ContextArtwork()
     @State private var measuredWidth: CGFloat = 320
     var body: some View {
         ContextTextInput(text: $text, skills: $skills, scope: scope, focused: $focused, placeholder: placeholder, identifier: identifier,
-                         images: artwork.images, artworkRevision: artwork.revision, measuredWidth: measuredWidth)
+                         images: artwork.images, artworkRevision: artwork.revision, measuredWidth: measuredWidth,
+                         fillsHeight: fillsHeight, reservedTrailingWidth: reservedTrailingWidth, onOverflowChange: onOverflowChange)
             .task(id: skills) { await artwork.load(skills) }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth = $0 }
+            .padding(.trailing, reservedTrailingWidth)
     }
 }
 
@@ -202,6 +207,9 @@ private struct ContextTextInput: UIViewRepresentable {
     let images: [String: UIImage]
     let artworkRevision: Int
     let measuredWidth: CGFloat
+    let fillsHeight: Bool
+    let reservedTrailingWidth: CGFloat
+    let onOverflowChange: ((Bool) -> Void)?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.mainPaneCovered) private var mainPaneCovered
@@ -218,6 +226,8 @@ private struct ContextTextInput: UIViewRepresentable {
     }
     func updateUIView(_ view: ComposerTextView, context: Context) {
         let coordinator = context.coordinator; coordinator.parent = self
+        view.onOverflowChange = onOverflowChange
+        view.reservedTrailingWidth = reservedTrailingWidth
         view.isUserInteractionEnabled = !mainPaneCovered
         view.isAccessibilityElement = !mainPaneCovered
         view.accessibilityElementsHidden = mainPaneCovered
@@ -250,6 +260,7 @@ private struct ContextTextInput: UIViewRepresentable {
             }
             view.selectedRange = selection
             coordinator.projection = projection; coordinator.skills = skills; coordinator.signature = signature
+            view.invalidateTextMeasurement()
         }
         view.accessibilityValue = projection.readable
         view.onCopy = { [weak view, weak coordinator] in
@@ -266,12 +277,18 @@ private struct ContextTextInput: UIViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ComposerTextView, context: Context) -> CGSize? {
         guard let width = proposal.width else { return nil }
         let font = uiView.font ?? .preferredFont(forTextStyle: .body)
+        let minimum = ceil(font.lineHeight)
+        if fillsHeight, let height = proposal.height, height.isFinite {
+            return CGSize(width: width, height: max(minimum, height))
+        }
         let fitted = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        let limit = ceil(font.lineHeight * 6)
-        uiView.isScrollEnabled = fitted.height > limit
-        return CGSize(width: width, height: max(ceil(font.lineHeight), min(limit, fitted.height)))
+        return CGSize(width: width, height: max(minimum, min(uiView.compactHeightLimit, fitted.height)))
     }
-    static func dismantleUIView(_ uiView: ComposerTextView, coordinator: Coordinator) { uiView.wantsFocus = false; uiView.delegate = nil }
+    static func dismantleUIView(_ uiView: ComposerTextView, coordinator: Coordinator) {
+        uiView.wantsFocus = false
+        uiView.onOverflowChange = nil
+        uiView.delegate = nil
+    }
 
     @MainActor final class Coordinator: NSObject, UITextViewDelegate {
         var parent: ContextTextInput
@@ -302,8 +319,10 @@ private struct ContextTextInput: UIViewRepresentable {
             projection = ContextText(value, skills: selected)
             parent.text = value
             view.accessibilityValue = projection.readable
-            (view as? ComposerTextView)?.placeholder.isHidden = !value.isEmpty
-            view.invalidateIntrinsicContentSize()
+            if let editor = view as? ComposerTextView {
+                editor.placeholder.isHidden = !value.isEmpty
+                editor.invalidateTextMeasurement()
+            }
         }
         func textViewDidChangeSelection(_ view: UITextView) {
             view.typingAttributes = [.font: UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor.label]
@@ -329,13 +348,55 @@ final class ComposerTextView: UITextView {
     let placeholder = UILabel()
     var wantsFocus = false
     var onCopy: (() -> Void)?
+    var onOverflowChange: ((Bool) -> Void)?
+    var reservedTrailingWidth: CGFloat = 0 {
+        didSet {
+            if reservedTrailingWidth != oldValue {
+                needsTextMeasurement = true
+                setNeedsLayout()
+            }
+        }
+    }
+    var compactHeightLimit: CGFloat { ceil((font ?? .preferredFont(forTextStyle: .body)).lineHeight * 6) }
+    private var measuredViewport = CGSize.zero
+    private var needsTextMeasurement = true
+    private var overflows: Bool?
     init() {
         super.init(frame: .zero, textContainer: nil)
         placeholder.textColor = .placeholderText; placeholder.isUserInteractionEnabled = false
         addSubview(placeholder)
     }
     required init?(coder: NSCoder) { nil }
-    override func layoutSubviews() { super.layoutSubviews(); placeholder.frame = CGRect(x: 0, y: 0, width: bounds.width, height: font?.lineHeight ?? 22) }
+    func invalidateTextMeasurement() {
+        needsTextMeasurement = true
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        placeholder.frame = CGRect(x: 0, y: 0, width: bounds.width, height: font?.lineHeight ?? 22)
+        let resized = measuredViewport != bounds.size
+        guard bounds.width > 0, bounds.height > 0, resized || needsTextMeasurement else { return }
+        measuredViewport = bounds.size
+        needsTextMeasurement = false
+        let fitted = sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude))
+        let needsScrolling = fitted.height > bounds.height + 0.5
+        if needsScrolling != isScrollEnabled { isScrollEnabled = needsScrolling }
+        if resized, isFirstResponder, needsScrolling { scrollRangeToVisible(selectedRange) }
+        guard onOverflowChange != nil else { return }
+        // Check the original width so the space for the button cannot keep it visible.
+        let fullHeight = reservedTrailingWidth > 0
+            ? sizeThatFits(CGSize(width: bounds.width + reservedTrailingWidth, height: .greatestFiniteMagnitude)).height
+            : fitted.height
+        let overflowsWithoutButton = fullHeight > compactHeightLimit + 0.5
+        guard overflows != overflowsWithoutButton else { return }
+        overflows = overflowsWithoutButton
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.overflows == overflowsWithoutButton else { return }
+            self.onOverflowChange?(overflowsWithoutButton)
+        }
+    }
     override func didMoveToWindow() { super.didMoveToWindow(); if wantsFocus { requestFocus() } }
     func requestFocus() {
         guard window != nil else { return }
