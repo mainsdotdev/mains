@@ -10,6 +10,7 @@ import Testing
     var delaySkills = false
     var failSendAfter = false
     var overrideSkills: JSONValue?
+    var pluginIcons: JSONValue?
     var supportsMates = false
     var supportsMateInfo = false
     var mateTaskPages: [Double: JSONValue] = [:]
@@ -64,11 +65,15 @@ import Testing
             if let value { return value }
         }
         if channel == "providers:getCommands" && faults.failCommands { throw MainsError.server("Commands unavailable") }
+        if channel == "providers:getMobilePluginIcons", let icons = faults.pluginIcons { return icons }
         let value = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
-        if channel == "backend:describe", faults.supportsMates {
+        if channel == "backend:describe" {
             var descriptor = value.objectValue
-            let mateCapabilities: [JSONValue] = faults.supportsMateInfo ? [.string("assistants"), .string("mateInfo")] : [.string("assistants")]
-            descriptor["capabilities"] = .array(value["capabilities"].array + mateCapabilities)
+            var capabilities = value["capabilities"].array
+            if faults.supportsMates { capabilities.append(.string("assistants")) }
+            if faults.supportsMateInfo { capabilities.append(.string("mateInfo")) }
+            if faults.pluginIcons != nil { capabilities.append(.string("mobilePluginIcons")) }
+            descriptor["capabilities"] = .array(capabilities)
             return .object(descriptor)
         }
         if channel == "runs:execute" && faults.failSendAfter { faults.failSendAfter = false; throw MainsError.timeout }
@@ -375,6 +380,32 @@ import Testing
         faults.overrideSkills = .array([])
         let refreshed = try await session.loadContext(scope)
         #expect(refreshed.skills.isEmpty && refreshed.error == nil)
+    }
+
+    @Test @MainActor func transcriptPluginIconsCacheHitsAndMissesUntilCodexSkillsChange() async throws {
+        let (session, _, faults) = try setup()
+        defer { session.exitDemo() }
+        let image = Data([1, 2, 3])
+        faults.pluginIcons = .array([.object(["vendorId": .string("github"), "label": .string("GitHub"),
+                                             "imageBase64": .string(image.base64EncodedString())])])
+        try await eventually { session.isConnected && session.supportsPluginIcons }
+        let run = try #require(session.conversations.first { $0.providerId == "codex" })
+        await session.selectConversation(run.id)
+        let channel = "providers:getMobilePluginIcons"
+        await session.loadToolPluginIcons(["github", "missing"], runID: "another-run")
+        #expect(!faults.calls.contains { $0.channel == channel })
+        await session.loadToolPluginIcons(["github", "missing"], runID: run.id)
+        #expect(session.toolPluginIcon("github")?.image == image)
+        #expect(session.toolPluginIcon("missing") == nil)
+        await session.loadToolPluginIcons(["github", "missing"], runID: run.id)
+        #expect(faults.calls.filter { $0.channel == channel }.map(\.args) == [[.array([.string("github"), .string("missing")])]])
+
+        faults.emit?("providers:skillsUpdated", .object(["providerId": .string("codex")]))
+        #expect(session.toolPluginIcon("github") == nil)
+        faults.pluginIcons = .array([])
+        await session.loadToolPluginIcons(["github"], runID: run.id)
+        #expect(faults.calls.filter { $0.channel == channel }.count == 2)
+        #expect(session.toolPluginIcon("github") == nil)
     }
 
     @Test @MainActor func executeContinueAndReceiptChecksKeepCanonicalContextAndDemoHistory() async throws {

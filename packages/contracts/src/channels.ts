@@ -364,6 +364,7 @@ export const CHANNELS = {
     getPlugins: "providers:getPlugins",
     cancelPluginCatalog: "providers:cancelPluginCatalog",
     getInstalledPlugins: "providers:getInstalledPlugins",
+    getMobilePluginIcons: "providers:getMobilePluginIcons",
     getConnectors: "providers:getConnectors",
     startConnectorOAuth: "providers:startConnectorOAuth",
     /** Push: native connector catalog, runtime, or OAuth state changed. */

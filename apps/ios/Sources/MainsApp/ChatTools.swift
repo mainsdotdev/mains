@@ -1,5 +1,26 @@
 import SwiftUI
 
+private struct ToolPluginIconRequest: Equatable {
+    let runID: String
+    let owner: Int
+    let revision: Int?
+    let vendors: [String]
+}
+
+extension View {
+    func loadToolPluginIcons(session: BackendSession, runID: String, providerID: String, calls: [ToolCall],
+                             enabled: Bool) -> some View {
+        let request = enabled && providerID == "codex" && session.isConnected && session.supportsPluginIcons
+            ? ToolPluginIconRequest(runID: runID, owner: session.ownership, revision: session.contextRevisions["codex"],
+                                    vendors: ToolPresentation.pluginVendorIDs(in: calls).prefix(64).sorted())
+            : nil
+        return task(id: request) {
+            guard let request, !request.vendors.isEmpty, request.owner == session.ownership else { return }
+            await session.loadToolPluginIcons(request.vendors, runID: request.runID)
+        }
+    }
+}
+
 struct ChatPlanCard: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -122,8 +143,8 @@ struct ChatToolBlock: View {
     private var active: Bool { running || live }
     private var expanded: Bool { disclosure.isExpanded(active: active) }
     var body: some View {
+        let providerID = session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? ""
         if isMate {
-            let providerID = session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? ""
             VStack(alignment: .leading, spacing: 16) {
                 ForEach(rows) { row in
                     if let call = row.tool {
@@ -134,7 +155,7 @@ struct ChatToolBlock: View {
                                     .accessibilityIdentifier("mateQuestion-\(call.id)")
                             }
                         } else {
-                            ChatToolRow(session: session, call: call, displayStatus: row.toolDisplayStatus)
+                            ChatToolRow(session: session, providerID: providerID, call: call, displayStatus: row.toolDisplayStatus)
                         }
                     }
                 }
@@ -149,7 +170,9 @@ struct ChatToolBlock: View {
                         HStack(spacing: 4) {
                             if !expanded {
                                 HStack(spacing: 4) {
-                                    ForEach(group.icons) { RegistryIcon(token: $0.asset, size: 16) }
+                                    ForEach(group.icons) { icon in
+                                        ChatToolIcon(asset: icon.asset, plugin: providerID == "codex" ? session.toolPluginIcon(icon.vendorID) : nil)
+                                    }
                                 }
                             }
                             Text(group.summary).lineLimit(1)
@@ -163,13 +186,42 @@ struct ChatToolBlock: View {
                 if calls.count == 1 || expanded {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(rows) { row in
-                            if let call = row.tool { ChatToolRow(session: session, call: call, displayStatus: row.toolDisplayStatus) }
+                            if let call = row.tool {
+                                ChatToolRow(session: session, providerID: providerID, call: call, displayStatus: row.toolDisplayStatus)
+                            }
                         }
                     }
                 }
             }
             .onChange(of: active, initial: true) { _, active in disclosure.observe(active: active) }
         }
+    }
+}
+
+private struct ChatToolIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let asset: String
+    let plugin: ToolPluginIcon?
+    var tint: Color = .secondary
+
+    var body: some View {
+        Group {
+            if let data = plugin?.image, data.count <= 32 * 1024, let image = UIImage(data: data) {
+                Image(uiImage: image).renderingMode(.original).resizable().scaledToFit()
+                    .clipShape(.rect(cornerRadius: 3))
+            } else if let plugin, let hex = plugin.brandColor?.trimmingCharacters(in: CharacterSet(charactersIn: "#")),
+                      hex.count == 6, let value = UInt32(hex, radix: 16) {
+                Text(plugin.label.prefix(1).uppercased()).font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(red: Double((value >> 16) & 255) / 255,
+                                      green: Double((value >> 8) & 255) / 255,
+                                      blue: Double(value & 255) / 255), in: .rect(cornerRadius: 3))
+            } else {
+                RegistryIcon(token: asset, size: 16, tint: tint)
+            }
+        }.frame(width: 16, height: 16).accessibilityHidden(true)
     }
 }
 
@@ -188,6 +240,7 @@ private struct ChatToolRow: View {
     @ObserveHotReload private var hotReload
     #endif
     let session: BackendSession
+    let providerID: String
     let call: ToolCall
     var displayStatus: String? = nil
     @State private var expanded = false
@@ -205,9 +258,9 @@ private struct ChatToolRow: View {
                     Group {
                         if view.running {
                             let run = session.conversations.first { $0.id == session.viewingRunID }
-                            AgentAsciiSpinner(providerID: run?.providerId ?? "", animated: session.isConnected && run?.isActive == true)
+                            AgentAsciiSpinner(providerID: providerID, animated: session.isConnected && run?.isActive == true)
                         } else {
-                            RegistryIcon(token: view.icon, size: 16, tint: tint)
+                            ChatToolIcon(asset: view.icon, plugin: providerID == "codex" ? session.toolPluginIcon(view.vendorID) : nil, tint: tint)
                         }
                     }.frame(width: 16)
                     Text(view.verb).fontWeight(.medium).foregroundStyle(tint).lineLimit(1).layoutPriority(1)

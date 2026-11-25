@@ -7,6 +7,7 @@ import { MOBILE_GOAL_CONTROLS_CAPABILITY, MOBILE_GOAL_SUMMARY_CAPABILITY } from 
 import { MATE_REALTIME_CONVERSATION_CAPABILITY } from "@mains/contracts/realtime";
 import { WORKSPACE_FILE_SEARCH_CAPABILITY } from "@mains/contracts/search";
 import { MOBILE_PLAN_DECISION_CAPABILITY } from "@mains/contracts/plan-decision";
+import { MOBILE_PLUGIN_ICONS_CAPABILITY } from "@mains/contracts/plugin-icons";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { assertAuthActive, createAuthFence, createAuthGrants } from "@mains/contracts/auth-lifecycle";
 import { registeredChannels } from "../../ipc-kit";
@@ -103,6 +104,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   // offers, so a phone can attach one the way the desktop's "@" menu does.
   // Read-only listings — installing or editing a skill stays off this list.
   CHANNELS.providers.getSkills,
+  CHANNELS.providers.getMobilePluginIcons,
   CHANNELS.providers.getCodexPermissions,
   CHANNELS.providers.getMobileGoalSummary,
   CHANNELS.providers.getCommands,
@@ -317,6 +319,7 @@ export const backendService = {
     if (reachable.includes(CHANNELS.providers.getMobileGoalSummary)) namespaces.push(MOBILE_GOAL_SUMMARY_CAPABILITY);
     if (reachable.includes(CHANNELS.search.workspaceFiles)) namespaces.push(WORKSPACE_FILE_SEARCH_CAPABILITY);
     if (reachable.includes(CHANNELS.runs.decidePlan)) namespaces.push(MOBILE_PLAN_DECISION_CAPABILITY);
+    if (reachable.includes(CHANNELS.providers.getMobilePluginIcons)) namespaces.push(MOBILE_PLUGIN_ICONS_CAPABILITY);
     if (reachable.includes(CHANNELS.providers.getMobileGoalSummary) && reachable.includes(CHANNELS.providers.changeMobileGoal)) {
       namespaces.push(MOBILE_GOAL_CONTROLS_CAPABILITY);
     }

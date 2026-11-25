@@ -179,6 +179,11 @@ private func lifecycleTool(_ id: Int, _ name: String, status: String = "running"
                    try lifecycleTool(8, "mcp__codex_apps__gmail.search_emails", at: 8)]
     #expect(ToolGroupPresentation(vendors).summary == "Used the Linear and Gmail integrations")
     #expect(ToolGroupPresentation(vendors).icons.map(\.asset) == ["tool-generic", "tool-generic"])
+    let github = [try lifecycleTool(10, "mcp__codex_apps__github.search", at: 10),
+                  try lifecycleTool(11, "mcp__github__fetch_workflow_run_jobs", at: 11)]
+    #expect(github.map { ToolPresentation($0).vendorID } == ["github", "github"])
+    #expect(ToolGroupPresentation(github).icons.map(\.vendorID) == ["github"])
+    #expect(ToolPresentation.pluginVendorIDs(in: calls + github) == ["github"])
     let atlas = try lifecycleTool(9, "mcp__mains__AtlasUpdatePage", status: "done", at: 9,
                                   output: .string("{\"isError\":true}"))
     #expect(ToolGroupPresentation([atlas]).summary == "Tried to update an Atlas page")

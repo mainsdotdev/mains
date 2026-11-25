@@ -229,12 +229,13 @@ export const imageProxyService = {
   async safeImageFetch(
     initialUrl: string,
     authHeaders: Record<string, string> | null,
+    signal?: AbortSignal,
   ): Promise<Response> {
     let url = initialUrl;
     let headers: Record<string, string> | undefined = authHeaders ?? undefined;
 
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      const response = await fetchPublicHttpUrl(url, { headers });
+      const response = await fetchPublicHttpUrl(url, { headers, signal });
 
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");

@@ -1,5 +1,16 @@
 import Foundation
 
+public struct ToolPluginIcon: Decodable, Sendable {
+    let vendorID: String
+    public let label: String
+    public let brandColor: String?
+    public let image: Data?
+
+    private enum CodingKeys: String, CodingKey {
+        case vendorID = "vendorId", label, brandColor, image = "imageBase64"
+    }
+}
+
 extension ToolCall {
     /// Mirrors desktop's eventToolStatus. A background MCP result acknowledges
     /// launch only; explicit task lifecycle still owns the visible outcome.
@@ -23,6 +34,7 @@ public struct ToolPresentation: Sendable {
     public let name: String
     public let verb: String
     public let icon: String
+    public let vendorID: String?
     public let kind: Kind
     public let detail: String
     public let body: String
@@ -86,9 +98,12 @@ public struct ToolPresentation: Sendable {
         lower.hasPrefix("mcp__") ? nil : Self.definitions.first { $0.aliases.contains(lower) }
             ?? Self.definitions.first { $0.aliases.contains { $0.count >= 4 && lower.contains($0) } }
     }
-    fileprivate static func groupIcon(for name: String) -> (key: String, asset: String) {
+    fileprivate static func groupIcon(for name: String) -> (key: String, asset: String, vendorID: String?) {
         let lower = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let integration = integration(for: lower) { return ("vendor:" + integration.id, integration.icon) }
+        if let integration = integration(for: lower) {
+            let vendorID = pluginVendorID(integration.id)
+            return ("vendor:" + (vendorID ?? integration.id), integration.icon, vendorID)
+        }
         let builtin = definition(for: lower)
         let key = builtin?.aliases.first ?? lower
         let asset = switch key {
@@ -98,7 +113,21 @@ public struct ToolPresentation: Sendable {
         case "report_intent": "sparkles"
         default: builtin?.icon ?? "tool-generic"
         }
-        return (key, asset)
+        return (key, asset, nil)
+    }
+    public static func pluginVendorIDs(in calls: [ToolCall]) -> [String] {
+        var seen = Set<String>()
+        return calls.reversed().compactMap { call in
+            let name = call.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard let vendorID = pluginVendorID(integration(for: name)?.id), seen.insert(vendorID).inserted else { return nil }
+            return vendorID
+        }
+    }
+    private static func pluginVendorID(_ id: String?) -> String? {
+        // Mains and the computer-use runtime already have dedicated artwork.
+        guard let id, id != "mains", id != "cua_repl", id.utf16.count <= 128 else { return nil }
+        let key = id.replacingOccurrences(of: #"[\s._-]+"#, with: "", options: .regularExpression)
+        return key.isEmpty ? nil : key
     }
     public init(_ call: ToolCall, status: String? = nil) {
         let lower = call.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -122,6 +151,7 @@ public struct ToolPresentation: Sendable {
         else if let integration { verb = running ? integration.active : integration.name }
         else { verb = name }
         icon = builtin?.icon ?? integration?.icon ?? "tool-generic"
+        vendorID = Self.pluginVendorID(integration?.id)
         let path = Self.string(params, ["file_path", "filePath", "path", "filename", "file"])
         let title = params["_title"].string ?? ""
         let raw = params.string ?? Self.string(params, ["_raw", "patch", "input"])
@@ -313,6 +343,7 @@ public struct ToolGroupPresentation: Sendable {
     public struct Icon: Identifiable, Sendable {
         public let id: String
         public let asset: String
+        public let vendorID: String?
     }
     public let icons: [Icon]
     private struct Phrase {
@@ -378,7 +409,7 @@ public struct ToolGroupPresentation: Sendable {
         var groupIcons: [Icon] = []
         for call in calls where groupIcons.count < 3 {
             let icon = ToolPresentation.groupIcon(for: call.toolName)
-            if seenIcons.insert(icon.key).inserted { groupIcons.append(Icon(id: icon.key, asset: icon.asset)) }
+            if seenIcons.insert(icon.key).inserted { groupIcons.append(Icon(id: icon.key, asset: icon.asset, vendorID: icon.vendorID)) }
         }
         icons = groupIcons
         if !calls.isEmpty && calls.allSatisfy({ $0.metadata?["codexItemType"].string == "imageView" }) {

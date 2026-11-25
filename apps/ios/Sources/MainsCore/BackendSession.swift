@@ -166,6 +166,7 @@ public final class BackendSession {
     public var supportsMobileGoalControls: Bool { connectedDescriptor?.capabilities.contains("mobileGoalControls") == true }
     public var supportsWorkspaceFileSearch: Bool { connectedDescriptor?.capabilities.contains("workspaceFileSearch") == true }
     public var supportsPlanDecisions: Bool { connectedDescriptor?.capabilities.contains("mobilePlanDecision") == true }
+    public var supportsPluginIcons: Bool { connectedDescriptor?.capabilities.contains("mobilePluginIcons") == true }
     public var goalChangeNeedsCheck: Bool { pendingGoalChange?.uncertain == true }
     public private(set) var goalSummaryRevision = 0
     var supportsMateTeamCreation: Bool { supportsMates && connectedDescriptor?.capabilities.contains("mateTeamCreation") == true }
@@ -191,6 +192,9 @@ public final class BackendSession {
     @ObservationIgnored private var contextCatalogues: [ContextScope: ContextCatalogue] = [:]
     @ObservationIgnored private var contextRequests: [ContextScope: UUID] = [:]
     @ObservationIgnored private var contextOrder: [ContextScope] = []
+    // A nil value is a completed lookup for a plugin with no usable artwork.
+    private var toolPluginIcons: [String: ToolPluginIcon?] = [:]
+    @ObservationIgnored private var toolPluginIconOrder: [String] = []
     private var consentRevision = 0
 
     @ObservationIgnored private let storage: any SessionStorage
@@ -1552,6 +1556,7 @@ public final class BackendSession {
         savingConversationSettings = []; uncertainConversationSettings = []; settingsChanges = [:]
         settingsRevision = 0; settingsVersions = [:]
         contextCatalogues = [:]; contextRequests = [:]; contextRevisions = [:]; contextOrder = []
+        clearToolPluginIcons()
         actionError = nil; historyError = nil; pendingApprovals = []
         approvalExpiryTask?.cancel(); approvalExpiryTask = nil
         decisionDeliveries = [:]; decisionRevision += 1
@@ -1625,6 +1630,7 @@ public final class BackendSession {
                 try await syncSnapshot(candidate, generation: current)
                 guard generation == current, !Task.isCancelled else { return }
                 attemptTimer.cancel()
+                clearToolPluginIcons()
                 connection = .connected
                 if workInboxVisible { startWorkInboxWatch() }
                 runQueues.kick()
@@ -1659,6 +1665,39 @@ public final class BackendSession {
     }
 
     public func cachedContext(_ scope: ContextScope) -> ContextCatalogue? { contextCatalogues[scope] }
+
+    public func toolPluginIcon(_ vendorID: String?) -> ToolPluginIcon? {
+        guard let vendorID else { return nil }
+        return toolPluginIcons[vendorID] ?? nil
+    }
+
+    public func loadToolPluginIcons(_ vendors: [String], runID: String) async {
+        guard supportsPluginIcons, isConnected, viewingRunID == runID, let candidate = transport else { return }
+        let owner = pairingOwner, current = generation, revision = contextRevisions["codex"]
+        let missing = vendors.prefix(64).filter { !toolPluginIcons.keys.contains($0) }
+        for start in stride(from: 0, to: missing.count, by: 8) {
+            let batch = missing.dropFirst(start).prefix(8).filter { !toolPluginIcons.keys.contains($0) }
+            if batch.isEmpty { continue }
+            let args: [JSONValue] = [.array(batch.map(JSONValue.string))]
+            guard let response = try? await candidate.invoke("providers:getMobilePluginIcons", args: args, timeout: 30),
+                  !Task.isCancelled, owner == pairingOwner, current == generation, transport === candidate,
+                  contextRevisions["codex"] == revision, viewingRunID == runID,
+                  let icons = try? response.decode([ToolPluginIcon].self), icons.count <= batch.count else { return }
+            let byVendor = Dictionary(icons.map { ($0.vendorID, $0) }, uniquingKeysWith: { first, _ in first })
+            var updated = toolPluginIcons
+            for vendor in batch where !updated.keys.contains(vendor) {
+                updated.updateValue(byVendor[vendor], forKey: vendor)
+                toolPluginIconOrder.append(vendor)
+            }
+            while toolPluginIconOrder.count > 128 { updated.removeValue(forKey: toolPluginIconOrder.removeFirst()) }
+            toolPluginIcons = updated
+        }
+    }
+
+    private func clearToolPluginIcons() {
+        toolPluginIcons = [:]
+        toolPluginIconOrder = []
+    }
 
     public func searchWorkspaceFiles(_ query: String, scope: ContextScope) async throws -> [WorkspaceFileMatch] {
         guard supportsWorkspaceFileSearch, isConnected, let candidate = transport else { throw MainsError.disconnected }
@@ -1952,6 +1991,7 @@ public final class BackendSession {
         if ["space:changed", "workspace:created", "workspace:updated", "workspace:deleted", "workspace:gitStateChanged", "collections:changed", "projects:changed"].contains(channel) { scheduleListRefresh() }
         if channel == "providers:skillsUpdated", let providerID = payload["providerId"].string {
             contextRevisions[providerID, default: 0] += 1
+            if providerID == "codex" { clearToolPluginIcons() }
         }
         if channel == "providers:modelsUpdated", let providerID = payload["providerId"].string {
             Task { await loadModels(providerID, force: true) }

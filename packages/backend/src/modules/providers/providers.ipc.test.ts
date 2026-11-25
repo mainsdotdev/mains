@@ -7,7 +7,9 @@ import type { DatabaseInstance } from "../../db/types";
 import type { ProviderResponse } from "./providers.dto";
 import { registerProvidersIpc, unregisterProvidersIpc } from "./providers.ipc";
 import { providersService } from "./providers.service";
-import type { SkillInfo } from "../../../shared/adapter.types";
+import type { PluginInfo, SkillInfo } from "../../../shared/adapter.types";
+import { installTestBackendRuntime } from "../../../test/backend-runtime";
+import { PAIRED_DEVICE_CHANNELS } from "../backend/backend.service";
 import { decodeWsMessage, encodeWsMessage, MAX_DEVICE_MESSAGE_BYTES } from "@mains/contracts/ws-protocol";
 import { serveConnection, type WsConnection } from "../../ipc-kit/ws-server";
 import { WebSocketSink } from "../../ipc-kit/websocket-sink";
@@ -72,6 +74,43 @@ describe("providers IPC for paired devices", () => {
     expect(projected.every((skill) => !skill.iconSmall && !skill.iconLarge && !("defaultPrompt" in skill))).toBe(true);
     expect(local).toEqual({ success: true, data: skills });
     expect(skills[0].iconLarge).toBe(icon);
+  });
+
+  it("returns the installed plugin's logo for vendor aliases without exposing the catalog", async () => {
+    const logo = Buffer.from("desktop logo");
+    const thumbnail = Buffer.from("thumbnail");
+    const github: PluginInfo = {
+      id: "github@catalog", name: "app-123", source: { type: "local", path: "/private/plugin" },
+      installed: true, enabled: true, installPolicy: "AVAILABLE", authPolicy: "ON_INSTALL",
+      interface: {
+        displayName: "GitHub", logo: "data:image/png;base64," + logo.toString("base64"),
+        composerIcon: "data:image/png;base64," + Buffer.from("composer art").toString("base64"),
+        capabilities: [], screenshots: ["https://example.com/screenshot"],
+      },
+    };
+    const list = vi.spyOn(providersService, "getInstalledPlugins").mockResolvedValue({
+      marketplaces: [{ name: "Test", path: "/private/catalog", interface: null, plugins: [
+        github, { ...github, id: "gdrive@catalog", name: "gdrive", interface: {
+          displayName: "Google Drive", brandColor: "#123456", capabilities: [], screenshots: [],
+        } }, { ...github, id: "missing@catalog", name: "missing", installed: false },
+      ] }],
+      marketplaceLoadErrors: [], remoteSyncError: null, featuredPluginIds: [],
+    });
+    const resize = vi.fn(async () => ({ bytes: thumbnail, mime: "image/png" as const, width: 64, height: 64 }));
+    const restore = installTestBackendRuntime({ imagePreview: { resize } });
+    try {
+      const channel = CHANNELS.providers.getMobilePluginIcons;
+      expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has(CHANNELS.providers.getInstalledPlugins)).toBe(false);
+      const result = await invokeHandler(channel, [["Git Hub", "app-123", "google_drive", "missing"]], { deviceId: "phone" });
+      expect(result).toEqual({ success: true, data: [
+        { vendorId: "app123", label: "GitHub", imageBase64: thumbnail.toString("base64") },
+        { vendorId: "github", label: "GitHub", imageBase64: thumbnail.toString("base64") },
+        { vendorId: "googledrive", label: "Google Drive", brandColor: "#123456" },
+      ] });
+      expect(list).toHaveBeenCalledExactlyOnceWith("codex");
+      expect(resize).toHaveBeenCalledExactlyOnceWith(logo, 64, true);
+    } finally { restore(); }
   });
 
   it("cancels a catalog only for its requesting client, provider and request id", async () => {

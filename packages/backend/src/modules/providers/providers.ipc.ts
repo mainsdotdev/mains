@@ -4,6 +4,7 @@ import type { IpcInvokeContext } from "../../ipc-kit/handler-registry";
 import { ok, fail } from "@mains/contracts/service-response";
 import { providersService, providerForPairedDevice } from "./providers.service";
 import { skillsForPairedDevice } from "./providers.device-projection";
+import { readMobilePluginIcons } from "./providers.mobile-plugin-icons";
 import type {
   CreateProviderPayload,
   UpdateProviderPayload,
@@ -210,6 +211,11 @@ export function registerProvidersIpc(): void {
     CHANNELS.providers.getInstalledPlugins,
     handle((id: string) => providersService.getInstalledPlugins(id)),
   );
+  const getMobilePluginIcons = handle(readMobilePluginIcons);
+  ipcMain.handle(
+    CHANNELS.providers.getMobilePluginIcons,
+    (ctx: IpcInvokeContext, vendorIds: unknown) => getMobilePluginIcons(ctx, vendorIds, ctx?.connectionSignal),
+  );
 
   ipcMain.handle(
     CHANNELS.providers.getConnectors,
@@ -290,6 +296,7 @@ export function unregisterProvidersIpc(): void {
     CHANNELS.providers.getPlugins,
     CHANNELS.providers.cancelPluginCatalog,
     CHANNELS.providers.getInstalledPlugins,
+    CHANNELS.providers.getMobilePluginIcons,
     CHANNELS.providers.getConnectors,
     CHANNELS.providers.startConnectorOAuth,
     CHANNELS.providers.readPlugin,

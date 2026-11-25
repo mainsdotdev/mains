@@ -127,6 +127,7 @@ struct ConversationTranscript: View {
             transcript(minimumHeight: max(0, container.size.height - container.safeAreaInsets.top - container.safeAreaInsets.bottom))
         }
         .environment(\.mateMentionAvatars, mentionArtwork?.owner == session.ownership ? mentionArtwork?.avatars ?? [:] : [:])
+        .loadToolPluginIcons(session: session, runID: runID, providerID: providerID, calls: page?.toolCalls ?? [], enabled: paneVisible)
         .task(id: mentionArtworkRequest) {
             let request = mentionArtworkRequest
             guard request.canLoad, let directory = try? await session.loadMates(),
@@ -468,6 +469,9 @@ private struct ConversationActivitySheet: View {
             .task { await load("refresh") }
             .sheet(item: $fullMessage) { item in if valid { NavigationStack { FullMessageView(session: session, artifactID: item.id) } } }
         }
+        .loadToolPluginIcons(session: session, runID: selection.runID,
+                             providerID: session.conversations.first { $0.id == selection.runID }?.providerId ?? "",
+                             calls: page?.toolCalls ?? [], enabled: valid)
         .onChange(of: valid, initial: true) { _, valid in if !valid { fullMessage = nil; dismiss() } }
     }
     private func load(_ direction: String) async {

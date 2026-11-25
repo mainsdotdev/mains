@@ -1,4 +1,5 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { normalizePluginSlug as normalizeSlug } from "@mains/contracts/plugin-icons";
 import {
   useGetProviderInstalledPluginsQuery,
   type PluginListResponse,
@@ -25,9 +26,7 @@ export interface PluginLogo {
  * (`google calendar`, from the `codex_apps` sub-provider) matches the plugin's
  * own name (`google-calendar`). Both fold to `googlecalendar`.
  */
-export function normalizeSlug(raw: string): string {
-  return raw.toLowerCase().replace(/[\s._-]+/g, "");
-}
+export { normalizeSlug };
 
 const EMPTY_MAP: ReadonlyMap<string, PluginLogo> = new Map();
 
