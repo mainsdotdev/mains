@@ -72,7 +72,7 @@ export function WorkspaceGroupDropdown({
         aria-expanded={isOpen}
         className={
           isOpen || view === "chats" || grouping === "none" || sourcesFiltered
-            ? "button-neutral text-primary-900 dark:text-primary-100"
+            ? "button-neutral border-0 text-primary-900 dark:text-primary-100"
             : undefined
         }
       >

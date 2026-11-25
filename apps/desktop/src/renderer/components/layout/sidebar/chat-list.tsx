@@ -343,7 +343,7 @@ export function SidebarChatList({
               >
                 <Plus className="size-3" />
               </Button>
-              <div className="-mr-1">
+              <div className="-mr-1 ml-1">
                 <SourceFilterButton
                   sources={sources}
                   onSourceVisibleChange={setSourceVisible}

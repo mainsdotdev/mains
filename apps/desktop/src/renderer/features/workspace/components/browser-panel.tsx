@@ -1532,7 +1532,7 @@ export function BrowserPanel({
               }}
               disabled={!activeTab?.canGoBack}
               aria-label="Back"
-              className="button-neutral"
+              className="button-neutral border-0"
             >
               <ChevronLeft className="size-5" />
             </Button>
@@ -1546,7 +1546,7 @@ export function BrowserPanel({
               }}
               disabled={!activeTab?.canGoForward}
               aria-label="Forward"
-              className="button-neutral"
+              className="button-neutral border-0"
             >
               <ChevronLeft className="size-5 rotate-180" />
             </Button>
@@ -1557,7 +1557,7 @@ export function BrowserPanel({
               onClick={() => {
                 void (activeTab?.isLoading ? api.stop() : api.reload());
               }}
-              className="button-neutral group"
+              className="button-neutral border-0 group"
               aria-label={activeTab?.isLoading ? "Stop" : "Reload"}
             >
               {activeTab?.isLoading ? (
@@ -1698,7 +1698,7 @@ export function BrowserPanel({
               tooltipShortcut="Esc"
               tooltipPosition="top-left"
               onClick={() => void toggleSelect()}
-              className={`button-neutral ${selectMode ? "text-accent dark:text-accent" : ""}`}
+              className={`button-neutral border-0 ${selectMode ? "text-accent dark:text-accent" : ""}`}
               aria-label={selectMode ? "Exit annotation mode" : "Annotate browser"}
               aria-pressed={selectMode}
             >
@@ -1714,7 +1714,7 @@ export function BrowserPanel({
               aria-label="Open browser menu"
               aria-haspopup="menu"
               aria-expanded={browserMenuOpen}
-              className="button-neutral"
+              className="button-neutral border-0"
             >
               <Option className="size-4 rotate-90" />
             </Button>

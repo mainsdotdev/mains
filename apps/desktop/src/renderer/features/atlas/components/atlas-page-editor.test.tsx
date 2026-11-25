@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@blocknote/react", () => ({
   useCreateBlockNote: () => mocks.editor,
   FormattingToolbarController: () => null,
+  SideMenuController: () => null,
 }));
 vi.mock("@blocknote/shadcn", () => ({ BlockNoteView: ({ onChange }: { onChange: () => void }) => {
   mocks.onEditorChange = onChange;

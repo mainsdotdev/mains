@@ -579,7 +579,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               <AtlasMenu
                 label="New Atlas item"
                 disabled={creating.isLoading}
-                className="text-primary-700 dark:text-primary-300 button-neutral px-3 py-1.5 text-s rounded-xl gap-1"
+                className="text-primary-700 dark:text-primary-300 button-neutral border-0 px-3 py-1.5 text-s rounded-xl gap-1"
                 trigger={
                   <>
                     New
@@ -639,7 +639,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           <AtlasMenu
             label="Filter Atlas"
             variant="filter"
-            className={(open) => `ml-auto ${open || project || params.get("tag") ? "button-neutral text-primary-900 dark:text-primary-100" : ""}`}
+            className={(open) => `ml-auto ${open || project || params.get("tag") ? "button-neutral border-0 text-primary-900 dark:text-primary-100" : ""}`}
             trigger={<Layers className="w-3.5 h-3.5" />}
           >
             {(close) => (

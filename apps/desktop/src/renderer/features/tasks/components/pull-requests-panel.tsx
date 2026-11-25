@@ -347,7 +347,7 @@ function PullRequestsList({
                 aria-expanded={repoFilterOpen}
                 className={
                   repoFilterOpen || activeFilterCount > 0
-                    ? "button-neutral text-primary-900 dark:text-primary-100"
+                    ? "button-neutral border-0 text-primary-900 dark:text-primary-100"
                     : undefined
                 }
               >

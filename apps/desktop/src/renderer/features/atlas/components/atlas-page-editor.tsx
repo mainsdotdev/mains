@@ -44,6 +44,7 @@ import type {
 } from "../lib/page-actions";
 import { AtlasPageChat } from "./atlas-page-chat";
 import { AtlasPageHeader } from "./atlas-page-header";
+import { AtlasPageSideMenu } from "./atlas-page-side-menu";
 import { AtlasPageToolbar } from "./atlas-page-toolbar";
 import { AtlasPageConflicts } from "./atlas-page-conflicts";
 
@@ -581,9 +582,11 @@ function PageEditor({
               theme={useIsDarkMode() ? "dark" : "light"}
               editable={pageState.editable && !page.item.trashedAt}
               formattingToolbar={false}
+              sideMenu={false}
               onChange={() => schedule()}
             >
               <FormattingToolbarController formattingToolbar={formattingToolbar} />
+              <AtlasPageSideMenu />
             </BlockNoteView>
           </div>
         </div>
