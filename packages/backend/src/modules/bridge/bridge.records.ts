@@ -34,6 +34,7 @@ export const BRIDGE_TABLES: Readonly<Record<string, BridgeTableDefinition>> = {
   },
   ...Object.fromEntries(Object.entries({
     assistant_welcomes: ["assistant_id"], assistants: ["id"], assistant_teams: ["id"], assistant_memories: ["id"], assistant_assignments: ["id"], assistant_messages: ["id"],
+    atlas_source_removals: ["id"],
     bridge_atlas_recoveries: ["revision_id"], bridge_config: ["id"], bridge_peers: ["backend_id"], bridge_clock: ["id"], bridge_outbox: ["table_name", "pk", "register"],
     bridge_publications: ["table_name", "pk", "register", "stream"],
     bridge_row_clock: ["table_name", "pk", "register"], bridge_cursors: ["stream"],
