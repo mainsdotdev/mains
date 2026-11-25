@@ -163,9 +163,10 @@ export default function TasksPage() {
         </div>
       </div>
 
+      {/* Keep the split layout stable as tabs load or have no selected item. */}
       <DetailDrawer
         compact={compact}
-        visible={detail !== null && (!compact || showCompactDetail)}
+        visible={!compact || showCompactDetail}
         maxWidth={maxDetailWidth}
         backRef={backRef}
         onBack={() => setSelection((current) => current && { ...current, opened: false })}

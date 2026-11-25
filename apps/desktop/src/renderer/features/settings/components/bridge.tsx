@@ -409,7 +409,7 @@ export default function BridgeSettings() {
                   }}
                 >
                   {visibleRecoveryCode
-                    ? "I saved it — hide code"
+                    ? "Saved it — hide code"
                     : status.recoveryCodeAvailable
                       ? "Show recovery code"
                       : "New recovery code"}

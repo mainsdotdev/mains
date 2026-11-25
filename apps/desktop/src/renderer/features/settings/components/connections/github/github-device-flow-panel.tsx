@@ -135,7 +135,7 @@ export function GitHubDeviceFlowPanel({
           onClick={handleStart}
           disabled={isStarting || state.phase === "retired"}
           isLoading={isStarting}
-          className="flex button-outline py-2 items-center gap-2 bg-primary-950 hover:bg-primary-900 text-primary!"
+          className="flex py-2 items-center gap-2 bg-primary-950 enabled:hover:bg-primary-800 text-primary!"
         >
           <Github className="size-4" />
           Sign in with GitHub
