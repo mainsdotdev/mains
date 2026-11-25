@@ -275,7 +275,7 @@ export function IssueFilterButton({
         aria-expanded={position !== null}
         className={
           position || active
-            ? "bg-primary/80 dark:bg-primary/10 glass-outline text-primary-900 dark:text-primary-100"
+            ? "button-neutral text-primary-900 dark:text-primary-100"
             : undefined
         }
       >

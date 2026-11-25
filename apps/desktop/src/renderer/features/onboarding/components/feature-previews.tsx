@@ -316,8 +316,8 @@ export function ComposerPreview({
           <ArrowUp className="size-3 shrink-0 rotate-180" />
         </span>
         <BoltFill className="size-3.5 shrink-0" />
-        <span className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-full glass-button">
-          <ChevronUp className="size-4 text-primary-800 dark:text-primary" />
+        <span className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-full border-[0.5px] border-(--onboarding-border) bg-(--onboarding-button-fill) text-(--onboarding-ink)">
+          <ChevronUp className="size-4" />
         </span>
       </div>
     </div>
@@ -416,7 +416,7 @@ function RowWithFill({
  */
 function GeneratePill() {
   return (
-    <span className="absolute right-2 bottom-3 grid justify-items-end rounded-lg bg-primary-100/60 px-2 py-1 text-xs text-primary-600 glass-primary dark:bg-primary-800/40 dark:text-primary-400">
+    <span className="absolute right-2 bottom-3 grid justify-items-end rounded-lg border-[0.5px] border-(--onboarding-border) bg-(--onboarding-button-fill) px-2 py-1 text-xs text-(--onboarding-muted)">
       <span className="preview-motion preview-git-idle col-start-1 row-start-1 flex items-center gap-1">
         <Sparkles className="size-3" />
         Generate

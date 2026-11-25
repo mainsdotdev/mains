@@ -164,7 +164,7 @@ it("shows the provider error with a filled retry button for a failed profile dra
 
   expect(screen.getByRole("alert").textContent).toBe(error);
   const retry = screen.getByRole("button", { name: "Retry profile draft" });
-  expect(retry.classList.contains("glass-secondary")).toBe(true);
+  expect(retry.classList.contains("button-neutral")).toBe(true);
   fireEvent.click(retry);
   expect(onRetry).toHaveBeenCalledOnce();
 });

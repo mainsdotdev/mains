@@ -328,7 +328,7 @@ function PullRequestsList({
             {activeFilterCount > 0 && (
               <Button
                 onClick={clearFilters}
-                className="px-2 py-1 flex items-center gap-1 text-xs rounded-full bg-primary/60 dark:bg-primary/10 glass-outline text-primary-800 dark:text-primary-200 cursor-pointer whitespace-nowrap"
+                className="px-2 py-1 flex items-center gap-1 text-xs rounded-full button-neutral text-primary-800 dark:text-primary-200 cursor-pointer whitespace-nowrap"
                 tooltip="Clear filters"
               >
                 <Trash className="size-3.5" />
@@ -347,7 +347,7 @@ function PullRequestsList({
                 aria-expanded={repoFilterOpen}
                 className={
                   repoFilterOpen || activeFilterCount > 0
-                    ? "bg-primary/80 dark:bg-primary/10 glass-outline text-primary-900 dark:text-primary-100"
+                    ? "button-neutral text-primary-900 dark:text-primary-100"
                     : undefined
                 }
               >

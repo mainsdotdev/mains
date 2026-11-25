@@ -1122,7 +1122,7 @@ export function WorkspaceInput({
                   onClick={() => onAdditionalDirectoriesChange?.(
                     additionalDirectories.filter((entry) => entry !== folderPath),
                   )}
-                  className="min-w-0 max-w-64 flex items-center gap-1.5 rounded-full glass-button px-2.5 py-1 text-xs text-primary-700 dark:text-primary-300"
+                  className="min-w-0 max-w-64 flex items-center gap-1.5 rounded-full button-neutral px-2.5 py-1 text-xs text-primary-700 dark:text-primary-300"
                 >
                   <span className="min-w-0 truncate">{directoryName(folderPath)}</span>
                   <span aria-hidden="true" className="shrink-0 text-primary-500">×</span>

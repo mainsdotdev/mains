@@ -579,7 +579,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               <AtlasMenu
                 label="New Atlas item"
                 disabled={creating.isLoading}
-                className="text-primary-700 dark:text-primary-300 glass-primary px-3 py-1.5 text-s rounded-xl gap-1"
+                className="text-primary-700 dark:text-primary-300 button-neutral px-3 py-1.5 text-s rounded-xl gap-1"
                 trigger={
                   <>
                     New
@@ -639,7 +639,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           <AtlasMenu
             label="Filter Atlas"
             variant="filter"
-            className={(open) => `ml-auto ${open || project || params.get("tag") ? "bg-primary/80 dark:bg-primary/10 glass-outline text-primary-900 dark:text-primary-100" : ""}`}
+            className={(open) => `ml-auto ${open || project || params.get("tag") ? "button-neutral text-primary-900 dark:text-primary-100" : ""}`}
             trigger={<Layers className="w-3.5 h-3.5" />}
           >
             {(close) => (
@@ -689,7 +689,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
         </div>
       </div>
       {params.get("tag") && <div className="shrink-0 px-6 pt-4 md:px-12 xl:px-16">
-        <Button aria-label="Clear tag filter" className="inline-flex max-w-full items-center gap-2 rounded-full glass-outline px-3 py-1 text-xs text-primary-600 focus-visible:ring-2 focus-visible:ring-accent/40 dark:text-primary-300" onClick={() => setFilter("tag", "")}>
+        <Button aria-label="Clear tag filter" className="inline-flex max-w-full items-center gap-2 rounded-full button-neutral px-3 py-1 text-xs text-primary-600 focus-visible:ring-2 focus-visible:ring-accent/40 dark:text-primary-300" onClick={() => setFilter("tag", "")}>
           <span className="min-w-0 truncate">Tag: {tags.find((tag) => tag.id === params.get("tag"))?.name ?? "Selected"}</span>
           <Close aria-hidden="true" className="size-3 shrink-0" />
         </Button>

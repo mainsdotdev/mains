@@ -94,7 +94,7 @@ function RemoveButton({
         onRemove();
       }}
       aria-label={`Remove ${name}`}
-      className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-primary-950/60 text-white opacity-0 backdrop-blur-sm transition-opacity hover:bg-primary-950/80 group-hover/attachment:opacity-100 focus-visible:opacity-100 cursor-pointer"
+      className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-primary-950 text-action-foreground opacity-0 hover:bg-primary-800 group-hover/attachment:opacity-100 focus-visible:opacity-100 cursor-pointer"
     >
       <Close className="size-3" />
     </Button>

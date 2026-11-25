@@ -1029,7 +1029,7 @@ function ImageArtifact({
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         aria-label={`Open actions for ${fileName}`}
-        className="absolute right-2 top-2 flex items-center gap-1 rounded-lg glass-outline bg-primary-950/20 px-2.5 py-1.5 text-xs font-medium text-white opacity-0 backdrop-blur-sm transition-opacity hover:bg-primary-950/50 group-hover/image-preview:opacity-100 group-focus-within/image-preview:opacity-100 focus-visible:opacity-100"
+        className="absolute right-2 top-2 flex items-center gap-1 rounded-lg bg-primary-950 px-2.5 py-1.5 text-xs font-medium text-action-foreground opacity-0 hover:bg-primary-800 group-hover/image-preview:opacity-100 group-focus-within/image-preview:opacity-100 focus-visible:opacity-100"
       >
         Open
         <ArrowUp className="size-3.5  rotate-180" />

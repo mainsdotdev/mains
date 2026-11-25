@@ -58,7 +58,7 @@ describe("accessible dialog primitives", () => {
     expect(markup).toContain('aria-modal="true"');
     expect(markup).toContain(`id="${titleId}"`);
     expect(markup).toContain(`id="${descriptionId}"`);
-    expect(markup).toContain("glass-danger");
+    expect(markup).toContain("bg-danger-button");
   });
 
   it("applies a non-danger primary Alert variant", () => {
@@ -75,8 +75,8 @@ describe("accessible dialog primitives", () => {
       }),
     );
 
-    expect(markup).toContain("glass-action");
-    expect(markup).toContain("glass-secondary");
-    expect(markup).not.toContain("glass-danger");
+    expect(markup).toContain("bg-action");
+    expect(markup).toContain("button-neutral");
+    expect(markup).not.toContain("bg-danger-button");
   });
 });

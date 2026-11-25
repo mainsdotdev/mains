@@ -26,10 +26,10 @@ function clampScale(value: number): number {
 }
 
 const floatingButtonClass =
-  "flex size-9 items-center justify-center rounded-full bg-black/55 text-white/80 backdrop-blur-md hover:bg-black/75 hover:text-white";
+  "flex size-9 items-center justify-center rounded-full bg-primary-950 text-action-foreground/85 hover:bg-primary-800 hover:text-action-foreground";
 
 const zoomButtonClass =
-  "p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-40";
+  "p-1.5 rounded-full text-action-foreground/85 hover:text-action-foreground hover:bg-action-foreground/15 disabled:opacity-40";
 
 export function ImagePreviewModal({ name, src, onClose, onDownload, status }: ImagePreviewModalProps) {
   const [scale, setScale] = useState(1);
@@ -220,7 +220,7 @@ export function ImagePreviewModal({ name, src, onClose, onDownload, status }: Im
           </Button>
         </div>
 
-        <div className="absolute bottom-0 left-1/2 z-10 -translate-x-1/2 flex items-center gap-0.5 rounded-full bg-black/55 p-1 backdrop-blur-md">
+        <div className="absolute bottom-0 left-1/2 z-10 -translate-x-1/2 flex items-center gap-0.5 rounded-full bg-primary-950 p-1">
           <Button
             onClick={zoomOut}
             disabled={scale <= MIN_SCALE}

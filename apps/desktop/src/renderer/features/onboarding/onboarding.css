@@ -23,14 +23,9 @@
     var(--onboarding-ink) 8%,
     transparent
   );
-  --glass-fill-primary: color-mix(
+  --onboarding-button-fill: color-mix(
     in srgb,
     var(--onboarding-ink) 5%,
-    var(--onboarding-surface)
-  );
-  --glass-hover-primary: color-mix(
-    in srgb,
-    var(--onboarding-ink) 8%,
     var(--onboarding-surface)
   );
   --onboarding-muted: color-mix(

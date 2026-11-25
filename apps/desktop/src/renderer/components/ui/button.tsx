@@ -30,19 +30,18 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const iconStyles =
-  "inline-flex shrink-0 items-center justify-center rounded-xl text-primary-600 focus-visible:bg-primary-950/8 dark:text-primary-400 dark:focus-visible:bg-primary/8 [&>svg]:shrink-0";
+  "button-quiet button-icon-focus inline-flex shrink-0 items-center justify-center rounded-xl text-primary-600 dark:text-primary-400 [&>svg]:shrink-0";
 
-const quietInteraction =
-  "enabled:hover:bg-primary-950/8 enabled:active:bg-primary-950/13 dark:enabled:hover:bg-primary/8 dark:enabled:active:bg-primary/13";
+const actionForeground = "text-action-foreground focus-visible:ring-action-foreground/85";
 
 const variantStyles: Record<ButtonVariant, string> = {
-  primary: "button-glass glass-action text-white focus-visible:ring-white/85",
-  secondary: "button-glass glass-secondary text-primary-800 dark:text-primary-200",
-  ghost: cn("text-primary-900 dark:text-primary-100", quietInteraction),
-  danger: "button-glass glass-danger text-white focus-visible:ring-white/85",
-  icon: cn(iconStyles, quietInteraction),
-  filter: cn(iconStyles, quietInteraction, "enabled:hover:text-primary-900 dark:enabled:hover:text-primary-100"),
-  subtle: cn("flex items-center gap-2", quietInteraction),
+  primary: cn("bg-action enabled:hover:bg-action-hover enabled:active:bg-action-pressed", actionForeground),
+  secondary: "button-neutral border-0 text-primary-800 dark:text-primary-200",
+  ghost: "button-quiet text-primary-900 dark:text-primary-100",
+  danger: cn("bg-danger-button enabled:hover:bg-danger-button-hover enabled:active:bg-danger-button-pressed", actionForeground),
+  icon: iconStyles,
+  filter: cn(iconStyles, "enabled:hover:text-primary-900 dark:enabled:hover:text-primary-100"),
+  subtle: "button-quiet flex items-center gap-2",
   bare: "",
 };
 
@@ -57,7 +56,7 @@ const iconSizeStyles = {
 // Even a fully custom `bare` button must remain visibly focusable and expose a
 // consistent disabled state.
 const interactionStyles =
-  "button-control cursor-pointer duration-160 ease-out transition-[color,background-color,border-color,box-shadow,opacity,transform,--button-glass-tint] motion-reduce:transition-none disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent";
+  "button-control cursor-pointer duration-160 ease-out transition-[color,background-color,border-color,box-shadow,opacity,transform] motion-reduce:transition-none disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent";
 
 const controlStyles =
   "inline-flex min-h-8 items-center justify-center rounded-xl px-3 py-1 text-s font-medium";

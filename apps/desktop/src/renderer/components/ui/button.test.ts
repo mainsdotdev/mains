@@ -29,7 +29,10 @@ describe("Button", () => {
     expect(markup).toContain("px-3");
     expect(markup).toContain("rounded-xl");
     expect(markup).toContain("min-h-8");
-    expect(markup).toContain("glass-action");
+    expect(markup).toContain("bg-action");
+    expect(markup).toContain("enabled:hover:bg-action-hover");
+    expect(markup).toContain("enabled:active:bg-action-pressed");
+    expect(markup).not.toContain("glass-");
     expect(markup).toContain('type="button"');
   });
 

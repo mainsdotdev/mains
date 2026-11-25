@@ -1532,7 +1532,7 @@ export function BrowserPanel({
               }}
               disabled={!activeTab?.canGoBack}
               aria-label="Back"
-              className="glass-card"
+              className="button-neutral"
             >
               <ChevronLeft className="size-5" />
             </Button>
@@ -1546,7 +1546,7 @@ export function BrowserPanel({
               }}
               disabled={!activeTab?.canGoForward}
               aria-label="Forward"
-              className="glass-card"
+              className="button-neutral"
             >
               <ChevronLeft className="size-5 rotate-180" />
             </Button>
@@ -1557,7 +1557,7 @@ export function BrowserPanel({
               onClick={() => {
                 void (activeTab?.isLoading ? api.stop() : api.reload());
               }}
-              className="glass-card group"
+              className="button-neutral group"
               aria-label={activeTab?.isLoading ? "Stop" : "Reload"}
             >
               {activeTab?.isLoading ? (
@@ -1698,7 +1698,7 @@ export function BrowserPanel({
               tooltipShortcut="Esc"
               tooltipPosition="top-left"
               onClick={() => void toggleSelect()}
-              className={`glass-card ${selectMode ? "text-accent dark:text-accent" : ""}`}
+              className={`button-neutral ${selectMode ? "text-accent dark:text-accent" : ""}`}
               aria-label={selectMode ? "Exit annotation mode" : "Annotate browser"}
               aria-pressed={selectMode}
             >
@@ -1714,7 +1714,7 @@ export function BrowserPanel({
               aria-label="Open browser menu"
               aria-haspopup="menu"
               aria-expanded={browserMenuOpen}
-              className="glass-card"
+              className="button-neutral"
             >
               <Option className="size-4 rotate-90" />
             </Button>
@@ -1805,7 +1805,7 @@ export function BrowserPanel({
               >
                 Zoom
               </Text>
-              <div className="flex h-6 items-center overflow-hidden rounded-lg glass-outline">
+              <div className="flex h-6 items-center overflow-hidden rounded-lg button-outline">
                 <Button
                   role="menuitem"
                   tabIndex={-1}

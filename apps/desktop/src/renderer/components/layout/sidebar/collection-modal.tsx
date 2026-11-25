@@ -117,7 +117,7 @@ export default function CollectionModal({
             onClick={() => setIsPickerOpen((open) => !open)}
             aria-label="Choose project icon"
             aria-expanded={isPickerOpen}
-            className="size-9.5 flex items-center justify-center rounded-xl glass-outline cursor-pointer"
+            className="size-9.5 flex items-center justify-center rounded-xl button-neutral"
           >
             <CollectionIconPreview value={icon} color={iconColor} />
           </Button>

@@ -46,7 +46,7 @@ function ErrorFallback({ error, resetError, level }: ErrorFallbackProps) {
 
         <div className="mt-5 flex gap-2">
           <Button
-          className="glass-outline"
+            className="button-outline"
             variant="ghost"
             onClick={() => setShowDetails((shown) => !shown)}
             aria-expanded={showDetails}

@@ -395,7 +395,7 @@
   color: var(--bn-colors-side-menu);
 }
 .bn-root.bn-shadcn .bn-panel [data-slot="tabs-trigger"][data-active] {
-  @apply glass-button;
+  @apply button-neutral;
   color: var(--bn-colors-menu-text);
 }
 .bn-root.bn-shadcn [data-slot="tooltip-content"] {

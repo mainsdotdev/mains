@@ -186,7 +186,7 @@ function InstalledPluginShelf({
           ? Array.from({ length: 7 }, (_, index) => (
               <div
                 key={index}
-                className="size-12 shrink-0 rounded-2xl glass-surface animate-pulse"
+                className="size-12 shrink-0 rounded-2xl button-neutral animate-pulse"
                 aria-hidden="true"
               />
             ))
@@ -201,7 +201,7 @@ function InstalledPluginShelf({
                   tooltipPosition="bottom"
                   aria-label={`Open ${name}`}
                   onClick={() => onSelect(plugin.id)}
-                  className={`size-12 shrink-0 snap-start rounded-2xl glass-surface flex items-center justify-center transition-[transform,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70 cursor-pointer ${
+                  className={`size-12 shrink-0 snap-start rounded-2xl button-neutral flex items-center justify-center focus-visible:ring-accent/70 ${
                     plugin.enabled ? "" : "opacity-55"
                   }`}
                 >
