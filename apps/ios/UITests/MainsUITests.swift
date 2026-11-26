@@ -335,6 +335,47 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "Code conversation header")
     }
 
+    func testHomeSidebarAlignsWithTheMainPane() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-native-demo-enabled-v1", "YES"]
+        app.launch()
+        let settings = app.buttons["openSettings"]
+        let sidebar = app.buttons["openSidebar"]
+        let close = app.buttons["closeSidebar"]
+        let attachment = app.buttons["addAttachment"]
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 10) || close.exists)
+        if close.isHittable {
+            close.tap()
+            XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        }
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+        XCTAssertTrue(attachment.waitForExistence(timeout: 5))
+        let sidebarButton = sidebar.frame
+        let attachmentButton = attachment.frame
+        attachScreenshot(app, name: "Home before sidebar alignment check")
+        let isInline = settings.isHittable
+        if !isInline {
+            sidebar.tap()
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+        }
+        XCTAssertTrue(settings.isHittable)
+        let logo = app.images["sidebarMainsLogo"]
+        let mode = app.buttons["sidebarMode-developer"]
+        XCTAssertTrue(logo.exists)
+        XCTAssertTrue(mode.exists)
+        attachScreenshot(app, name: "Sidebar alignment")
+        XCTAssertEqual(logo.frame.midY, sidebarButton.midY, accuracy: 1)
+        XCTAssertEqual(mode.frame.midY, sidebarButton.midY, accuracy: 1)
+        if !isInline {
+            XCTAssertEqual(logo.frame.midX, sidebarButton.midX, accuracy: 1)
+            XCTAssertEqual(close.frame.midY, sidebarButton.midY, accuracy: 1)
+        } else {
+            XCTAssertTrue(sidebar.isHittable)
+            XCTAssertEqual(settings.frame.midY, attachmentButton.midY, accuracy: 1)
+        }
+    }
+
     private func makeApplication() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["MAINS_HOT_RELOAD"] = "0"

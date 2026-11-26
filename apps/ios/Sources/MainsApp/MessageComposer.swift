@@ -44,6 +44,8 @@ private struct ComposerInset<Bar: View>: ViewModifier {
 
 struct MessageComposer: View {
     static let horizontalInset: CGFloat = 12
+    static let standardVerticalInset: CGFloat = 8
+    static let controlHeight: CGFloat = 44
     private static let editorSizeButtonWidth: CGFloat = 44
 
     #if DEBUG && targetEnvironment(simulator)
@@ -273,7 +275,7 @@ struct MessageComposer: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, compactMate ? 4 : 8)
+        .padding(.horizontal, 8).padding(.vertical, compactMate ? 4 : Self.standardVerticalInset)
         .modifier(GlassSurface(radius: editorExpanded ? 24 : 34, interactive: false))
         .overlay(alignment: .topTrailing) {
             if showsExpandButton { editorSizeButton.padding([.top, .trailing], 8) }
@@ -317,7 +319,8 @@ struct MessageComposer: View {
 
     private var attachmentButton: some View {
         Button(action: openAttachments) {
-            Image(systemName: "plus").font(.system(size: 22, weight: .light)).frame(width: 44, height: 44)
+            Image(systemName: "plus").font(.system(size: 22, weight: .light))
+                .frame(width: Self.controlHeight, height: Self.controlHeight)
         }
         .background(GeometryReader { geometry in
             Color.clear.preference(key: AttachmentSourceFrameKey.self, value: geometry.frame(in: .global))

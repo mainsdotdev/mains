@@ -1,11 +1,13 @@
 import SwiftUI
 
 struct HomeView: View {
+    static let composerBottomInset: CGFloat = 8
+
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
     let session: BackendSession
-    let openSidebar: () -> Void
+    let sidebarControl: SidebarControl
     let openComputer: () -> Void
     let openPairing: () -> Void
     let onCreated: (String) -> Void
@@ -38,7 +40,7 @@ struct HomeView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) { SidebarControl(action: openSidebar) }
+            ToolbarItem(placement: .topBarLeading) { sidebarControl }
                 .sharedBackgroundVisibility(.hidden)
             if session.isDemo || session.pairing != nil && !session.isConnected {
                 ToolbarItem(placement: .principal) {
@@ -165,7 +167,7 @@ private struct UnpairedHomeArea: View {
                 }
             }
             .buttonStyle(.plain).padding(8).modifier(GlassSurface(radius: 34, interactive: false)).padding(.horizontal, 12)
-        }.padding(.bottom, 8)
+        }.padding(.bottom, HomeView.composerBottomInset)
     }
 }
 
@@ -279,7 +281,7 @@ private struct HomeComposerArea: View {
             MessageComposer(session: session, context: ComposerContext(space: space), draft: draft, canSend: ready,
                          model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend,
                          onVoiceWorkspaceRequired: showWorkspaceRequired, voiceCreated: onCreated)
-        }.padding(.bottom, 8)
+        }.padding(.bottom, HomeView.composerBottomInset)
         .onChange(of: targetReady) { _, ready in
             if ready { workspaceRequired = false }
         }

@@ -673,6 +673,7 @@ struct SidebarControl: View {
     #endif
     let action: () -> Void
     var isOpen = false
+    let onLayout: (CGRect) -> Void
     var body: some View {
         let size = AppNavigationStyle.inlineToolbarHeight
         Button(action: action) {
@@ -684,6 +685,7 @@ struct SidebarControl: View {
         .modifier(GlassSurface(radius: size / 2, interactive: false))
         .accessibilityLabel(isOpen ? "Close sidebar" : "Open sidebar")
         .accessibilityIdentifier("openSidebar")
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onLayout($0) }
     }
 }
 

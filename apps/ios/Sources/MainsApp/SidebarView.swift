@@ -11,6 +11,8 @@ struct SidebarView: View {
     let menuWidth: CGFloat
     let layoutWidth: CGFloat
     let overlayProgress: CGFloat?
+    let headerTopInset: CGFloat
+    let leadingInset: CGFloat
     let openConversation: (String) -> Void
     let openWorkspace: (String) -> Void
     let openProject: (String) -> Void
@@ -30,7 +32,8 @@ struct SidebarView: View {
     @ScaledMetric(relativeTo: .title3) private var shortcutIconSize: CGFloat = 24
     static let controlInset: CGFloat = 16
     static let headerDiscSize: CGFloat = 40
-    private let menuInset: CGFloat = 28
+    private static let bottomBarHeight: CGFloat = 48
+    private let menuInset: CGFloat = 12
     private let menuIconWidth: CGFloat = 22
     private let menuIconSize: CGFloat = 20
     private let menuIconSpacing: CGFloat = 10
@@ -50,6 +53,9 @@ struct SidebarView: View {
     var body: some View {
         let slides = overlayProgress != nil && !reduceMotion
         let hiddenFraction = slides ? 1 - (overlayProgress ?? 1) : 0
+        // Center the footer on Home's composer controls in the side-by-side layout.
+        let footerInset = HomeView.composerBottomInset + MessageComposer.standardVerticalInset
+            + (MessageComposer.controlHeight - Self.bottomBarHeight) / 2
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topLeading) {
                 if showsContent {
@@ -60,7 +66,8 @@ struct SidebarView: View {
             }
             .frame(maxHeight: .infinity, alignment: .topLeading)
             if showsContent {
-                bottomBar.padding(.horizontal, Self.controlInset).padding(.top, 10).padding(.bottom, 16)
+                bottomBar.padding(.leading, leadingInset).padding(.trailing, Self.controlInset)
+                    .padding(.top, 10).padding(.bottom, footerInset)
                     .offset(y: bottomBarTravel * hiddenFraction)
                     .transition(slides ? .offset(y: bottomBarTravel) : .opacity)
             }
@@ -74,7 +81,8 @@ struct SidebarView: View {
     }
     private var menu: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header.padding(.horizontal, Self.controlInset).padding(.bottom, 21)
+            header.padding(.leading, leadingInset).padding(.trailing, Self.controlInset)
+                .padding(.top, headerTopInset).padding(.bottom, 21)
                 .frame(width: menuWidth)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -111,7 +119,8 @@ struct SidebarView: View {
                         if recents.isEmpty { empty("No chats yet.") }
                         ForEach(recents) { run in conversationRow(run) }
                     }
-                }.padding(.horizontal, menuInset).padding(.bottom, 24)
+                }.padding(.leading, leadingInset + menuInset)
+                    .padding(.trailing, Self.controlInset + menuInset).padding(.bottom, 24)
             }
             .pullToRefresh { await session.refresh() }
             .scrollIndicators(.hidden)
@@ -226,10 +235,10 @@ struct SidebarView: View {
                     settings()
                 }.accessibilityIdentifier("openSettings")
             }
-            .frame(height: 48)
+            .frame(height: Self.bottomBarHeight)
             .animation(controlAnimation, value: providersExpanded)
             .animation(controlAnimation, value: available)
-        }.frame(height: 48)
+        }.frame(height: Self.bottomBarHeight)
     }
     private func providerSwitcher(width: CGFloat) -> some View {
         HStack(spacing: 8) {

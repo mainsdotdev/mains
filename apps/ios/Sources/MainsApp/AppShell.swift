@@ -43,6 +43,7 @@ struct AppShell: View {
     @State private var collapsedCollections: Set<String> = []
     @State private var wideSidebarHidden = false
     @State private var inlineSidebarVisible = false
+    @State private var sidebarControlOffset: CGPoint?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var colorScheme
@@ -61,6 +62,14 @@ struct AppShell: View {
                 let width = sidebar.sidebarWidth
                 let sidebarLayoutWidth = sidebar.isInline ? width : geometry.size.width
                 let progress = sidebar.overlayProgress
+                let shellOrigin = geometry.frame(in: .global).origin
+                // Keep the toolbar offset local to the pane as the window folds or resizes.
+                let updateSidebarControlLayout: (CGRect) -> Void = { frame in
+                    sidebarControlOffset = CGPoint(x: max(0, frame.minX - shellOrigin.x - sidebar.contentOffset),
+                                                   y: max(0, frame.minY - shellOrigin.y))
+                }
+                let headerTopInset = sidebarControlOffset?.y ?? AppNavigationStyle.topInset
+                let leadingInset = (supportsInline ? nil : sidebarControlOffset?.x) ?? SidebarView.controlInset
                 let sidebarVisible = (pinned || drawerOpen) && !searchMounted
                 // Keep the live pane's input state stable while the pan is undecided.
                 let mainPaneCovered = sidebar.blocksContent || searchMounted
@@ -75,14 +84,16 @@ struct AppShell: View {
                                         .id("\(session.ownership):\(homeRunID)")
                                         .toolbar {
                                             ToolbarItem(placement: .topBarLeading) {
-                                                SidebarControl(action: { toggleDrawer(overlay: !supportsInline) }, isOpen: drawerOpen)
+                                                SidebarControl(action: { toggleDrawer(overlay: !supportsInline) }, isOpen: drawerOpen,
+                                                               onLayout: updateSidebarControlLayout)
                                             }.sharedBackgroundVisibility(.hidden)
                                         }
                                 } else {
-                                    HomeView(session: session, openSidebar: {
+                                    HomeView(session: session, sidebarControl: SidebarControl(action: {
                                         if canPin { toggleWideSidebar(visible: pinned || drawerOpen) }
                                         else { toggleDrawer(overlay: !supportsInline) }
-                                    }, openComputer: showSettings, openPairing: openPairing,
+                                    }, onLayout: updateSidebarControlLayout),
+                                             openComputer: showSettings, openPairing: openPairing,
                                              onCreated: { id in
                                                  var transaction = Transaction(animation: nil)
                                                  transaction.disablesAnimations = true
@@ -179,6 +190,7 @@ struct AppShell: View {
                         SidebarView(session: session, collapsed: $collapsedCollections, isVisible: sidebarVisible,
                                     showsContent: isHome || sidebar.isInline || sidebar.blocksContent || progress > 0,
                                     menuWidth: width, layoutWidth: sidebarLayoutWidth, overlayProgress: sidebar.isInline ? nil : progress,
+                                    headerTopInset: headerTopInset, leadingInset: leadingInset,
                                     openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
                                     openProject: { open(.project($0)) },
                                     selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) }, openMates: { open(.mates) })
@@ -189,6 +201,7 @@ struct AppShell: View {
                             .zIndex(2)
                         if sidebar.blocksContent {
                             closeSidebarControl
+                                .padding(.top, headerTopInset)
                                 .padding(.trailing, SidebarView.controlInset)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                                 .opacity(progress)
@@ -213,7 +226,7 @@ struct AppShell: View {
                             settleDrawer(open: projected > width / 2)
                         }
                             .frame(width: 24)
-                            .padding(.top, AppNavigationStyle.inlineToolbarHeight)
+                            .padding(.top, headerTopInset + AppNavigationStyle.inlineToolbarHeight)
                             .ignoresSafeArea(.keyboard, edges: .bottom)
                             .accessibilityHidden(true)
                     }
