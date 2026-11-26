@@ -81,7 +81,7 @@ import Testing
             let transport = SessionVoiceTransport(backend, probe); probe.transports.append(transport); return transport
         })
         session.voice.makeMedia = { media }
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         try await eventually { session.isConnected }
         probe.runID = try #require(session.conversations.first { $0.providerId == "codex" && !$0.isActive && !$0.isArchived && $0.isReplica != true }?.id)
         return (session, backend, probe, media)

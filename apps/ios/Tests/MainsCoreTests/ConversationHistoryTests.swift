@@ -5,7 +5,7 @@ import Testing
 extension SessionIntegrationTests {
     @Test @MainActor func conversationBlocksSurviveChildActivityAndDetailPagingDoesNotReplaceTheTranscript() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!

@@ -39,30 +39,30 @@ private func pairing(_ backend: String = "computer", device: String = "phone") -
     try store.save("", for: key); #expect(try store.load(key) == nil)
 }
 
-@Test @MainActor func sessionsRestoreOnlyUnsentTextAndForgetRetiresOldDraftWriters() throws {
+@Test @MainActor func sessionsRestoreOnlyUnsentTextAndForgetRetiresOldDraftWriters() async throws {
     let storage = MemoryStorage(); storage.pairing = pairing()
-    let first = BackendSession(storage: storage); first.restore()
+    let first = BackendSession(storage: storage); await first.restore()
     let draft = first.draft(for: "old-chat")
     draft.text = "Unsent 👋"; draft.attachments = [PromptAttachment(name: "secret.pdf", type: "document", mimeType: "application/pdf", bytes: Data([1]))]
     first.homeDraft(for: "space").text = "A separate home draft"
-    let reopened = BackendSession(storage: storage); reopened.restore()
+    let reopened = BackendSession(storage: storage); await reopened.restore()
     let restored = reopened.draft(for: "old-chat")
     #expect(restored.text == "Unsent 👋" && restored.attachments.isEmpty && restored.contextSkills.isEmpty)
     #expect(reopened.homeDraft(for: "space").text == "A separate home draft")
     let sent = try #require(restored.begin())
-    let duringSend = BackendSession(storage: storage); duringSend.restore()
+    let duringSend = BackendSession(storage: storage); await duringSend.restore()
     #expect(duringSend.draft(for: "old-chat").text.isEmpty)
     restored.text = "Newer input"; restored.accept(sent)
-    let afterACK = BackendSession(storage: storage); afterACK.restore()
+    let afterACK = BackendSession(storage: storage); await afterACK.restore()
     #expect(afterACK.draft(for: "old-chat").text == "Newer input")
     try first.forget()
     draft.text = "A stale view callback"
     #expect(storage.draftTexts.isEmpty)
 }
 
-@Test @MainActor func retainedSendingTextAndUnconfirmedMessagesNeverReturnAsFreshDrafts() throws {
+@Test @MainActor func retainedSendingTextAndUnconfirmedMessagesNeverReturnAsFreshDrafts() async throws {
     let storage = MemoryStorage(); storage.pairing = pairing()
-    let session = BackendSession(storage: storage); session.restore()
+    let session = BackendSession(storage: storage); await session.restore()
     let draft = session.draft(for: "chat")
     draft.text = "Already being delivered"
     let sent = try #require(draft.begin(retainingContent: true))
@@ -87,7 +87,7 @@ private func pairing(_ backend: String = "computer", device: String = "phone") -
     let backend = try DemoBackend(stepDelay: .seconds(30)), storage = MemoryStorage()
     storage.pairing = backend.pairing
     let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-    session.restore(); session.setActive(true)
+    await session.restore(); session.setActive(true)
     defer { session.setActive(false); backend.shutdown() }
     try await eventually { session.isConnected }
     session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
@@ -100,7 +100,7 @@ private func pairing(_ backend: String = "computer", device: String = "phone") -
     draft.text = "Normal unsent text"
     let queuedID = try #require(queue.messages.first?.id)
     session.editQueuedMessage(id, id: queuedID); draft.text = "Editing the queued text"
-    let reopened = BackendSession(storage: storage); reopened.restore()
+    let reopened = BackendSession(storage: storage); await reopened.restore()
     #expect(reopened.draft(for: id).text == "Normal unsent text")
     session.cancelQueuedEdit(id)
     #expect(draft.text == "Normal unsent text" && queue.messages.first?.input.text == "Queue-owned text")

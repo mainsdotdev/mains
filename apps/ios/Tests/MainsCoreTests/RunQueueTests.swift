@@ -87,7 +87,7 @@ import Testing
         let backend = try DemoBackend(stepDelay: slow ? .seconds(30) : .milliseconds(2), streamDelay: .milliseconds(1))
         let probe = QueueProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in QueueTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         try await eventually { session.isConnected }
         session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
         let id = try await session.send("Initial review", spaceID: "codex", workspaceID: backend.defaultWorkspaceID)

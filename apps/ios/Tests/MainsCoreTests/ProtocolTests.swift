@@ -80,6 +80,16 @@ import Testing
     #expect(try Wire.webSocketURL(URL(string: "https://mac.example.com:8787/socket")!).absoluteString == "wss://mac.example.com:8787/socket")
 }
 
+@Test @MainActor func largeWireDecodeRunsOutsideTheMainThread() async throws {
+    let payload = JSONValue.array(Array(repeating: .string(String(repeating: "x", count: 5_000)), count: 400))
+    let (isMainThread, values) = try await Wire.decodeOffMain {
+        (Thread.isMainThread, try payload.decode([String].self))
+    }
+    #expect(!isMainThread)
+    #expect(values.count == 400)
+    #expect(values.last?.utf8.count == 5_000)
+}
+
 @Test func unknownCommandReceiptIsNeverTreatedAsDefiniteRefusal() {
     #expect(MainsError.server("Command outcome is unknown because its result was not recorded. Check the conversation before sending another command.").isUnconfirmedCommand)
     #expect(MainsError.server("Could not verify the previous command result. The command was not run again.").isUnconfirmedCommand)
@@ -164,7 +174,7 @@ func delta(_ text: String, id: String = "answer-1") -> JSONValue {
     #expect(transcript.rows.first?.kind == .prompt)
 }
 
-@Test @MainActor func aiConsentRevocationIsScopedAndSurvivesRestore() throws {
+@Test @MainActor func aiConsentRevocationIsScopedAndSurvivesRestore() async throws {
     let storage = MemoryStorage()
     let descriptor = BackendDescriptor(backendId: "my-computer", name: "My Mac", appVersion: "1.0", protocolVersion: 1,
                                        capabilities: [], serverTime: "2026-11-10T10:00:00Z")
@@ -173,7 +183,7 @@ func delta(_ text: String, id: String = "answer-1") -> JSONValue {
     storage.grantConsent(backendID: "my-computer", providerID: "claude_code")
     storage.grantConsent(backendID: "other-computer", providerID: "codex")
     let session = BackendSession(storage: storage)
-    session.restore()
+    await session.restore()
     session.revokeConsent(providerID: "codex", backendID: "other-computer")
     session.revokeAllConsents(backendID: "other-computer")
     #expect(session.hasConsent(providerID: "codex"))
@@ -182,7 +192,7 @@ func delta(_ text: String, id: String = "answer-1") -> JSONValue {
     #expect(!session.hasConsent(providerID: "codex"))
     #expect(session.hasConsent(providerID: "claude_code"))
     let restored = BackendSession(storage: storage)
-    restored.restore()
+    await restored.restore()
     #expect(!restored.hasConsent(providerID: "codex"))
     restored.revokeAllConsents(backendID: "my-computer")
     #expect(!restored.hasConsent(providerID: "claude_code"))

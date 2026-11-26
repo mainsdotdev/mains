@@ -8,15 +8,15 @@ import Testing
     let cache = SQLiteConversationCache(directory: directory)
     defer { cache.removeAll() }
     let snapshot = CachedSnapshot(backendID: "mac", conversations: [], spaces: [], workspaces: [])
-    #expect(cache.loadSnapshot(backendID: "mac", deviceID: "phone") == nil)
+    #expect(await cache.loadSnapshot(backendID: "mac", deviceID: "phone") == nil)
     for runID in (1...20).map(String.init) + ["1", "21"] {
         cache.save(snapshot, deviceID: "phone", history: .replace(runID: runID, page: try historyPage(runID)))
     }
     #expect(await cache.loadHistory(backendID: "mac", deviceID: "phone", runID: "2") == nil)
 
     let reopened = SQLiteConversationCache(directory: directory)
-    #expect(reopened.loadSnapshot(backendID: "mac", deviceID: "phone")?.backendID == "mac")
-    #expect(reopened.loadSnapshot(backendID: "mac", deviceID: "other") == nil)
+    #expect(await reopened.loadSnapshot(backendID: "mac", deviceID: "phone")?.backendID == "mac")
+    #expect(await reopened.loadSnapshot(backendID: "mac", deviceID: "other") == nil)
     #expect(await reopened.loadHistory(backendID: "mac", deviceID: "other", runID: "1") == nil)
     #expect(await reopened.loadHistory(backendID: "other", deviceID: "phone", runID: "1") == nil)
     for runID in ["1", "3", "20", "21"] {
@@ -46,7 +46,7 @@ import Testing
     }
     cache.save(snapshot, deviceID: "phone", history: .replace(runID: "a", page: try historyPage("a")))
     cache.removeAll()
-    #expect(reopened.loadSnapshot(backendID: "mac", deviceID: "phone") == nil)
+    #expect(await reopened.loadSnapshot(backendID: "mac", deviceID: "phone") == nil)
     #expect(await reopened.loadHistory(backendID: "mac", deviceID: "phone", runID: "a") == nil)
 }
 
@@ -85,7 +85,7 @@ import Testing
             """, nil, nil, nil) == SQLITE_OK)
     }
 
-    #expect(cache.loadSnapshot(backendID: "mac", deviceID: "phone") == nil)
+    #expect(await cache.loadSnapshot(backendID: "mac", deviceID: "phone") == nil)
     #expect(await cache.loadHistory(backendID: "mac", deviceID: "phone", runID: "run") == nil)
     let page = try historyPage("run")
     cache.save(snapshot, deviceID: "phone", history: .replace(runID: "run", page: page))
@@ -110,6 +110,94 @@ import Testing
     let file = directory.appendingPathComponent("conversations.sqlite")
     let size = try #require(file.resourceValues(forKeys: [.fileSizeKey]).fileSize)
     #expect(size <= 32 * 1024 * 1024)
+}
+
+@Test func sqliteCoalescesPendingLargePagesByRunAndPairing() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let queue = DispatchQueue(label: "mains.tests.pending-writes")
+    let cache = SQLiteConversationCache(directory: directory, queue: queue)
+    defer { cache.removeAll() }
+    var snapshot = CachedSnapshot(backendID: "mac", conversations: [], spaces: [], workspaces: [])
+    let removed = try historyPage("removed")
+    cache.save(snapshot, deviceID: "phone", history: .replace(runID: "removed", page: removed))
+    #expect(await cache.loadHistory(backendID: "mac", deviceID: "phone", runID: "removed") == removed)
+    try withDatabase(directory) { database in
+        try #require(sqlite3_exec(database, """
+            CREATE TABLE history_writes (device_id TEXT, run_id TEXT);
+            CREATE TRIGGER count_history_writes AFTER INSERT ON history_pages BEGIN
+                INSERT INTO history_writes VALUES (NEW.device_id, NEW.run_id);
+            END;
+            """, nil, nil, nil) == SQLITE_OK)
+    }
+
+    let content = String(repeating: "x", count: 5_000)
+    let artifacts = (1...399).map {
+        Artifact(id: $0, runId: "large", kind: "report", content: content, metadata: nil, createdAt: .now)
+    }
+    func page(_ revision: Int) -> HistoryPage {
+        let last = Artifact(id: 400, runId: "large", kind: "report", content: "Revision \(revision)", metadata: nil, createdAt: .now)
+        return HistoryPage(artifacts: artifacts + [last], toolCalls: [], turns: [], start: nil, end: nil, last: nil, hasOlder: true, hasNewer: false)
+    }
+    queue.suspend()
+    cache.save(snapshot, deviceID: "other", history: .replace(runID: "large", page: page(0)))
+    cache.save(snapshot, deviceID: "phone", history: .replace(runID: "removed", page: removed))
+    cache.save(snapshot, deviceID: "phone", history: .remove(runID: "removed"))
+    for revision in 1...100 {
+        snapshot.lastSyncedAt = Date(timeIntervalSince1970: Double(revision))
+        cache.save(snapshot, deviceID: "phone", history: .replace(runID: "large", page: page(revision)))
+    }
+    cache.save(snapshot, deviceID: "phone", history: nil)
+    queue.resume()
+
+    let latest = try #require(await cache.loadHistory(backendID: "mac", deviceID: "phone", runID: "large"))
+    #expect(latest.artifacts.count == 400)
+    #expect(latest.artifacts.last?.content == "Revision 100")
+    #expect(await cache.loadHistory(backendID: "mac", deviceID: "other", runID: "large")?.artifacts.last?.content == "Revision 0")
+    #expect(await cache.loadHistory(backendID: "mac", deviceID: "phone", runID: "removed") == nil)
+    #expect(await cache.loadSnapshot(backendID: "mac", deviceID: "phone")?.lastSyncedAt == snapshot.lastSyncedAt)
+    try withDatabase(directory) { database in
+        let allWrites = try scalar(database, "SELECT count(*) FROM history_writes")
+        let phoneWrites = try scalar(database, "SELECT count(*) FROM history_writes WHERE device_id = 'phone' AND run_id = 'large'")
+        #expect(allWrites == 2)
+        #expect(phoneWrites == 1)
+    }
+}
+
+@Test @MainActor func sqliteLargeStartupRestoreSuspendsWithoutBlockingTheMainActor() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let queue = DispatchQueue(label: "mains.tests.startup-read")
+    let cache = SQLiteConversationCache(directory: directory, queue: queue)
+    defer { cache.removeAll() }
+    let descriptor = BackendDescriptor(backendId: "mac", name: "Mac", appVersion: "1", protocolVersion: 1,
+                                       capabilities: [], serverTime: "")
+    let storage = MemoryStorage()
+    storage.sqliteCache = cache
+    storage.pairing = PairedBackend(descriptor: descriptor, endpoints: [URL(string: "https://mac.example")!], deviceId: "phone", deviceToken: "test")
+    let title = String(repeating: "a", count: 73_000)
+    let runs = (1...100).map {
+        Conversation(id: "run-\($0)", accountId: "account", providerId: "codex", mode: "chat", spaceId: nil,
+                     title: title, status: "succeeded", model: nil, isArchived: false, isReplica: false,
+                     lastError: nil, createdAt: .now, updatedAt: .now)
+    }
+    cache.save(CachedSnapshot(backendID: "mac", conversations: runs, spaces: [], workspaces: []), deviceID: "phone", history: nil)
+    #expect(await cache.loadSnapshot(backendID: "mac", deviceID: "phone")?.conversations.count == 100)
+
+    let release = DispatchSemaphore(value: 0)
+    queue.async { _ = release.wait(timeout: .now() + 5) }
+    let session = BackendSession(storage: storage)
+    session.setActive(true)
+    session.setOnline(false)
+    let restore = Task { await session.restore() }
+    do {
+        defer { release.signal() }
+        try await eventually({ session.pairing != nil }, seconds: 2)
+        #expect(session.conversations.isEmpty)
+        #expect(session.connection == .offline)
+    }
+    await restore.value
+    #expect(session.conversations.count == 100)
+    #expect(session.conversations.last?.title == title)
+    #expect(session.connection == .offline)
 }
 
 @Test func sqliteKeepsOfflineMetadataAndOriginalFilesWithIndependentLimits() async throws {
@@ -155,7 +243,7 @@ import Testing
                deviceID: "phone", history: .replace(runID: run.id, page: try historyPage(run.id)))
     let session = BackendSession(storage: storage)
     session.setOnline(false)
-    session.restore()
+    await session.restore()
     session.setActive(true)
     #expect(session.connection == .offline)
     let results = await session.searchSavedConversations("ornek")
@@ -167,7 +255,7 @@ import Testing
     #expect(session.connection == .offline)
 }
 
-@Test func sqliteCacheRebuildsACorruptDisposableDatabase() throws {
+@Test func sqliteCacheRebuildsACorruptDisposableDatabase() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let cache = SQLiteConversationCache(directory: directory)
     defer { cache.removeAll() }
@@ -176,7 +264,7 @@ import Testing
 
     let snapshot = CachedSnapshot(backendID: "mac", conversations: [], spaces: [], workspaces: [])
     cache.save(snapshot, deviceID: "phone", history: nil)
-    #expect(cache.loadSnapshot(backendID: "mac", deviceID: "phone")?.backendID == "mac")
+    #expect(await cache.loadSnapshot(backendID: "mac", deviceID: "phone")?.backendID == "mac")
 }
 
 private func historyPage(_ runID: String) throws -> HistoryPage {

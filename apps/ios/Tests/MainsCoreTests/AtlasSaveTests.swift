@@ -6,7 +6,7 @@ import Testing
     @Test @MainActor func bookmarkDetailsFollowFavoritesTagsAndTrashWithoutChangingTheChat() async throws {
         let storage = MemoryStorage(), backend = try DemoBackend()
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         var query = AtlasQuery(); query.type = "bookmark"
@@ -38,7 +38,7 @@ import Testing
     @Test @MainActor func pageAttachmentsStayUnlistedUntilExplicitlySavedWithTheSameIdentity() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let id = "demo-atlas-page-file", owner = session.ownership
@@ -70,7 +70,7 @@ import Testing
     @Test @MainActor func atlasTagsCanBeCreatedReusedRemovedAndFilteredWithoutMovingTheConversation() async throws {
         let backend = try DemoBackend(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let space = session.selectedSpaceID
@@ -94,7 +94,7 @@ import Testing
     @Test @MainActor func aStaleTagSelectionIsRefusedAndNeverCreatesItsUnsentNames() async throws {
         let backend = try DemoBackend()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let original = try await session.readAtlasTags("demo-atlas-page")
@@ -110,7 +110,7 @@ import Testing
     @Test @MainActor func unconfirmedTagChangesRecoverTheirOriginalReceiptAndKeepNewerTags() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let original = try await session.readAtlasTags("demo-atlas-page")
@@ -133,7 +133,7 @@ import Testing
     @Test @MainActor func aTagAcknowledgementForAnotherItemRetainsTheOriginalCommandUntilChecked() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let original = try await session.readAtlasTags("demo-atlas-doc")
@@ -155,7 +155,7 @@ import Testing
     @Test @MainActor func trashAndRestoreKeepSavedKindsAndTheirOrganizationWithoutChangingTheConversation() async throws {
         let backend = try DemoBackend(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let space = session.selectedSpaceID
@@ -178,7 +178,7 @@ import Testing
     @Test @MainActor func removesAndRestoresAnAutomaticAtlasFileWithoutLosingItsSource() async throws {
         let backend = try DemoBackend()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let initial = try await session.atlasLibrary(AtlasQuery())
@@ -205,7 +205,7 @@ import Testing
     @Test @MainActor func trashReceiptRecoveryDoesNotTrashAnItemThatWasRestoredByANewerCommand() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.kind == "page" })
@@ -226,7 +226,7 @@ import Testing
     @Test @MainActor func anUnconfirmedRestoreRetainsItsFalseStateAndCommandIdentityAcrossReconnection() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.kind == "bookmark" })
@@ -247,7 +247,7 @@ import Testing
     @Test @MainActor func permanentDeletionRecoversTheOriginalReceiptWithoutRestoringTheItem() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.kind == "page" })
@@ -271,7 +271,7 @@ import Testing
     @Test @MainActor func bookmarkEditsKeepUnchangedFieldsAndAllowDescriptionAndNoteToBeCleared() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let original = try await session.readAtlasBookmark("demo-atlas-bookmark")
@@ -295,7 +295,7 @@ import Testing
     @Test @MainActor func aStaleBookmarkEditIsRefusedWithoutDiscardingTheLocalDraft() async throws {
         let backend = try DemoBackend()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let original = try await session.readAtlasBookmark("demo-atlas-bookmark")
@@ -311,7 +311,7 @@ import Testing
     @Test @MainActor func bookmarkEditRecoveryKeepsTheOriginalReceiptAndReadsNewerEditsAfterReconnection() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let original = try await session.readAtlasBookmark("demo-atlas-bookmark")
@@ -334,7 +334,7 @@ import Testing
     @Test @MainActor func favoritesAndProjectMovesUpdateTheFilteredLibraryWithoutMovingTheReader() async throws {
         let backend = try DemoBackend(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.id == "demo-atlas-bookmark" })
@@ -358,7 +358,7 @@ import Testing
     @Test @MainActor func anUnknownFavoriteChecksItsOriginalReceiptWithoutReapplyingOverANewerChange() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.id == "demo-atlas-bookmark" })
@@ -378,7 +378,7 @@ import Testing
     @Test @MainActor func malformedPageChangeAcknowledgementRecoversTheOriginalDestinationAfterReconnection() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.kind == "page" })
@@ -399,7 +399,7 @@ import Testing
     @Test @MainActor func demoSavesOutputsAndBookmarksOnceWithoutChangingChatsOrStorage() async throws {
         let backend = try DemoBackend(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let owner = session.ownership, space = session.selectedSpaceID
@@ -424,7 +424,7 @@ import Testing
     @Test @MainActor func lostAcknowledgementBlocksNewSavesAndChecksTheOriginalReceiptAfterNavigation() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         probe.loseACK = true
@@ -447,7 +447,7 @@ import Testing
     @Test @MainActor func definiteRefusalReleasesAdmissionAndLateSuccessCannotCrossPairingOwnership() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { probe.release(); session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         probe.reject = true
@@ -473,7 +473,7 @@ import Testing
 extension SessionIntegrationTests {
     @Test @MainActor func atlasTagsUseBoundedReadersAndTheirOwnReceiptCommandOnTheRealWire() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -499,7 +499,7 @@ extension SessionIntegrationTests {
 
     @Test @MainActor func atlasTrashAndRestoreUseNarrowReceiptCommandsAndExcludeTrashedItemsFromTheLibrary() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -534,7 +534,7 @@ extension SessionIntegrationTests {
 
     @Test @MainActor func bookmarkEditingUsesFreshBoundedReadsAndItsOwnReceiptBackedCommand() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -556,7 +556,7 @@ extension SessionIntegrationTests {
 
     @Test @MainActor func atlasOrganizationUsesWhitelistedReceiptCommandsAndRefreshesProjectAndFavoriteFilters() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -580,7 +580,7 @@ extension SessionIntegrationTests {
 
     @Test @MainActor func atlasSavesUseReceiptBackedCommandsAndAppearInTheLibrary() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!

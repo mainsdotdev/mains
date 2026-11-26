@@ -27,7 +27,7 @@ public protocol SessionStorage: AnyObject {
     func loadPairing() throws -> PairedBackend?
     func savePairing(_ pairing: PairedBackend) throws
     func removePairing() throws
-    func loadSnapshot(backendID: String, deviceID: String) -> CachedSnapshot?
+    func loadSnapshot(backendID: String, deviceID: String) async -> CachedSnapshot?
     func loadHistory(backendID: String, deviceID: String, runID: String) async -> HistoryPage?
     func searchSavedMessages(_ query: String, backendID: String, deviceID: String) async -> [SavedMessageMatch]
     func offlineValues(_ key: String, prefix: Bool, backendID: String, deviceID: String) async -> [Data]
@@ -239,6 +239,7 @@ public final class BackendSession {
     @ObservationIgnored private var active = false
     @ObservationIgnored private var online = true
     @ObservationIgnored private var restored = false
+    @ObservationIgnored private var restoringSnapshotOwner: Int?
     @ObservationIgnored private var accountID: String?
     @ObservationIgnored private var histories: [String: HistoryPage] = [:]
     @ObservationIgnored private var historyOrder: [String] = []
@@ -306,8 +307,9 @@ public final class BackendSession {
             async let catalogRead = candidate.invoke("providers:getRealtimeVoices", args: [.string("codex")])
             async let providerRead = candidate.invoke("providers:getEnabled")
             let (catalogValue, providerValue) = try await (catalogRead, providerRead)
-            let catalog = try catalogValue.decode(RealtimeVoiceCatalog.self)
-            let providers = try list(providerValue, key: "providers", as: ProviderSummary.self)
+            let (catalog, providers) = try await Wire.decodeOffMain {
+                try (catalogValue.decode(RealtimeVoiceCatalog.self), Self.list(providerValue, key: "providers", as: ProviderSummary.self))
+            }
             guard generation == current, transport === candidate, voiceSettingsReadID == readID else { return }
             guard !catalog.voices.isEmpty, catalog.voices.count <= 256,
                   catalog.voices.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 }),
@@ -489,9 +491,8 @@ public final class BackendSession {
         var payload: [String: JSONValue] = ["accountId": .string(accountID), "query": .string(trimmed), "limit": .number(25)]
         if let cursor { payload["cursor"] = try .encode(cursor) }
         let value = try await transport.invoke("search:conversations", args: [.object(payload)])
-        try Task.checkCancellation()
+        let page = try await value.decodeOffMain(ConversationSearchPage.self)
         guard owner == pairingOwner, current == generation, self.transport === transport else { throw MainsError.changedBackend }
-        let page = try value.decode(ConversationSearchPage.self)
         func validTimestamp(_ value: Double) -> Bool { value.isFinite && value.rounded() == value && (0...253402300799000).contains(value) }
         guard page.items.count <= 25, Set(page.items.map(\.runId)).count == page.items.count,
               page.items.allSatisfy({ !$0.runId.isEmpty && $0.title.utf8.count <= 2048 && ($0.snippet?.utf8.count ?? 0) <= 4096 && validTimestamp($0.updatedAt) &&
@@ -523,9 +524,8 @@ public final class BackendSession {
         payload["cursor"] = try .encode(cursor ?? range.start)
         if direction != "older" { payload["end"] = try .encode(range.end) }
         let value = try await transport.invoke("runs:getHistory", args: [.object(payload)])
-        try Task.checkCancellation()
+        let page = try await value.decodeOffMain(HistoryPage.self)
         guard owner == pairingOwner, current == generation, self.transport === transport, viewingRunID == runID else { throw MainsError.changedBackend }
-        let page = try value.decode(HistoryPage.self)
         func compare(_ a: HistoryCursor, _ b: HistoryCursor) -> Double {
             if a.timestamp != b.timestamp { return a.timestamp - b.timestamp }
             if a.source != b.source { return a.source == "artifact" ? -1 : 1 }
@@ -796,8 +796,9 @@ public final class BackendSession {
         var payload: [String: JSONValue] = ["runId": .string(runID), "offset": .number(Double(offset))]
         if let artifactID { payload["artifactId"] = .number(Double(artifactID)) }
         let value = try await transport.invoke("runs:listOutputs", args: [.object(payload)])
+        let result = try await value.decodeOffMain(RunOutputsPage.self)
         guard current == generation else { throw MainsError.disconnected }
-        return try value.decode(RunOutputsPage.self)
+        return result
     }
 
     public func hasOutputs(_ runID: String) async throws -> Bool {
@@ -825,8 +826,9 @@ public final class BackendSession {
         guard let transport, isConnected else { throw MainsError.disconnected }
         let current = generation
         let value = try await transport.invoke("runs:readOutputFile", args: [.object(["runId": .string(output.runId), "artifactId": .number(Double(output.artifactId)), "version": .string(output.version), "offset": .number(Double(offset))])])
+        let result = try await value.decodeOffMain(RunOutputChunk.self)
         guard current == generation else { throw MainsError.disconnected }
-        return try value.decode(RunOutputChunk.self)
+        return result
     }
 
     public func downloadOutput(_ output: RunOutput, progress: (Double) -> Void = { _ in }) async throws -> Data {
@@ -856,9 +858,8 @@ public final class BackendSession {
                 if let output = matches.first { return .output(output) }
                 guard run.mode != "developer", reference.isMarkdown else { throw MainsError.server("This file is not a downloadable output of this conversation.") }
                 let value = try await transport.invoke("runs:readTextFile", args: [.object(["runId": .string(runID), "filePath": .string(reference.path)])])
-                try Task.checkCancellation()
+                let document = try await value.decodeOffMain(RunLinkedMarkdown.self)
                 guard owner == pairingOwner, current == generation, self.transport === transport else { throw MainsError.changedBackend }
-                let document = try value.decode(RunLinkedMarkdown.self)
                 guard document.content.utf8.count <= 2 * 1024 * 1024,
                       let relative = RunFileReference(document.relativePath), !relative.path.hasPrefix("/"),
                       relative.path.range(of: #"^[a-zA-Z]:/"#, options: .regularExpression) == nil else { throw MainsError.invalidReply }
@@ -881,8 +882,8 @@ public final class BackendSession {
         case .unavailable: throw MainsError.server("This older attachment has no downloadable preview.")
         }
         let value = try await transport.invoke(channel, args: [.object(payload)])
+        let image = try await value.decodeOffMain(ArtifactImage.self)
         guard current == generation, self.transport === transport else { throw MainsError.changedBackend }
-        let image = try value.decode(ArtifactImage.self)
         guard image.data != nil else { throw MainsError.invalidReply }
         return image
     }
@@ -915,7 +916,9 @@ public final class BackendSession {
         let value = try await transport.invoke("runArtifacts:readAttachmentChunk", args: [.object([
             "runId": .string(file.runId), "attachmentId": .string(file.attachmentId), "version": .string(file.version), "offset": .number(Double(offset)),
         ])])
-        return try value.decode(RunOutputChunk.self)
+        let chunk = try await value.decodeOffMain(RunOutputChunk.self)
+        guard self.transport === transport, isConnected else { throw MainsError.changedBackend }
+        return chunk
     }
 
     private func downloadFile(byteSize: Int, version: String,
@@ -933,7 +936,7 @@ public final class BackendSession {
         }, read: read, write: write, progress: progress)
     }
 
-    private func atlasRead(_ channel: String, fields: [String: JSONValue]) async throws -> JSONValue {
+    private func atlasRead<T: Decodable & Sendable>(_ channel: String, fields: [String: JSONValue], as type: T.Type) async throws -> T {
         guard active, isConnected, let accountID, let candidate = transport else { throw MainsError.disconnected }
         let owner = pairingOwner, current = generation
         var input = fields; input["accountId"] = .string(accountID)
@@ -947,15 +950,15 @@ public final class BackendSession {
             }
             throw error
         }
-        try Task.checkCancellation()
+        let decoded = try await result.decodeOffMain(type)
         guard owner == pairingOwner, current == generation, self.transport === candidate, active, isConnected else { throw MainsError.changedBackend }
-        return result
+        return decoded
     }
 
     public func atlasLibrary(_ query: AtlasQuery) async throws -> AtlasLibraryPage {
         if !isConnected { return try await savedAtlasLibrary(query) }
         let revision = atlasRevision
-        let result = try await atlasRead("atlas:mobileLibrary", fields: query.payload).decode(AtlasLibraryPage.self)
+        let result = try await atlasRead("atlas:mobileLibrary", fields: query.payload, as: AtlasLibraryPage.self)
         guard result.items.count <= 50, (1...100_000).contains(result.page), Set(result.items.map(\.key)).count == result.items.count,
               result.items.allSatisfy({ validAtlasTags($0.tags ?? [], limit: 60)
                   && ($0.preview?.unicodeScalars.count ?? 0) <= 240
@@ -1011,12 +1014,11 @@ public final class BackendSession {
 
     public var canSaveToAtlas: Bool { active && isConnected && pendingAtlasSave == nil }
 
-    private func mateRead(_ channel: String, args: [JSONValue] = []) async throws -> JSONValue {
+    private func mateRead<T: Decodable & Sendable>(_ channel: String, args: [JSONValue], as type: T.Type) async throws -> T {
         guard isConnected, let transport, let accountID else { throw MainsError.disconnected }
         guard supportsMates else { throw MainsError.server("Update Mains on your computer to use Mates on iPhone.") }
         let owner = pairingOwner, current = generation
-        let value = try await transport.invoke(channel, args: [.string(accountID)] + args)
-        try Task.checkCancellation()
+        let value = try await transport.invoke(channel, args: [.string(accountID)] + args).decodeOffMain(type)
         guard owner == pairingOwner, current == generation, self.transport === transport, isConnected else { throw MainsError.changedBackend }
         return value
     }
@@ -1024,7 +1026,7 @@ public final class BackendSession {
     public func loadMates(mateID: String? = nil, archived: Bool = false) async throws -> MateDirectory {
         let revision = matesRevision
         let args: [JSONValue] = archived ? [mateID.map(JSONValue.string) ?? .null, .bool(true)] : mateID.map { [.string($0)] } ?? []
-        let directory = try await mateRead("assistants:mobileDirectory", args: args).decode(MateDirectory.self)
+        let directory = try await mateRead("assistants:mobileDirectory", args: args, as: MateDirectory.self)
         guard directory.mates.count <= 200, directory.teams.count <= 100 else { throw MainsError.invalidReply }
         if revision == matesRevision {
             if let mateID {
@@ -1041,9 +1043,10 @@ public final class BackendSession {
     }
 
     public func loadMateChats(_ mateID: String) async throws -> [MateChat] {
-        let chats = try await mateRead("assistants:conversations", args: [.string(mateID)]).decode([MateChat].self)
+        let revision = matesRevision
+        let chats = try await mateRead("assistants:conversations", args: [.string(mateID)], as: [MateChat].self)
         guard chats.count <= 100 else { throw MainsError.invalidReply }
-        saveOfflineValue(chats, key: "mates:chats:\(mateID):list")
+        if revision == matesRevision { saveOfflineValue(chats, key: "mates:chats:\(mateID):list") }
         return chats
     }
 
@@ -1069,16 +1072,16 @@ public final class BackendSession {
     }
 
     public func loadMateAssignment(_ id: String, runID: String) async throws -> MateAssignment {
-        let assignment = try await mateRead("assistants:mobileAssignment", args: [.string(runID), .string(id)]).decode(MateAssignment.self)
+        let assignment = try await mateRead("assistants:mobileAssignment", args: [.string(runID), .string(id)], as: MateAssignment.self)
         guard assignment.id == id, viewingRunID == runID else { throw MainsError.changedBackend }
         return assignment
     }
 
-    private func mateInfoRead<T: Decodable>(_ channel: String, mateID: String, selection: JSONValue? = nil, as type: T.Type) async throws -> T {
+    private func mateInfoRead<T: Decodable & Sendable>(_ channel: String, mateID: String, selection: JSONValue? = nil, as type: T.Type) async throws -> T {
         let supported = channel == "assistants:mobileAssignments" ? supportsMateAssignments : supportsMateInfo
         guard supported else { throw MainsError.server("Update Mains on your computer to use this Mate tab.") }
         let args = [.string(mateID)] + (selection.map { [$0] } ?? [])
-        return try await mateRead(channel, args: args).decode(type)
+        return try await mateRead(channel, args: args, as: type)
     }
 
     public func loadMateMemory(_ mateID: String) async throws -> [MateMemoryNote] {
@@ -1284,13 +1287,13 @@ public final class BackendSession {
 
     public func atlasTags(query: String = "", page: Int = 1) async throws -> AtlasTagPage {
         guard (1...100_000).contains(page), query.utf16.count <= 64 else { throw MainsError.invalidReply }
-        let result = try await atlasRead("atlas:mobileTags", fields: ["query": .string(query), "page": .number(Double(page))]).decode(AtlasTagPage.self)
+        let result = try await atlasRead("atlas:mobileTags", fields: ["query": .string(query), "page": .number(Double(page))], as: AtlasTagPage.self)
         guard result.page == page, validAtlasTags(result.items, limit: 50) else { throw MainsError.invalidReply }
         return result
     }
 
     public func readAtlasTags(_ id: String) async throws -> AtlasItemTags {
-        let result = try await atlasRead("atlas:readMobileTags", fields: ["id": .string(id)]).decode(AtlasItemTags.self)
+        let result = try await atlasRead("atlas:readMobileTags", fields: ["id": .string(id)], as: AtlasItemTags.self)
         guard result.id == id, result.requestedId == id, result.title.utf8.count <= 4096,
               ["page", "file", "image", "bookmark"].contains(result.kind), validAtlasTags(result.tags, limit: 60),
               result.revision.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw MainsError.invalidReply }
@@ -1306,7 +1309,7 @@ public final class BackendSession {
 
     public func atlasTrash(page: Int = 1) async throws -> AtlasTrashPage {
         guard (1...100_000).contains(page) else { throw MainsError.invalidReply }
-        let result = try await atlasRead("atlas:mobileTrash", fields: ["page": .number(Double(page))]).decode(AtlasTrashPage.self)
+        let result = try await atlasRead("atlas:mobileTrash", fields: ["page": .number(Double(page))], as: AtlasTrashPage.self)
         guard result.page == page, result.items.count <= 50, Set(result.items.map(\.id)).count == result.items.count,
               result.items.allSatisfy({ !$0.id.isEmpty && $0.id.utf8.count <= 256 && $0.title.utf8.count <= 4096 && ["page", "file", "image", "bookmark"].contains($0.kind) && $0.trashedAt.utf8.count <= 64 }) else { throw MainsError.invalidReply }
         return result
@@ -1339,7 +1342,7 @@ public final class BackendSession {
     }
 
     public func readAtlasBookmark(_ id: String) async throws -> AtlasBookmarkDocument {
-        let item = try await atlasRead("atlas:readMobileBookmark", fields: ["id": .string(id)]).decode(AtlasBookmarkDocument.self)
+        let item = try await atlasRead("atlas:readMobileBookmark", fields: ["id": .string(id)], as: AtlasBookmarkDocument.self)
         guard item.requestedId == id, !item.id.isEmpty, item.id.utf8.count <= 256, item.kind == "bookmark",
               item.title.utf16.count <= 240, item.url.utf16.count <= 4096, item.description.utf16.count <= 2000, item.note.utf16.count <= 10000,
               item.collectionId.map({ !$0.isEmpty && $0.utf8.count <= 256 }) ?? true,
@@ -1383,7 +1386,7 @@ public final class BackendSession {
     public func atlasSaveStatus(_ source: AtlasSaveSource, owner: Int) async throws -> Bool? {
         guard owner == pairingOwner else { throw MainsError.changedBackend }
         do {
-            let value = try await atlasRead("atlas:readMobileSaveStatus", fields: try JSONValue.encode(source).objectValue)
+            let value = try await atlasRead("atlas:readMobileSaveStatus", fields: try JSONValue.encode(source).objectValue, as: JSONValue.self)
             guard case .bool(let saved) = value["saved"] else { throw MainsError.invalidReply }
             return saved
         } catch MainsError.server(let message) where message.contains("Update Mains on your computer") {
@@ -1478,7 +1481,7 @@ public final class BackendSession {
         var fields: [String: JSONValue] = ["id": .string(id), "offset": .number(Double(offset))]
         if let version { fields["version"] = .number(Double(version)) }
         let page: AtlasPageContent
-        do { page = try await atlasRead("atlas:readMobilePage", fields: fields).decode(AtlasPageContent.self) }
+        do { page = try await atlasRead("atlas:readMobilePage", fields: fields, as: AtlasPageContent.self) }
         catch {
             if case MainsError.server(let message) = error, ["Atlas page not found", "Atlas page not found or in Trash"].contains(message) {
                 removeSavedAtlasPage(id)
@@ -1505,25 +1508,25 @@ public final class BackendSession {
     }
 
     public func describeAtlasFile(_ reference: AtlasFileReference) async throws -> AtlasFile {
-        let file = try await atlasRead("atlas:describeMobileFile", fields: ["reference": try .encode(reference)]).decode(AtlasFile.self)
+        let file = try await atlasRead("atlas:describeMobileFile", fields: ["reference": try .encode(reference)], as: AtlasFile.self)
         guard file.reference == reference, (0...RunFilePolicy.maxBytes).contains(file.byteSize), !file.version.isEmpty else { throw MainsError.invalidReply }
         return file
     }
 
     public func readAtlasPageCover(_ pageID: String, coverFileID: String) async throws -> AtlasPageCoverImage {
-        let image = try await atlasRead("atlas:readMobilePageCover", fields: ["id": .string(pageID), "coverFileId": .string(coverFileID)]).decode(AtlasPageCoverImage.self)
+        let image = try await atlasRead("atlas:readMobilePageCover", fields: ["id": .string(pageID), "coverFileId": .string(coverFileID)], as: AtlasPageCoverImage.self)
         guard image.pageId == pageID, image.coverFileId == coverFileID, image.data != nil else { throw MainsError.invalidReply }
         return image
     }
 
     public func readAtlasPageImage(_ pageID: String, fileID: String, version: Int) async throws -> AtlasPageEmbeddedImage {
-        let image = try await atlasRead("atlas:readMobilePageImage", fields: ["id": .string(pageID), "fileId": .string(fileID), "version": .number(Double(version))]).decode(AtlasPageEmbeddedImage.self)
+        let image = try await atlasRead("atlas:readMobilePageImage", fields: ["id": .string(pageID), "fileId": .string(fileID), "version": .number(Double(version))], as: AtlasPageEmbeddedImage.self)
         guard image.pageId == pageID, image.fileId == fileID, image.pageVersion == version, image.data != nil else { throw MainsError.invalidReply }
         return image
     }
 
     public func readAtlasImage(_ reference: AtlasFileReference) async throws -> AtlasImage {
-        let image = try await atlasRead("atlas:readMobileImage", fields: ["reference": try .encode(reference)]).decode(AtlasImage.self)
+        let image = try await atlasRead("atlas:readMobileImage", fields: ["reference": try .encode(reference)], as: AtlasImage.self)
         guard image.reference == reference, image.data != nil else { throw MainsError.invalidReply }
         return image
     }
@@ -1535,7 +1538,7 @@ public final class BackendSession {
             try await RunFileTransfer.receive(byteSize: file.byteSize, version: file.version, validate: {
                 guard owner == self.pairingOwner, current == self.generation, self.active, self.isConnected else { throw MainsError.changedBackend }
             }, read: { offset in
-                try await self.atlasRead("atlas:readMobileFile", fields: ["reference": try .encode(file.reference), "version": .string(file.version), "offset": .number(Double(offset))]).decode(RunOutputChunk.self)
+                try await self.atlasRead("atlas:readMobileFile", fields: ["reference": try .encode(file.reference), "version": .string(file.version), "offset": .number(Double(offset))], as: RunOutputChunk.self)
             }, write: write, progress: progress)
         }
     }
@@ -1553,7 +1556,9 @@ public final class BackendSession {
         defer { if current == generation { loadingModels.remove(providerID) } }
         do {
             let value = try await transport.invoke("providers:getModels", args: [.string(providerID)])
-            let choices = try list(value, key: "models", as: ModelChoice.self)
+            let choices = try await Wire.decodeOffMain {
+                try Self.list(value, key: "models", as: ModelChoice.self)
+            }
             guard current == generation, self.transport === transport else { return }
             models[providerID] = choices
             saveOfflineValue(choices, key: cacheKey)
@@ -1577,20 +1582,31 @@ public final class BackendSession {
         transcript.setFollowing(following)
     }
 
-    public func restore() {
+    public func restore() async {
         guard !restored else { return }
         restored = true
         do {
             pairing = try storage.loadPairing()
             if pairing == nil, storage.demoEnabled { try startDemo(); return }
-            if pairing != nil { storage.setDemoEnabled(false) }
-            if let pairing, let cached = storage.loadSnapshot(backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId),
-               cached.backendID == pairing.descriptor.backendId {
-                conversations = cached.conversations.map(safeConversation); spaces = cached.spaces; workspaces = cached.workspaces
-                collections = cached.collections ?? []; projects = cached.projects ?? []; gitStates = cached.gitStates ?? []
-                selectedSpaceID = cached.selectedSpaceID
-                homeTargets = cached.homeTargets ?? [:]; composerSettings = cached.composerSettings ?? [:]
-                lastSyncedAt = cached.lastSyncedAt
+            if let pairing {
+                storage.setDemoEnabled(false)
+                let owner = pairingOwner
+                restoringSnapshotOwner = owner
+                defer { restoringSnapshotOwner = nil }
+                restart()
+                let cached = await storage.loadSnapshot(backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId)
+                guard owner == pairingOwner else { return }
+                if let cached, cached.backendID == pairing.descriptor.backendId {
+                    let safeRuns = await Task.detached(priority: .userInitiated) {
+                        cached.conversations.map(Self.safeConversation)
+                    }.value
+                    guard owner == pairingOwner else { return }
+                    conversations = safeRuns; spaces = cached.spaces; workspaces = cached.workspaces
+                    collections = cached.collections ?? []; projects = cached.projects ?? []; gitStates = cached.gitStates ?? []
+                    selectedSpaceID = cached.selectedSpaceID
+                    homeTargets = cached.homeTargets ?? [:]; composerSettings = cached.composerSettings ?? [:]
+                    lastSyncedAt = cached.lastSyncedAt
+                }
             }
             restart()
         } catch { actionError = "Could not read the saved pairing: \(error.localizedDescription)" }
@@ -1740,6 +1756,7 @@ public final class BackendSession {
         if connection == .unauthorized || connection == .incompatible { return }
         let current = generation
         connection = conversations.isEmpty ? .connecting : .reconnecting
+        guard restoringSnapshotOwner != pairingOwner else { return }
         connectionTask = Task { [weak self] in await self?.connect(pairing, generation: current) }
     }
 
@@ -1751,8 +1768,10 @@ public final class BackendSession {
             let remaining = ContinuousClock.now.duration(to: recoveryEnd).components
             let seconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18
             let attemptLimit = quiet ? 20 : max(0.1, min(20, seconds))
+            var attemptTimedOut = false
             let attemptTimer = Task { [weak candidate] in
                 do { try await Task.sleep(for: .seconds(attemptLimit)) } catch { return }
+                attemptTimedOut = true
                 candidate?.close()
             }
             defer { attemptTimer.cancel() }
@@ -1780,6 +1799,7 @@ public final class BackendSession {
                 if !quiet { connection = .syncing }
                 try await syncSnapshot(candidate, generation: current)
                 guard generation == current, !Task.isCancelled else { return }
+                guard !attemptTimedOut else { throw MainsError.timeout }
                 attemptTimer.cancel()
                 clearToolPluginIcons()
                 connection = .connected
@@ -1901,7 +1921,7 @@ public final class BackendSession {
         do { return .success(try await candidate.invoke(channel, args: args, timeout: 30)) } catch { return .failure(error) }
     }
 
-    private func list<T: Decodable>(_ value: JSONValue, key: String, as type: T.Type) throws -> [T] {
+    nonisolated private static func list<T: Decodable>(_ value: JSONValue, key: String, as type: T.Type) throws -> [T] {
         if case .array = value { return try value.decode([T].self) }
         return try value[key].decode([T].self)
     }
@@ -1920,17 +1940,19 @@ public final class BackendSession {
         async let gitResult = candidate.invoke("workspace:listGitStates")
         async let providerResult = candidate.invoke("providers:getEnabled")
         let (collectionValue, projectValue, gitValue, providerValue) = try await (collectionResult, projectResult, gitResult, providerResult)
-        let runs = try list(runValue, key: "runs", as: Conversation.self)
-        let newSpaces = try list(spaceValue, key: "spaces", as: Space.self)
-        let newWorkspaces = try list(workspaceValue, key: "workspaces", as: Workspace.self)
-        let newCollections = try list(collectionValue, key: "collections", as: ProjectCollection.self)
-        let newProjects = try list(projectValue, key: "projects", as: CodeProject.self)
-        let newGitStates = try list(gitValue, key: "states", as: WorkspaceGitState.self)
-        let providers = try list(providerValue, key: "providers", as: ProviderSummary.self)
+        let (runs, newSpaces, newWorkspaces, newCollections, newProjects, newGitStates, providers) = try await Wire.decodeOffMain {
+            try (Self.list(runValue, key: "runs", as: Conversation.self).map(Self.safeConversation),
+                 Self.list(spaceValue, key: "spaces", as: Space.self),
+                 Self.list(workspaceValue, key: "workspaces", as: Workspace.self),
+                 Self.list(collectionValue, key: "collections", as: ProjectCollection.self),
+                 Self.list(projectValue, key: "projects", as: CodeProject.self),
+                 Self.list(gitValue, key: "states", as: WorkspaceGitState.self),
+                 Self.list(providerValue, key: "providers", as: ProviderSummary.self))
+        }
         guard generation == current, transport === candidate, actionRevision == conversationActionRevision else { return }
         accountID = id
         let viewed = conversations.first { $0.id == viewingRunID && !$0.isArchived }
-        conversations = runs.map { safeConversation(keepingSettings($0, readVersion: settingsReadVersion)) }.filter { !$0.isArchived }.sorted { $0.updatedAt > $1.updatedAt }
+        conversations = runs.map { keepingSettings($0, readVersion: settingsReadVersion) }.filter { !$0.isArchived }.sorted { $0.updatedAt > $1.updatedAt }
         if let viewed, !conversations.contains(where: { $0.id == viewed.id }) { conversations.append(viewed) }
         spaces = newSpaces.filter { $0.isArchived != true }.sorted { ($0.sortOrder ?? 0) < ($1.sortOrder ?? 0) }
         workspaces = newWorkspaces.filter { !$0.isArchived }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
@@ -2031,12 +2053,14 @@ public final class BackendSession {
                     self.pendingApprovals = []; self.approvalExpiryTask?.cancel(); self.approvalExpiryTask = nil
                     self.saveCache(history: .remove(runID: runID)); return false
                 }
-                let page = try pageJSON.decode(HistoryPage.self)
-                let run = try runJSON.decode(Conversation.self)
+                let (page, run, approvals) = try await Wire.decodeOffMain {
+                    try (pageJSON.decode(HistoryPage.self), runJSON.decode(Conversation.self), approvalJSON.decode([PendingApproval].self))
+                }
+                guard self.generation == current, self.viewingRunID == runID, self.transport === transport,
+                      actionRevision == self.conversationActionRevision else { return false }
                 self.upsert(self.keepingSettings(run, readVersion: settingsReadVersion))
                 self.transcript.replace(page, direction: direction, pending: self.pendingMessage)
                 self.initialHistoryCursor = nil
-                let approvals = try approvalJSON.decode([PendingApproval].self)
                 if self.decisionRevision == decisionReadVersion {
                     self.pendingApprovals = run.isReplica == true ? [] : approvals.filter { $0.runId == runID && $0.expiresAt > Date() }.map {
                         var bound = $0; bound.sessionOwner = self.pairingOwner; return bound
@@ -2067,7 +2091,7 @@ public final class BackendSession {
         return loaded
     }
 
-    private func safeConversation(_ input: Conversation) -> Conversation {
+    nonisolated private static func safeConversation(_ input: Conversation) -> Conversation {
         var run = input
         if case .object(let snapshot) = run.configSnapshot {
             var safe = snapshot.filter { ComposerSettings.allowedKeys.contains($0.key) }
@@ -2089,7 +2113,7 @@ public final class BackendSession {
     }
 
     private func upsert(_ input: Conversation) {
-        let run = safeConversation(input)
+        let run = Self.safeConversation(input)
         conversations.removeAll { $0.id == run.id }
         if !run.isArchived { conversations.append(run) }
         conversations.sort { $0.updatedAt > $1.updatedAt }
@@ -2632,10 +2656,8 @@ public final class BackendSession {
             try Task.checkCancellation()
             guard owner == pairingOwner, current == generation, viewingRunID == runID else { throw MainsError.changedBackend }
             let result = try await readContent(artifactID: artifactID, offset: offset, expectedRunID: runID)
-            try Task.checkCancellation()
+            let page = try await result.decodeOffMain(HistoryContentPage.self)
             guard owner == pairingOwner, current == generation, viewingRunID == runID else { throw MainsError.changedBackend }
-
-            let page = try result.decode(HistoryContentPage.self)
             let count = page.text.unicodeScalars.count
             guard page.offset == offset, page.totalChars >= offset, count <= page.totalChars - offset,
                   totalChars == nil || totalChars == page.totalChars else { throw MainsError.invalidReply }
@@ -2663,8 +2685,9 @@ public final class BackendSession {
             let result = try await transport.invoke("runs:readHistoryContent", args: [.object([
                 "runId": .string(runID), "source": .string("turn-diff"), "id": .number(Double(turnID)), "offset": .number(Double(offset)),
             ])])
+            let page = try await result.decodeOffMain(HistoryContentPage.self)
             guard self.pairingOwner == owner, self.generation == current, self.viewingRunID == runID else { throw MainsError.changedBackend }
-            return try result.decode(HistoryContentPage.self)
+            return page
         }
     }
 
@@ -2682,13 +2705,17 @@ public final class BackendSession {
         storage.saveOfflineValue(data, key: key, backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId)
     }
 
-    private func offlineValues<Value: Decodable>(_ type: Value.Type, key: String, prefix: Bool = false) async -> [Value] {
+    private func offlineValues<Value: Decodable & Sendable>(_ type: Value.Type, key: String, prefix: Bool = false) async -> [Value] {
         guard !isDemo, let pairing else { return [] }
         let owner = pairingOwner
         let values = await storage.offlineValues(key, prefix: prefix, backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId)
         guard owner == pairingOwner, !Task.isCancelled else { return [] }
-        let decoder = JSONDecoder()
-        return values.compactMap { try? decoder.decode(type, from: $0) }
+        let decoded = try? await Wire.decodeOffMain {
+            let decoder = JSONDecoder()
+            return values.compactMap { try? decoder.decode(type, from: $0) }
+        }
+        guard owner == pairingOwner, !Task.isCancelled else { return [] }
+        return decoded ?? []
     }
 
     private func atlasChanged() {

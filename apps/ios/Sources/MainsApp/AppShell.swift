@@ -125,7 +125,8 @@ struct AppShell: View {
                                 case .atlasPage(let id): AtlasPageView(session: session, pageID: id, openPage: { path.append(.atlasPage($0)) }, openConversation: { path.append(.conversation($0)) })
                                     .id("\(session.ownership):atlas:\(id)")
                                 case .mates: MatesView(session: session, showingArchive: $showingArchivedMates, openMate: { path.append(.mate($0)) },
-                                                      navigateFromArchive: { if path.last == route { path.append($0) } }, newMate: { teams in
+                                                      navigateFromArchive: { if path.last == route { path.append($0) } },
+                                                      openSettings: showSettings, newMate: { teams in
                                     newMateDraft = NewMateDraft()
                                     path.append(.newMate(teams))
                                 })

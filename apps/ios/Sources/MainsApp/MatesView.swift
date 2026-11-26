@@ -11,12 +11,13 @@ struct MatesView: View {
     @Binding var showingArchive: Bool
     let openMate: (String) -> Void
     let navigateFromArchive: (AppRoute) -> Void
+    let openSettings: () -> Void
     let newMate: ([MateTeam]) -> Void
     @State private var archivePath: [ArchiveRoute] = []
     @State private var routeAfterArchive: (owner: Int, route: AppRoute)?
 
     var body: some View {
-        MateDirectoryView(session: session, archived: false, openMate: openMate, newMate: newMate)
+        MateDirectoryView(session: session, archived: false, openMate: openMate, openSettings: openSettings, newMate: newMate)
             .scrollingNavigationTitle("Mates")
             .toolbar {
                 if session.supportsMateInfo {
@@ -28,7 +29,8 @@ struct MatesView: View {
             }
             .fullScreenCover(isPresented: $showingArchive, onDismiss: finishArchive) {
                 NavigationStack(path: $archivePath) {
-                    MateDirectoryView(session: session, archived: true, openMate: { archivePath.append(.mate($0)) })
+                    MateDirectoryView(session: session, archived: true, openMate: { archivePath.append(.mate($0)) },
+                                      openSettings: { leaveArchive(for: .settings) })
                         .expandedNavigationTitle("Archived Mates")
                         .toolbar { closeArchiveButton }
                         .navigationDestination(for: ArchiveRoute.self) { route in
@@ -81,6 +83,7 @@ private struct MateDirectoryView: View {
     let session: BackendSession
     let archived: Bool
     let openMate: (String) -> Void
+    let openSettings: () -> Void
     var newMate: (([MateTeam]) -> Void)? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var loadedDirectory: (owner: Int, value: MateDirectory)?
@@ -142,6 +145,11 @@ private struct MateDirectoryView: View {
     private func directoryList(matches: [Mate], activity: [String: MateActivity]) -> some View {
         List {
             if !archived { Section { PageTitle("Mates").listRow } }
+            if !session.isConnected && directory != nil {
+                Section {
+                    DisconnectedState(message: "Showing saved Mates. Connect for updates.", openSettings: openSettings).listRow
+                }
+            }
             directoryStatus
             if let directory {
                 mateSections(directory, matches: matches, activity: activity)
@@ -150,22 +158,27 @@ private struct MateDirectoryView: View {
             }
         }
         .contentMargins(.top, 8, for: .scrollContent)
+        .listSectionSpacing(session.isConnected ? .default : .compact)
     }
 
-    @ViewBuilder private var emptyDirectory: some View {
-        if disconnectedWithoutMates {
-            DisconnectedState(message: "Connect to your computer to use Mates.")
-        } else {
-            VStack(spacing: 16) {
-                directoryStatus
-                if directory?.mates.isEmpty == true {
-                    if archived { EmptyStateView(artwork: .mates, title: "No archived Mates") }
-                    else { emptyMates.padding(24) }
-                } else {
-                    EmptyStateView(artwork: .search, title: "No matching Mates")
-                }
+    private var emptyDirectory: some View {
+        VStack(spacing: 16) {
+            directoryStatus
+            if !session.isConnected {
+                DisconnectedState(message: disconnectedMessage, openSettings: openSettings)
+            } else if directory?.mates.isEmpty == true {
+                if archived { EmptyStateView(artwork: .mates, title: "No archived Mates") }
+                else { emptyMates.padding(24) }
+            } else {
+                EmptyStateView(artwork: .search, title: "No matching Mates")
             }
         }
+    }
+
+    private var disconnectedMessage: LocalizedStringKey {
+        guard let directory else { return "Connect to your computer to use Mates." }
+        if !directory.mates.isEmpty { return "No matching saved Mates. Connect for updates." }
+        return archived ? "No saved archived Mates. Connect for updates." : "No saved Mates. Connect for updates."
     }
 
     @ViewBuilder private var directoryStatus: some View {
@@ -177,9 +190,7 @@ private struct MateDirectoryView: View {
                 }
             }.disabled(!session.isConnected)
         }
-        if !session.isConnected {
-            Label("Connect to your computer to refresh Mates.", systemImage: "wifi.slash").foregroundStyle(.secondary)
-        } else if let error { Text(error).foregroundStyle(.secondary) }
+        if session.isConnected, let error { Text(error).foregroundStyle(.secondary) }
     }
 
     private var emptyMates: some View {

@@ -53,7 +53,7 @@ import Testing
     @MainActor private func setup() async throws -> (BackendSession, DemoBackend, ForkProbe, String) {
         let backend = try DemoBackend(stepDelay: .milliseconds(2), streamDelay: .milliseconds(1)), probe = ForkProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in ForkTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         try await eventually { session.isConnected }
         session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
         let id = try await session.send("Source conversation", spaceID: "codex", workspaceID: backend.defaultWorkspaceID)
@@ -170,7 +170,7 @@ import Testing
 extension SessionIntegrationTests {
     @Test @MainActor func forkUsesTheExistingWireContractAndReplaysOneChildAcrossLostReplies() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!

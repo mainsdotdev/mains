@@ -45,9 +45,8 @@ final class NativeStorage: SessionStorage {
         defaults.removeObject(forKey: "ai-data-consents-v1")
     }
 
-    func loadSnapshot(backendID: String, deviceID: String) -> CachedSnapshot? {
-        try? FileManager.default.removeItem(at: legacySnapshot)
-        return cache.loadSnapshot(backendID: backendID, deviceID: deviceID)
+    func loadSnapshot(backendID: String, deviceID: String) async -> CachedSnapshot? {
+        await cache.loadSnapshot(backendID: backendID, deviceID: deviceID)
     }
     func loadHistory(backendID: String, deviceID: String, runID: String) async -> HistoryPage? {
         await cache.loadHistory(backendID: backendID, deviceID: deviceID, runID: runID)

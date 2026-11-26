@@ -24,7 +24,7 @@ extension SessionIntegrationTests {
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let storage = MemoryStorage()
         let session = BackendSession(storage: storage)
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
         try await session.pair(PairingLink("mains://pair#code=ios-test&endpoint=\(encoded)"), deviceName: "Test iPhone")
@@ -100,7 +100,7 @@ struct DecisionTests {
 
     @Test(arguments: [PlanProposal.Decision.apply, .dismiss]) @MainActor
     func demoPlanDecisionsKeepOneDurableOutcome(_ choice: PlanProposal.Decision) async throws {
-        let (session, backend, faults) = try makeSession()
+        let (session, backend, faults) = try await makeSession()
         defer { session.setActive(false); backend.shutdown() }
         try await eventually { session.isConnected && session.supportsPlanDecisions }
         var settings = session.settings(for: try #require(session.spaces.first { $0.id == "codex" }))
@@ -250,7 +250,7 @@ struct DecisionTests {
     }
 
     @Test @MainActor func approvalQuestionFormLinkAndAsyncAnswersUseSessionChannels() async throws {
-        let (session, backend, faults) = try makeSession()
+        let (session, backend, faults) = try await makeSession()
         defer { session.exitDemo(); backend.shutdown() }
         try await openWalkthrough(session)
         let first = try #require(session.pendingApprovals.first)
@@ -279,7 +279,7 @@ struct DecisionTests {
     }
 
     @Test @MainActor func acceptedAsyncAnswerStaysHiddenWhileAnOlderHistoryReadCompletes() async throws {
-        let (session, backend, faults) = try makeSession()
+        let (session, backend, faults) = try await makeSession()
         defer { faults.releaseHistory(); session.exitDemo(); backend.shutdown() }
         try await openWalkthrough(session)
         try await skipApprovals(session)
@@ -298,7 +298,7 @@ struct DecisionTests {
     }
 
     @Test @MainActor func uncertainApprovalCannotChangeAnswerAndChecksOriginalReceipt() async throws {
-        let (session, backend, faults) = try makeSession()
+        let (session, backend, faults) = try await makeSession()
         defer { session.exitDemo(); backend.shutdown() }
         try await openWalkthrough(session)
         let approval = try #require(session.pendingApprovals.first)
@@ -314,7 +314,7 @@ struct DecisionTests {
     }
 
     @Test @MainActor func uncertainAsyncAnswerOnlyChecksAndDismissDoesNotSend() async throws {
-        let (session, backend, faults) = try makeSession()
+        let (session, backend, faults) = try await makeSession()
         defer { session.exitDemo(); backend.shutdown() }
         try await openWalkthrough(session)
         try await skipApprovals(session)
@@ -334,7 +334,7 @@ struct DecisionTests {
     }
 
     @Test @MainActor func pendingDecisionSurvivesReconnectButCannotCrossRunOrBackend() async throws {
-        let (session, backend, faults) = try makeSession()
+        let (session, backend, faults) = try await makeSession()
         defer { session.exitDemo(); backend.shutdown() }
         let id = try await openWalkthrough(session)
         let approval = try #require(session.pendingApprovals.first)
@@ -358,7 +358,7 @@ struct DecisionTests {
     }
 
     @Test @MainActor func lostAsyncAcknowledgementReconcilesWithoutAnotherAnswerPrompt() async throws {
-        let (session, backend, faults) = try makeSession()
+        let (session, backend, faults) = try await makeSession()
         defer { session.exitDemo(); backend.shutdown() }
         let id = try await openWalkthrough(session)
         try await skipApprovals(session)
@@ -375,7 +375,7 @@ struct DecisionTests {
     }
 
     @Test @MainActor func dismissingAsyncQuestionsNeedsNoSharingConsentAndSendsNoPrompt() async throws {
-        let (session, backend, faults) = try makeSession()
+        let (session, backend, faults) = try await makeSession()
         defer { session.exitDemo(); backend.shutdown() }
         try await openWalkthrough(session); try await skipApprovals(session)
         let pending = try #require(session.pendingQuestions)
@@ -387,7 +387,7 @@ struct DecisionTests {
     }
 
     @Test @MainActor func lateQuestionAnswerDoesNotChangeAnotherConversationsReadingPosition() async throws {
-        let (session, backend, faults) = try makeSession()
+        let (session, backend, faults) = try await makeSession()
         defer { session.exitDemo(); backend.shutdown() }
         try await openWalkthrough(session); try await skipApprovals(session)
         let pending = try #require(session.pendingQuestions)
@@ -421,11 +421,11 @@ struct DecisionTests {
         }
     }
 
-    @MainActor private func makeSession() throws -> (BackendSession, DemoBackend, DecisionFaults) {
+    @MainActor private func makeSession() async throws -> (BackendSession, DemoBackend, DecisionFaults) {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let faults = DecisionFaults()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DecisionFaultTransport(backend, faults: faults) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
         return (session, backend, faults)
     }

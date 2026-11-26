@@ -222,7 +222,7 @@ private func lifecycleTool(_ id: Int, _ name: String, status: String = "running"
     let backend = try DemoBackend(stepDelay: .milliseconds(250), streamDelay: .milliseconds(1))
     let storage = MemoryStorage()
     let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-    session.restore(); session.setActive(true); try session.startDemo()
+    await session.restore(); session.setActive(true); try session.startDemo()
     defer { session.exitDemo() }
     try await eventually { session.isConnected }
     session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)

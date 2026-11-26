@@ -46,11 +46,12 @@ public final class WebSocketTransport: BackendTransport {
         task.maximumMessageSize = Wire.maxMessageBytes
         socket = task
         task.resume()
-        reader = Task { [weak self] in
+        reader = Task.detached(priority: .userInitiated) { [weak self] in
             do {
+                let decoder = JSONDecoder()
                 while !Task.isCancelled {
                     let message = try await task.receive()
-                    guard let self, self.socket === task else { return }
+                    try Task.checkCancellation()
                     let data: Data
                     switch message {
                     case .string(let value): data = Data(value.utf8)
@@ -58,12 +59,11 @@ public final class WebSocketTransport: BackendTransport {
                     @unknown default: continue
                     }
                     guard data.count <= Wire.maxMessageBytes else { throw MainsError.invalidReply }
-                    self.receive(try JSONDecoder().decode(JSONValue.self, from: data))
+                    let frame = try decoder.decode(JSONValue.self, from: data)
+                    guard await self?.receive(frame, from: task) == true else { return }
                 }
             } catch {
-                guard let self, self.socket === task else { return }
-                let status = (task.response as? HTTPURLResponse)?.statusCode
-                self.fail(status == 401 || status == 403 ? .unauthorized : .disconnected)
+                await self?.readerFailed(task)
             }
         }
         heartbeat = Task { [weak self] in
@@ -142,10 +142,17 @@ public final class WebSocketTransport: BackendTransport {
         request.continuation.resume(with: result)
     }
 
-    private func receive(_ message: JSONValue) {
+    private func readerFailed(_ task: URLSessionWebSocketTask) {
+        guard !Task.isCancelled, socket === task else { return }
+        let status = (task.response as? HTTPURLResponse)?.statusCode
+        fail(status == 401 || status == 403 ? .unauthorized : .disconnected)
+    }
+
+    private func receive(_ message: JSONValue, from task: URLSessionWebSocketTask) -> Bool {
+        guard !Task.isCancelled, socket === task else { return false }
         switch message["kind"].string {
         case "response":
-            guard let rawID = message["id"].number, rawID.isFinite, rawID >= 0, rawID < Double(Int.max) else { return }
+            guard let rawID = message["id"].number, rawID.isFinite, rawID >= 0, rawID < Double(Int.max) else { return true }
             let result = message["result"]
             if result["success"].bool { finish(Int(rawID), .success(result["data"])) }
             else { finish(Int(rawID), .failure(MainsError.server(result["error"].string ?? "Request refused"))) }
@@ -153,5 +160,6 @@ public final class WebSocketTransport: BackendTransport {
             if let channel = message["channel"].string { onEvent?(channel, message["payload"]) }
         default: break
         }
+        return true
     }
 }

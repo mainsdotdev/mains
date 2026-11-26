@@ -8,7 +8,7 @@ struct DemoTests {
     func steerAddsFilesAndContextToTheCurrentDemoTurnWithoutRestartingIt(providerID: String) async throws {
         let backend = try DemoBackend(stepDelay: .milliseconds(100), streamDelay: .milliseconds(5))
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         session.grantConsent(providerID: providerID, backendID: DemoBackend.backendID)
@@ -40,7 +40,7 @@ struct DemoTests {
     @Test @MainActor func attachmentOnlyDemoMessagesKeepOnePromptAndDownloadableFiles() async throws {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
@@ -106,7 +106,7 @@ struct DemoTests {
         storage.grantConsent(backendID: "real-computer", providerID: "codex")
         let originalConsent = storage.consents
         let session = BackendSession(storage: storage)
-        session.restore(); session.setOnline(false); session.setActive(true)
+        await session.restore(); session.setOnline(false); session.setActive(true)
         try session.startDemo()
         defer { session.exitDemo() }
         try await eventually { session.isConnected }
@@ -138,7 +138,7 @@ struct DemoTests {
     @Test @MainActor func activitySamplesUseTheNormalDecisionAndQueueWhileOffline() async throws {
         let storage = MemoryStorage()
         let session = BackendSession(storage: storage)
-        session.restore(); session.setOnline(false); session.setActive(true)
+        await session.restore(); session.setOnline(false); session.setActive(true)
         try session.startDemo()
         defer { session.exitDemo() }
         try await eventually { session.isConnected }
@@ -180,7 +180,7 @@ struct DemoTests {
 
     @Test @MainActor func launchBriefSavesTheWorkOutputToItsAtlasProjectOffline() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setOnline(false); session.setActive(true)
+        await session.restore(); session.setOnline(false); session.setActive(true)
         try session.startDemo()
         defer { session.exitDemo() }
         try await eventually { session.isConnected }
@@ -221,7 +221,7 @@ struct DemoTests {
     @Test @MainActor func releaseMateHasAChatAndPreviewsItsChecklistOffline() async throws {
         let storage = MemoryStorage()
         let session = BackendSession(storage: storage)
-        session.restore(); session.setOnline(false); session.setActive(true)
+        await session.restore(); session.setOnline(false); session.setActive(true)
         try session.startDemo()
         defer { session.exitDemo() }
         try await eventually { session.isConnected }
@@ -257,7 +257,7 @@ struct DemoTests {
     @Test @MainActor func demoMateCreationKeepsTheApprovedProfileAndFirstChatInMemory() async throws {
         let storage = MemoryStorage()
         let session = BackendSession(storage: storage)
-        session.restore(); session.setOnline(false); session.setActive(true)
+        await session.restore(); session.setOnline(false); session.setActive(true)
         try session.startDemo()
         defer { session.exitDemo() }
         try await eventually { session.isConnected }
@@ -306,7 +306,7 @@ struct DemoTests {
     @Test @MainActor func demoMateAssignmentsFinishAndPublishTheirOutputOffline() async throws {
         let storage = MemoryStorage()
         let session = BackendSession(storage: storage)
-        session.restore(); session.setOnline(false); session.setActive(true)
+        await session.restore(); session.setOnline(false); session.setActive(true)
         try session.startDemo()
         defer { session.exitDemo() }
         try await eventually { session.isConnected }
@@ -384,7 +384,7 @@ struct DemoTests {
 
     @Test @MainActor func demoFilesUseRealImageAndChunkedDocumentPaths() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true); session.setOnline(false); try session.startDemo()
+        await session.restore(); session.setActive(true); session.setOnline(false); try session.startDemo()
         defer { session.exitDemo() }
         try await eventually { session.isConnected }
         session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
@@ -496,7 +496,7 @@ struct DemoTests {
     @Test @MainActor func restoreStartsFreshDemoAndExitFencesItsPendingWork() async throws {
         let storage = MemoryStorage()
         let first = BackendSession(storage: storage)
-        first.restore(); first.setActive(true); try first.startDemo()
+        await first.restore(); first.setActive(true); try first.startDemo()
         try await eventually { first.isConnected }
         first.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
         let id = try await first.send("A temporary demo prompt", spaceID: "codex", workspaceID: first.homeTargets["codex"]?.workspaceID)
@@ -504,7 +504,7 @@ struct DemoTests {
         #expect(first.connection == .suspended)
         #expect(storage.pairing == nil && storage.snapshot == nil)
         let restored = BackendSession(storage: storage)
-        restored.setOnline(false); restored.restore(); restored.setActive(true)
+        restored.setOnline(false); await restored.restore(); restored.setActive(true)
         defer { first.exitDemo(); restored.exitDemo() }
         try await eventually { restored.isConnected }
         #expect(restored.isDemo && restored.conversations.allSatisfy { $0.id != id })
@@ -543,7 +543,7 @@ extension SessionIntegrationTests {
     @Test @MainActor func realPairingReplacesDemoOnlyAfterCredentialsAreSaved() async throws {
         let storage = MemoryStorage()
         let session = BackendSession(storage: storage)
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.setActive(false) }
         try await eventually { session.isConnected }
         session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)

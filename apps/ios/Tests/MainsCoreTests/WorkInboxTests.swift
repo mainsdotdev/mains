@@ -80,7 +80,7 @@ private func inboxRequest(_ runID: String, expires: TimeInterval = 300) throws -
     @Test @MainActor func inFlightDecisionResolutionCannotResurrectAWaitingRowOrMoveTheReader() async throws {
         let backend = try DemoBackend(), probe = InboxProbe(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in InboxTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { probe.release(); session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let run = try #require(session.conversations.first)
@@ -104,7 +104,7 @@ private func inboxRequest(_ runID: String, expires: TimeInterval = 300) throws -
     @Test @MainActor func aRetiredInboxReadCannotPopulateTheNewConnectionAndFailuresDisableActions() async throws {
         let backend = try DemoBackend(), probe = InboxProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in InboxTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { probe.release(); session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         probe.requests = [try inboxRequest(try #require(session.conversations.first?.id))]
@@ -136,7 +136,7 @@ private func inboxRequest(_ runID: String, expires: TimeInterval = 300) throws -
 extension SessionIntegrationTests {
     @Test @MainActor func inboxReadsAndStopsOldBackgroundWorkThroughTheExistingDeviceProtocol() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setWorkInboxVisible(false); session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!

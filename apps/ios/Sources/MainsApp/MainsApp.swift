@@ -40,12 +40,12 @@ struct MainsApp: App {
                 }
 #endif
 
-                session.restore()
                 session.setActive(scenePhase == .active)
                 monitor.pathUpdateHandler = { path in
                     Task { @MainActor in session.setOnline(path.status == .satisfied) }
                 }
                 monitor.start(queue: DispatchQueue(label: "dev.mains.ios.network"))
+                await session.restore()
             }
             .onChange(of: scenePhase) { _, phase in
                 // System alerts, including the app-icon confirmation, briefly make the scene inactive.
@@ -110,7 +110,6 @@ struct ConnectionPill: View {
     #endif
     let session: BackendSession
     let action: () -> Void
-    private var name: String { session.pairing?.descriptor.name ?? "Computer" }
     private var status: String { session.isDemo ? "Demo" : session.connection.label.replacingOccurrences(of: "…", with: "") }
     private var tone: Color {
         [.unauthorized, .incompatible, .unreachable].contains(session.connection) ? .orange : Color(.secondaryLabel)
@@ -118,7 +117,6 @@ struct ConnectionPill: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Text(name).truncationMode(.middle)
                 Circle().fill(tone).frame(width: 6, height: 6).accessibilityHidden(true)
                 Text(status).fontWeight(.semibold).contentTransition(.opacity).layoutPriority(1)
                 Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).accessibilityHidden(true)
@@ -129,7 +127,7 @@ struct ConnectionPill: View {
             .padding(.vertical, 4).contentShape(.rect)
         }
         .buttonStyle(ChatPressStyle())
-        .accessibilityLabel("\(name): \(status)").accessibilityHint("Opens Settings")
+        .accessibilityLabel(status).accessibilityHint("Opens Settings")
         .accessibilityIdentifier("connectionPill")
     }
 }

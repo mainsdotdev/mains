@@ -455,7 +455,7 @@ func mateRequestFollowsItsSavedPromptWhenDeviceTimeDiffers(_ phoneTime: Double) 
     let backend = try DemoBackend()
     let transport = HistoryReaderTransport(backend)
     let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in transport })
-    session.restore(); session.setActive(true); try session.startDemo()
+    await session.restore(); session.setActive(true); try session.startDemo()
     defer { session.exitDemo(); backend.shutdown() }
     try await eventually { session.isConnected }
     let id = try #require(session.conversations.first?.id)
@@ -477,7 +477,7 @@ func mateRequestFollowsItsSavedPromptWhenDeviceTimeDiffers(_ phoneTime: Double) 
 @Test @MainActor func activityReadersCannotPublishIntoAnotherConversation() async throws {
     let backend = try DemoBackend(), transport = HistoryReaderTransport(backend)
     let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in transport })
-    session.restore(); session.setActive(true); try session.startDemo()
+    await session.restore(); session.setActive(true); try session.startDemo()
     defer { session.exitDemo(); backend.shutdown() }
     try await eventually { session.isConnected }
     let id = try #require(session.conversations.first?.id)

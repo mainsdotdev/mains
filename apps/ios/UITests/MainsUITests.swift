@@ -2394,15 +2394,16 @@ final class MainsUITests: XCTestCase {
         continueAfterFailure = false
         let app = makeApplication()
         app.launchArguments += ["-appearancePreference", "dark"]
-        _ = pairFixture(app, code: "ios-test")
-        var inbox = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/inbox")!)
+        let port = offlineFixturePort
+        _ = pairFixture(app, code: "ios-test", port: port)
+        var inbox = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/test/inbox")!)
         inbox.httpMethod = "POST"
         _ = try await URLSession.shared.data(for: inbox)
         app.buttons["openWorkInbox"].tap()
         let savedRun = app.buttons["inboxRun-inbox-failed"]
         XCTAssertTrue(savedRun.waitForExistence(timeout: 10))
 
-        var offline = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/offline")!)
+        var offline = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/test/offline")!)
         offline.httpMethod = "POST"
         offline.httpBody = Data(#"{"durationMs":12000}"#.utf8)
         _ = try await URLSession.shared.data(for: offline)
@@ -4241,10 +4242,11 @@ final class MainsUITests: XCTestCase {
         continueAfterFailure = false
         let app = makeApplication()
         app.launchArguments += ["-appearancePreference", "dark"]
-        _ = pairFixture(app, code: "ios-test-mate-info")
+        let port = offlineFixturePort
+        _ = pairFixture(app, code: "ios-test-mate-info", port: port)
         let disconnected = app.staticTexts["Computer disconnected"]
         let fixtureMate = app.buttons["mate-fixture-mate"]
-        var offline = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/offline")!)
+        var offline = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/test/offline")!)
         offline.httpMethod = "POST"
         offline.httpBody = Data(#"{"durationMs":12000}"#.utf8)
 
@@ -4279,8 +4281,17 @@ final class MainsUITests: XCTestCase {
         app.navigationBars["Chats"].buttons["BackButton"].tap()
 
         _ = try await URLSession.shared.data(for: offline)
-        XCTAssertTrue(app.staticTexts["Connect to your computer to refresh Mates."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Showing saved Mates. Connect for updates."].waitForExistence(timeout: 5))
         XCTAssertTrue(fixtureMate.exists)
+        let settings = app.buttons["Connection settings"]
+        XCTAssertTrue(disconnected.exists)
+        XCTAssertTrue(settings.isHittable)
+        XCTAssertEqual(disconnected.frame.midX, app.frame.midX, accuracy: 2)
+        XCTAssertEqual(settings.frame.midX, disconnected.frame.midX, accuracy: 2)
+        attachScreenshot(app, name: "Mates disconnected with saved directory")
+        settings.tap()
+        XCTAssertTrue(app.staticTexts["settingsConnectionStatus"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons["BackButton"].tap()
         app.navigationBars.buttons["BackButton"].tap()
         openSidebar(app)
         app.buttons["openAtlas"].tap()
@@ -4311,7 +4322,7 @@ final class MainsUITests: XCTestCase {
         offline.httpMethod = "POST"
         _ = try await URLSession.shared.data(for: offline)
         XCTAssertTrue(pill.waitForExistence(timeout: 3))
-        XCTAssertTrue(pill.label.contains("Test Mac: Reconnecting"))
+        XCTAssertEqual(pill.label, "Reconnecting")
         XCTAssertEqual(pill.frame.midX, app.frame.midX, accuracy: 8)
         XCTAssertEqual(input.value as? String, "Keep this draft")
         attachScreenshot(app, name: "Native home – reconnecting computer")
@@ -4320,7 +4331,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Test Mac"].exists)
         app.navigationBars.buttons.element(boundBy: 0).tap()
 
-        let syncing = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Syncing"), object: pill)
+        let syncing = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Syncing"), object: pill)
         let syncingResult = await XCTWaiter.fulfillment(of: [syncing], timeout: 10)
         XCTAssertEqual(syncingResult, .completed)
         attachScreenshot(app, name: "Native home – syncing computer")
@@ -4830,7 +4841,7 @@ final class MainsUITests: XCTestCase {
         _ = try await URLSession.shared.data(for: request)
         let reconnecting = app.buttons["connectionPill"]
         XCTAssertTrue(reconnecting.waitForExistence(timeout: 3))
-        XCTAssertTrue(reconnecting.label.contains("Test Mac: Reconnecting"))
+        XCTAssertEqual(reconnecting.label, "Reconnecting")
         XCTAssertEqual(message.value as? String, "My next thought stays here")
         let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: app.buttons["sendMessage"])
         let enabledResult = await XCTWaiter.fulfillment(of: [enabled], timeout: 10)
@@ -4840,10 +4851,33 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
+    func testLargeSyncOpensAndReopensCachedHistory() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        let conversation = pairFixture(app, code: "ios-test-large-sync")
+        conversation.tap()
+        let report = app.staticTexts["Last large sync report"]
+        XCTAssertTrue(report.waitForExistence(timeout: 15))
+
+        var offline = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/offline")!)
+        offline.httpMethod = "POST"
+        offline.httpBody = Data(#"{"durationMs":60000}"#.utf8)
+        _ = try await URLSession.shared.data(for: offline)
+        app.terminate(); app.launch()
+        let connection = app.buttons["connectionPill"]
+        XCTAssertTrue(connection.waitForExistence(timeout: 8))
+        XCTAssertNotEqual(connection.label, "Live")
+        openSidebar(app)
+        XCTAssertTrue(conversation.waitForExistence(timeout: 8))
+        conversation.tap()
+        XCTAssertTrue(report.waitForExistence(timeout: 15))
+    }
+
     func testOfflineMatesAndChatTitlesOpenAfterRelaunch() async throws {
         continueAfterFailure = false
         let app = makeApplication()
-        _ = pairFixture(app, code: "ios-test-mate-info")
+        let port = offlineFixturePort
+        _ = pairFixture(app, code: "ios-test-mate-info", port: port)
         app.buttons["openMates"].tap()
         let mate = app.buttons["mate-fixture-mate"]
         XCTAssertTrue(mate.waitForExistence(timeout: 8))
@@ -4851,14 +4885,14 @@ final class MainsUITests: XCTestCase {
         let chat = app.staticTexts["Release check 1"]
         XCTAssertTrue(chat.waitForExistence(timeout: 8))
 
-        var offline = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/offline")!)
+        var offline = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/test/offline")!)
         offline.httpMethod = "POST"
         offline.httpBody = Data(#"{"durationMs":20000}"#.utf8)
         _ = try await URLSession.shared.data(for: offline)
         app.terminate(); app.launch()
         openSidebar(app)
         app.buttons["openMates"].tap()
-        XCTAssertTrue(app.staticTexts["Connect to your computer to refresh Mates."].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Showing saved Mates. Connect for updates."].waitForExistence(timeout: 8))
         XCTAssertTrue(mate.waitForExistence(timeout: 5)); mate.tap()
         XCTAssertTrue(app.staticTexts["Showing chats saved on this iPhone."].waitForExistence(timeout: 5))
         XCTAssertTrue(chat.exists)
@@ -4951,6 +4985,10 @@ final class MainsUITests: XCTestCase {
 
         // Leave the installed app ready for the developer's real pairing.
         forgetFixture(app)
+    }
+
+    private var offlineFixturePort: Int {
+        ProcessInfo.processInfo.environment["MAINS_OFFLINE_TEST_PORT"].flatMap(Int.init) ?? 18787
     }
 
     private func pairFixture(_ app: XCUIApplication, code: String, search: Bool = false, port: Int = 18787) -> XCUIElement {

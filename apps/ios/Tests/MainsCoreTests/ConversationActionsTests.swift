@@ -53,7 +53,7 @@ import Testing
     @MainActor private func setup(_ mode: String = "work") async throws -> (BackendSession, DemoBackend, ChatActionProbe, String) {
         let backend = try DemoBackend(stepDelay: .milliseconds(2), streamDelay: .milliseconds(1)), probe = ChatActionProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in ChatActionTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         try await eventually { session.isConnected }
         session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
         try await session.setSpaceMode(mode, spaceID: "codex")

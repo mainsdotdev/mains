@@ -92,9 +92,25 @@ struct DisconnectedState: View {
     #endif
     var title: LocalizedStringKey = "Computer disconnected"
     let message: LocalizedStringKey
+    var openSettings: (() -> Void)? = nil
 
     var body: some View {
-        EmptyStateView(artwork: .offline, title: title, description: Text(message))
+        EmptyStateView(artwork: .offline, title: title, description: Text(message)) {
+            if let openSettings {
+                Button(action: openSettings) {
+                    Text("Connection settings")
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .controlSize(.large)
+            }
+        }
+    }
+
+    var listRow: some View {
+        listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
     }
 
     var centered: some View {

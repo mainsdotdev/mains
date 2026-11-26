@@ -461,18 +461,30 @@ const server = http.createServer(async (request, response) => {
     const { durationMs = 3000 } = JSON.parse(Buffer.concat(parts).toString() || '{}');
     acceptsConnections = false;
     for (const socket of connections) socket.terminate();
-    later(Math.min(20000, Math.max(0, durationMs)), () => { acceptsConnections = true; });
+    later(Math.min(60000, Math.max(0, durationMs)), () => { acceptsConnections = true; });
     response.end('{}'); return;
   }
   if (request.method === 'POST' && request.url === '/pair') {
     const body = JSON.parse(Buffer.concat(parts).toString());
-    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-mate-voice', 'ios-test-mate-pinning', 'ios-test-reply-interrupted', 'ios-test-goal-controls', 'ios-test-live-spacing', 'ios-test-empty-conversation'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
+    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-mate-voice', 'ios-test-mate-pinning', 'ios-test-reply-interrupted', 'ios-test-goal-controls', 'ios-test-live-spacing', 'ios-test-empty-conversation', 'ios-test-large-sync'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
       response.writeHead(403); response.end(JSON.stringify({ error: 'Invalid pairing code' })); return;
     }
     const paging = body.code.startsWith('ios-test-paging');
     reset(body.code === 'ios-test-chat' || paging, body.code === 'ios-test-home', body.code === 'ios-test-design', body.code === 'ios-test-workspace', body.code === 'ios-test-media', paging, body.code === 'ios-test-paging-disjoint');
     goalControlsFixture = body.code === 'ios-test-goal-controls';
     if (body.code === 'ios-test-empty-conversation') artifacts.set(runs[0].id, []);
+    if (body.code === 'ios-test-large-sync') {
+      const run = runs[0], report = 'x'.repeat(5_000);
+      runs.push(...Array.from({ length: 99 }, (_, index) => {
+        const at = new Date(run.updatedAt.getTime() - index - 1);
+        return { ...run, id: `large-sync-${index}`, title: `Chat ${index} ${'a'.repeat(8_000)}`, createdAt: at, updatedAt: at };
+      }));
+      artifacts.set(run.id, Array.from({ length: 400 }, (_, index) => ({
+        id: index + 1, runId: run.id, kind: index === 0 ? 'user-prompt' : 'report',
+        content: index === 0 ? 'Large sync prompt' : index === 399 ? 'Last large sync report' : report,
+        createdAt: new Date(run.createdAt.getTime() + index),
+      })));
+    }
     if (body.code === 'ios-test-reply-interrupted') {
       runs[0].status = 'failed';
       runs[0].lastError = 'The provider stopped responding before it could finish the reply. You can send a follow-up to continue.';

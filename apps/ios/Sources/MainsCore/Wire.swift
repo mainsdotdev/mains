@@ -35,6 +35,9 @@ public enum JSONValue: Codable, Equatable, Sendable {
     public func decode<T: Decodable>(_ type: T.Type) throws -> T {
         try Wire.decoder().decode(type, from: JSONEncoder().encode(self))
     }
+    func decodeOffMain<T: Decodable & Sendable>(_ type: T.Type) async throws -> T {
+        try await Wire.decodeOffMain { try decode(type) }
+    }
     public static func encode<T: Encodable>(_ value: T) throws -> Self {
         try JSONDecoder().decode(Self.self, from: Wire.encoder().encode(value))
     }
@@ -53,6 +56,22 @@ extension KeyedDecodingContainer {
 public enum Wire {
     public static let protocolVersion = 1
     public static let maxMessageBytes = 4 * 1024 * 1024
+
+    static func decodeOffMain<T: Sendable>(_ decode: @escaping @Sendable () throws -> T) async throws -> T {
+        try Task.checkCancellation()
+        let job = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            return try decode()
+        }
+        let result = try await withTaskCancellationHandler {
+            try await job.value
+        } onCancel: {
+            job.cancel()
+        }
+        try Task.checkCancellation()
+        return result
+    }
+
     public static func decoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SQLite3
 
 /// A disposable copy of the paired computer's metadata and transcript records.
@@ -17,13 +18,38 @@ final class SQLiteConversationCache: Sendable {
     private static let metadataExtrasLimit = 2 * 1024 * 1024
     private static let fileCacheLimit = 200 * 1024 * 1024
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    private struct HistoryKey: Hashable {
+        let backendID: String
+        let deviceID: String
+        let runID: String
+
+        var keys: [String] { [backendID, deviceID, runID] }
+    }
+
+    /// Accessed only under the pending-writes lock until handed to the queue.
+    private final class WriteBatch: @unchecked Sendable {
+        var snapshot: CachedSnapshot
+        var deviceID: String
+        var histories: [HistoryKey: (order: Int, change: CachedHistoryChange)] = [:]
+        var order = 0
+
+        init(snapshot: CachedSnapshot, deviceID: String) {
+            self.snapshot = snapshot
+            self.deviceID = deviceID
+        }
+    }
+
     private let directory: URL
-    private let queue = DispatchQueue(label: "dev.mains.conversation-cache", qos: .utility)
+    private let queue: DispatchQueue
+    private let pendingWrites = OSAllocatedUnfairLock<WriteBatch?>(initialState: nil)
 
-    init(directory: URL) { self.directory = directory }
+    init(directory: URL, queue: DispatchQueue = DispatchQueue(label: "dev.mains.conversation-cache", qos: .utility)) {
+        self.directory = directory
+        self.queue = queue
+    }
 
-    func loadSnapshot(backendID: String, deviceID: String) -> CachedSnapshot? {
-        queue.sync {
+    func loadSnapshot(backendID: String, deviceID: String) async -> CachedSnapshot? {
+        await onQueue { [self] in
             useDatabase(create: false) { database in
                 try read(CachedSnapshot.self, database, """
                     SELECT payload FROM metadata WHERE id = 1 AND backend_id = ? AND device_id = ?
@@ -33,26 +59,53 @@ final class SQLiteConversationCache: Sendable {
     }
 
     func loadHistory(backendID: String, deviceID: String, runID: String) async -> HistoryPage? {
-        await withCheckedContinuation { continuation in
-            queue.async { [self] in
-                let page = useDatabase(create: false) { database in
-                    try transaction(database, writing: false) {
-                        try readHistory(database, backendID: backendID, deviceID: deviceID, runID: runID)
-                    }
+        await onQueue { [self] in
+            useDatabase(create: false) { database in
+                try transaction(database, writing: false) {
+                    try readHistory(database, backendID: backendID, deviceID: deviceID, runID: runID)
                 }
-                continuation.resume(returning: page)
             }
         }
     }
 
     func save(_ snapshot: CachedSnapshot, deviceID: String, history: CachedHistoryChange?) {
-        queue.async { [self] in
-            write(snapshot, deviceID: deviceID, history: history)
+        pendingWrites.withLock { pending in
+            let batch: WriteBatch
+            if let pending {
+                batch = pending
+                batch.snapshot = snapshot
+                batch.deviceID = deviceID
+            } else {
+                batch = WriteBatch(snapshot: snapshot, deviceID: deviceID)
+                pending = batch
+                queue.async { [self] in
+                    pendingWrites.withLock { pending in
+                        if pending === batch { pending = nil }
+                    }
+                    write(batch)
+                }
+            }
+            if let history {
+                let runID: String
+                switch history {
+                case .replace(let id, _), .remove(let id): runID = id
+                }
+                let key = HistoryKey(backendID: snapshot.backendID, deviceID: deviceID, runID: runID)
+                batch.order += 1
+                batch.histories[key] = (batch.order, history)
+            }
         }
     }
 
     func removeAll() {
-        queue.sync { try? FileManager.default.removeItem(at: directory) }
+        let removal = DispatchWorkItem { [directory] in
+            try? FileManager.default.removeItem(at: directory)
+        }
+        pendingWrites.withLockUnchecked { pending in
+            pending = nil
+            queue.async(execute: removal)
+        }
+        removal.wait()
     }
 
     func searchSavedMessages(_ query: String, backendID: String, deviceID: String) async -> [SavedMessageMatch] {
@@ -86,7 +139,7 @@ final class SQLiteConversationCache: Sendable {
 
     func saveOfflineValue(_ data: Data, key: String, backendID: String, deviceID: String) {
         guard data.count <= Self.metadataExtrasLimit else { return }
-        queue.async { [self] in
+        enqueue { [self] in
             _ = useDatabase(create: true) { database in
                 try transaction(database) {
                     try execute(database, """
@@ -109,7 +162,7 @@ final class SQLiteConversationCache: Sendable {
     }
 
     func removeOfflineValues(_ prefix: String, backendID: String, deviceID: String) {
-        queue.async { [self] in
+        enqueue { [self] in
             _ = useDatabase(create: false) { database in
                 try execute(database, "DELETE FROM offline_values WHERE backend_id = ? AND device_id = ? AND instr(cache_key, ?) = 1",
                             keys: [backendID, deviceID, prefix])
@@ -176,26 +229,29 @@ final class SQLiteConversationCache: Sendable {
         }.get()
     }
 
-    private func onQueue<T: Sendable>(_ operation: @escaping @Sendable () -> T) async -> T {
-        await withCheckedContinuation { continuation in
-            queue.async { continuation.resume(returning: operation()) }
+    private func enqueue(_ operation: @escaping @Sendable () -> Void) {
+        // Seal the batch at a read, reset or other write so later saves cannot cross it.
+        pendingWrites.withLock { pending in
+            pending = nil
+            queue.async(execute: operation)
         }
     }
 
-    private func write(_ snapshot: CachedSnapshot, deviceID: String, history: CachedHistoryChange?) {
+    private func onQueue<T: Sendable>(_ operation: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            enqueue { continuation.resume(returning: operation()) }
+        }
+    }
+
+    private func write(_ batch: WriteBatch) {
         let encoder = Wire.encoder()
         encoder.outputFormatting.insert(.sortedKeys)
-        let metadata = try? encoder.encode(snapshot)
-        let keys = [snapshot.backendID, deviceID]
-        let records: HistoryRecords?
-        if case .replace(let runID, let page) = history {
-            records = try? HistoryRecords(runID: runID, page: page)
-        } else {
-            records = nil
-        }
+        let metadata = try? encoder.encode(batch.snapshot)
+        let keys = [batch.snapshot.backendID, batch.deviceID]
+        let histories = batch.histories.sorted { $0.value.order < $1.value.order }
         _ = useDatabase(create: true) { database in
-            try transaction(database) {
-                if let metadata, metadata.count <= Self.metadataLimit {
+            if let metadata, metadata.count <= Self.metadataLimit {
+                try transaction(database) {
                     try execute(database, """
                         INSERT INTO metadata (id, backend_id, device_id, payload) VALUES (1, ?, ?, ?)
                         ON CONFLICT (id) DO UPDATE
@@ -203,16 +259,27 @@ final class SQLiteConversationCache: Sendable {
                         WHERE metadata.backend_id <> excluded.backend_id OR metadata.device_id <> excluded.device_id
                             OR metadata.payload <> excluded.payload
                         """, keys: keys, payload: metadata)
+                    try trimHistory(database)
                 }
-                switch history {
-                case .replace(let runID, _):
-                    if let records { try replaceHistory(database, keys: keys + [runID], records: records) }
-                case .remove(let runID):
-                    try removeHistory(database, keys: keys + [runID])
-                case nil:
-                    break
+            }
+            for (key, entry) in histories {
+                do {
+                    switch entry.change {
+                    case .replace(let runID, let page):
+                        guard let records = try? HistoryRecords(runID: runID, page: page) else { continue }
+                        try transaction(database) {
+                            try replaceHistory(database, keys: key.keys, records: records)
+                            try trimHistory(database)
+                        }
+                    case .remove:
+                        try transaction(database) {
+                            try removeHistory(database, keys: key.keys)
+                        }
+                    }
+                } catch DatabaseError.sqlite(SQLITE_CONSTRAINT) {
+                    // Keep this run's existing page and continue with the rest of the batch.
+                    continue
                 }
-                try trimHistory(database)
             }
             try reclaimSpace(database)
         }

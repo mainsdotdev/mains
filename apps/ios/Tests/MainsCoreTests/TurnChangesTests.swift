@@ -122,7 +122,7 @@ import Testing
     @Test @MainActor func demoReplayAndScopedDiffReadsUseNormalChannelsWithoutSavingPatches() async throws {
         let storage = MemoryStorage(), backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
@@ -178,7 +178,7 @@ extension SessionIntegrationTests {
     @Test @MainActor func turnChangesUseTaggedDatesDiffEventsAndRunScopedUnicodeContent() async throws {
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
         try await session.pair(PairingLink("mains://pair#code=ios-test&endpoint=\(encoded)"), deviceName: "Test iPhone")

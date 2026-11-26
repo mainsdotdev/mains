@@ -27,7 +27,7 @@ struct WorkInboxView: View {
                                 description: Text(live ? "Requests and running work appear here. Finished work stays for 24 hours." : "Connect to your computer to see what needs you."))
                                 .accessibilityIdentifier("workInboxEmpty")
                         } else {
-                            disconnectedState(message: "Connect to your computer to check requests and see recent activity.")
+                            DisconnectedState(message: "Connect to your computer to check requests and see recent activity.", openSettings: openSettings)
                         }
                     }
                 } else {
@@ -49,10 +49,7 @@ struct WorkInboxView: View {
             Section { PageTitle("Activity").listRow }
             if !session.isConnected {
                 Section {
-                    disconnectedState(message: "Showing saved activity. Connect for updates.")
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
+                    DisconnectedState(message: "Showing saved activity. Connect for updates.", openSettings: openSettings).listRow
                 }
             } else if let error = session.workInboxError {
                 Section {
@@ -81,17 +78,6 @@ struct WorkInboxView: View {
         .contentMargins(.top, 8, for: .scrollContent)
         .listSectionSpacing(.compact)
         .environment(\.defaultMinListRowHeight, 44)
-    }
-
-    private func disconnectedState(message: LocalizedStringKey) -> some View {
-        EmptyStateView(artwork: .offline, title: "Computer disconnected", description: Text(message)) {
-            Button(action: openSettings) {
-                Text("Connection settings")
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .controlSize(.large)
-        }
     }
 
     private var limitNotice: some View {

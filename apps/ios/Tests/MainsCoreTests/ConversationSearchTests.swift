@@ -5,7 +5,7 @@ import Testing
 extension SessionIntegrationTests {
     @Test @MainActor func searchFindsConversationsBeyondTheRecentHundredAndOpensTheMatchingHistoricalMessage() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -61,7 +61,7 @@ extension SessionIntegrationTests {
 @Test @MainActor func aRetiredSearchResponseCannotReturnIntoAReconnectedSession() async throws {
     let backend = try DemoBackend(), probe = SearchProbe()
     let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in SearchTransport(backend, probe) })
-    session.restore(); session.setActive(true); try session.startDemo()
+    await session.restore(); session.setActive(true); try session.startDemo()
     defer { session.exitDemo(); backend.shutdown() }
     try await eventually { session.isConnected }
     let task = Task { try await session.searchConversations("demo") }

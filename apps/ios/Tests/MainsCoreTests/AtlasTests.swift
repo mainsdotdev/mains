@@ -44,7 +44,7 @@ import ImageIO
     @Test(arguments: ["atlas:mobileTags", "atlas:readMobileTags", "atlas:readMobileImage", "atlas:readMobilePageCover", "atlas:readMobilePageImage"]) @MainActor func atlasReadsRetiredByReconnectionCannotReturnToTheNewConnection(channel: String) async throws {
         let backend = try DemoBackend(), probe = AtlasProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { probe.release(); session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         probe.hold = channel
@@ -66,7 +66,7 @@ import ImageIO
     @Test @MainActor func pageCoversUsePreparedBytesAndDoNotChangeTheSelectedChatOrDiskSnapshot() async throws {
         let storage = MemoryStorage(), backend = try DemoBackend()
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let space = session.selectedSpaceID
@@ -106,7 +106,7 @@ import ImageIO
     @Test @MainActor func pageActionsExportTheFullMarkdownAndOrganizeTheSameSavedPage() async throws {
         let storage = MemoryStorage(), backend = try DemoBackend()
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let page = try await session.atlasPage("demo-atlas-page")
@@ -198,7 +198,7 @@ import ImageIO
     @Test(arguments: ["page", "cover", "size", "bytes", "mime", "version"]) @MainActor func malformedPageCoversAreRejected(field: String) async throws {
         let backend = try DemoBackend(), probe = AtlasProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         probe.corruptCover = field
@@ -208,7 +208,7 @@ import ImageIO
     @Test(arguments: ["page", "file", "pageVersion", "size", "bytes", "mime", "version"]) @MainActor func malformedEmbeddedPageImagesAreRejected(field: String) async throws {
         let backend = try DemoBackend(), probe = AtlasProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         probe.corruptPageImage = field
@@ -218,7 +218,7 @@ import ImageIO
     @Test @MainActor func atlasThumbnailsStayBoundedAndUsePreparedDemoBytesWithoutChangingTheTranscript() async throws {
         let storage = MemoryStorage(), backend = try DemoBackend()
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let rows = try await session.atlasLibrary(AtlasQuery()).items
@@ -235,7 +235,7 @@ import ImageIO
     @Test(arguments: ["identity", "size", "bytes", "mime"]) @MainActor func malformedThumbnailsAreRejected(field: String) async throws {
         let backend = try DemoBackend(), probe = AtlasProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         probe.corruptImage = field
@@ -246,7 +246,7 @@ import ImageIO
         let storage = MemoryStorage()
         let backend = try DemoBackend()
         let isolated = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
-        isolated.restore(); isolated.setActive(true); try isolated.startDemo()
+        await isolated.restore(); isolated.setActive(true); try isolated.startDemo()
         defer { isolated.exitDemo(); backend.shutdown() }
         try await eventually { isolated.isConnected }
         let space = isolated.selectedSpaceID
@@ -286,7 +286,7 @@ import ImageIO
     @Test @MainActor func aReadRetiredByReconnectionCannotReturnOrTouchTheNewSession() async throws {
         let backend = try DemoBackend(), probe = AtlasProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { probe.release(); session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         probe.hold = "atlas:mobileLibrary"
@@ -302,7 +302,7 @@ import ImageIO
     @Test @MainActor func aBadChunkRemovesItsPartialFileAndUnsupportedComputersGetAnUpdateMessage() async throws {
         let backend = try DemoBackend(), probe = AtlasProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         defer { session.exitDemo(); backend.shutdown() }
         try await eventually { session.isConnected }
         let file = try await session.describeAtlasFile(.saved("demo-atlas-doc"))
@@ -376,7 +376,7 @@ import ImageIO
 extension SessionIntegrationTests {
     @Test @MainActor func atlasPagesAndFilesUseTheRealWireWithoutLoadingTranscripts() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!

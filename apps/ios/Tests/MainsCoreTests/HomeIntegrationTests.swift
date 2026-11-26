@@ -7,7 +7,7 @@ import Testing
 extension SessionIntegrationTests {
     @Test @MainActor func attachmentOnlyMessagesUseExecuteAndContinueWirePayloads() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -39,7 +39,7 @@ extension SessionIntegrationTests {
     @Test @MainActor func homeSelectionsPersistAndExecuteTheDisplayedSettings() async throws {
         let storage = MemoryStorage()
         let session = BackendSession(storage: storage)
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -96,7 +96,7 @@ extension SessionIntegrationTests {
         #expect(!calls.contains { $0["channel"].string == "providers:updateRunSettings" })
 
         let restored = BackendSession(storage: storage)
-        restored.restore()
+        await restored.restore()
         #expect(restored.selectedSpaceID == space.id)
         #expect(restored.homeTargets[space.id]?.workspaceID == "fixture-workspace")
         #expect(restored.settings(for: try #require(restored.selectedSpace)) == settings)

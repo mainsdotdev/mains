@@ -23,7 +23,7 @@ extension SessionIntegrationTests {
     @Test @MainActor func conversationSettingsAreDurableScopedAndUseOriginalReceipts() async throws {
         let storage = MemoryStorage(), session: BackendSession
         session = BackendSession(storage: storage)
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!

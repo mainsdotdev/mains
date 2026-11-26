@@ -106,7 +106,7 @@ import Testing
         faults.supportsMates = true; faults.loseMateCreation = true
         storage.pairing = backend.pairing
         let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         try await eventually { session.isConnected && session.supportsMates }
         let space = try #require(session.mateSpaces.first { $0.providerId == "codex" && $0.mode == "developer" })
@@ -142,7 +142,7 @@ import Testing
         faults.supportsMates = true
         storage.pairing = backend.pairing
         let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         try await eventually { session.isConnected && session.supportsMates }
         let codex = try #require(session.spaces.first { $0.providerId == "codex" })
@@ -174,7 +174,7 @@ import Testing
         faults.supportsMateInfo = true
         storage.pairing = backend.pairing
         let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         try await eventually { session.isConnected && session.supportsMateInfo }
 
@@ -206,7 +206,7 @@ import Testing
         faults.supportsMateInfo = true
         storage.pairing = backend.pairing
         let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         try await eventually { session.isConnected && session.supportsMateInfo }
 
@@ -333,7 +333,7 @@ import Testing
     }
 
     @Test @MainActor func lazyCataloguesPreservePartialResultsAndReplaceRemovedEntries() async throws {
-        let (session, _, faults) = try setup(); defer { session.exitDemo() }
+        let (session, _, faults) = try await setup(); defer { session.exitDemo() }
         try await eventually { session.isConnected }
         #expect(!faults.calls.contains { $0.channel == "providers:getSkills" || $0.channel == "providers:getCommands" })
         let scope = session.contextScope(providerID: "codex", workspaceID: session.homeTargets["codex"]?.workspaceID)
@@ -351,7 +351,7 @@ import Testing
     }
 
     @Test @MainActor func lateOrSupersededCataloguesCannotWriteIntoCurrentContext() async throws {
-        let (session, _, faults) = try setup(); defer { session.exitDemo() }
+        let (session, _, faults) = try await setup(); defer { session.exitDemo() }
         try await eventually { session.isConnected }
         let scope = session.contextScope(providerID: "codex")
         faults.overrideSkills = .array([try .encode(ContextSkill(name: "old"))]); faults.delaySkills = true
@@ -369,7 +369,7 @@ import Testing
     }
 
     @Test @MainActor func sourceEventsInvalidateOnlyTheVisibleProvidersFetchKey() async throws {
-        let (session, _, faults) = try setup(); defer { session.exitDemo() }
+        let (session, _, faults) = try await setup(); defer { session.exitDemo() }
         try await eventually { session.isConnected }
         let scope = session.contextScope(providerID: "codex")
         _ = try await session.loadContext(scope)
@@ -383,7 +383,7 @@ import Testing
     }
 
     @Test @MainActor func transcriptPluginIconsCacheHitsAndMissesUntilCodexSkillsChange() async throws {
-        let (session, _, faults) = try setup()
+        let (session, _, faults) = try await setup()
         defer { session.exitDemo() }
         let image = Data([1, 2, 3])
         faults.pluginIcons = .array([.object(["vendorId": .string("github"), "label": .string("GitHub"),
@@ -409,7 +409,7 @@ import Testing
     }
 
     @Test @MainActor func executeContinueAndReceiptChecksKeepCanonicalContextAndDemoHistory() async throws {
-        let (session, backend, faults) = try setup(); defer { session.exitDemo() }
+        let (session, backend, faults) = try await setup(); defer { session.exitDemo() }
         try await eventually { session.isConnected }
         let workspace = session.homeTargets["codex"]?.workspaceID
         let scope = session.contextScope(providerID: "codex", workspaceID: workspace)
@@ -439,7 +439,7 @@ import Testing
     }
 
     @Test @MainActor func workspaceFileSearchKeepsAFileMentionThroughSendAndHistory() async throws {
-        let (session, backend, faults) = try setup()
+        let (session, backend, faults) = try await setup()
         defer { session.setActive(false) }
         try await eventually { session.isConnected && session.supportsWorkspaceFileSearch }
         let workspace = try #require(backend.defaultWorkspaceID)
@@ -489,10 +489,10 @@ import Testing
         #expect(projection.readable == "Open src and app.ts")
     }
 
-    @MainActor private func setup() throws -> (BackendSession, DemoBackend, ContextFaults) {
+    @MainActor private func setup() async throws -> (BackendSession, DemoBackend, ContextFaults) {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1)), faults = ContextFaults()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in ContextTransport(backend, faults) })
-        session.restore(); session.setActive(true); try session.startDemo()
+        await session.restore(); session.setActive(true); try session.startDemo()
         session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
         return (session, backend, faults)
     }
@@ -503,7 +503,7 @@ extension SessionIntegrationTests {
     @Test @MainActor func codexContextDiscoveryAllowsTheSameThirtySecondsAsReactNative() async throws {
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true); defer { session.setActive(false) }
+        await session.restore(); session.setActive(true); defer { session.setActive(false) }
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
         try await session.pair(PairingLink("mains://pair#code=ios-test&endpoint=\(encoded)"), deviceName: "Test iPhone")
         try await eventually { session.isConnected }
@@ -519,7 +519,7 @@ extension SessionIntegrationTests {
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let storage = MemoryStorage()
         let session = BackendSession(storage: storage)
-        session.restore(); session.setActive(true); defer { session.setActive(false) }
+        await session.restore(); session.setActive(true); defer { session.setActive(false) }
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
         try await session.pair(PairingLink("mains://pair#code=ios-test&endpoint=\(encoded)"), deviceName: "Test iPhone")
         try await eventually { session.isConnected }

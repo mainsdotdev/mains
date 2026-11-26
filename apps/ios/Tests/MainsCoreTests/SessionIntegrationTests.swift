@@ -18,8 +18,8 @@ final class MemoryStorage: SessionStorage {
     func loadPairing() throws -> PairedBackend? { pairing }
     func savePairing(_ pairing: PairedBackend) throws { self.pairing = pairing }
     func removePairing() throws { pairing = nil; consents = [] }
-    func loadSnapshot(backendID: String, deviceID: String) -> CachedSnapshot? {
-        if let sqliteCache { return sqliteCache.loadSnapshot(backendID: backendID, deviceID: deviceID) }
+    func loadSnapshot(backendID: String, deviceID: String) async -> CachedSnapshot? {
+        if let sqliteCache { return await sqliteCache.loadSnapshot(backendID: backendID, deviceID: deviceID) }
         return snapshot
     }
     func loadHistory(backendID: String, deviceID: String, runID: String) async -> HistoryPage? {
@@ -62,9 +62,26 @@ func eventually(_ condition: () -> Bool, seconds: Int = 10) async throws {
 
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"] != nil))
 struct SessionIntegrationTests {
+    @Test @MainActor func largeSyncLoadsFullWindowOverWebSocket() async throws {
+        let session = BackendSession(storage: MemoryStorage())
+        await session.restore()
+        session.setActive(true)
+        defer { session.setActive(false) }
+        let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
+        let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        try await session.pair(PairingLink("mains://pair#code=ios-test-large-sync&endpoint=\(encoded)"), deviceName: "Test iPhone")
+        try await eventually { session.isConnected }
+        #expect(session.conversations.count == 100)
+        await session.selectConversation("fixture-run")
+        let page = try #require(session.transcript.page)
+        #expect(page.artifacts.count == 400)
+        #expect(page.artifacts.last?.content == "Last large sync report")
+        #expect(session.isConnected)
+    }
+
     @Test @MainActor func desktopQueueAppearsAndRemovesWithoutBecomingPhoneOwnedWork() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -99,7 +116,7 @@ struct SessionIntegrationTests {
 
     @Test @MainActor func queueUsesFIFOContinuesAndChecksUnknownSteerOverTheDeviceProtocol() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -137,7 +154,7 @@ struct SessionIntegrationTests {
 
     @Test @MainActor func steerUsesOriginalReceiptsAndKeepsAnEndedTurnMessageForManualContinuation() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -199,7 +216,7 @@ struct SessionIntegrationTests {
 
     @Test @MainActor func draftOwnershipAndStopFollowTheConversation() async throws {
         let session = BackendSession(storage: MemoryStorage())
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -237,7 +254,7 @@ struct SessionIntegrationTests {
     @Test @MainActor func pairStreamReconnectAndRestore() async throws {
         let storage = MemoryStorage()
         let session = BackendSession(storage: storage)
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         defer { session.setActive(false) }
         let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
         let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -307,7 +324,7 @@ struct SessionIntegrationTests {
         #expect(session.pendingMessage?.status == .uncertain)
 
         let restored = BackendSession(storage: storage)
-        restored.restore()
+        await restored.restore()
         #expect(restored.conversations.count == 2)
         #expect(restored.connection == .suspended)
         #expect(restored.lastSyncedAt == session.lastSyncedAt)
@@ -349,7 +366,7 @@ struct SessionIntegrationTests {
         storage.pairing = PairedBackend(descriptor: original.descriptor, endpoints: original.endpoints,
                                        deviceId: original.deviceId, deviceToken: "revoked-token")
         let session = BackendSession(storage: storage)
-        session.restore(); session.setActive(true)
+        await session.restore(); session.setActive(true)
         try await eventually { session.connection == .unauthorized }
         session.setActive(false); session.setActive(true)
         session.setOnline(false); session.setOnline(true); session.retry()

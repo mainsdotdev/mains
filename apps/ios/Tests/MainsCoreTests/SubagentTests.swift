@@ -114,7 +114,7 @@ private func childEvent(_ id: String, text: String, ts: Double = 2000) -> JSONVa
 @Test @MainActor func deferredMessageReadJoinsEveryUnicodePageWithoutChangingHistory() async throws {
     let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
     let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
-    session.restore(); session.setActive(true); try session.startDemo()
+    await session.restore(); session.setActive(true); try session.startDemo()
     defer { session.exitDemo(); backend.shutdown() }
     try await eventually { session.isConnected }
     session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
