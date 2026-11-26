@@ -74,8 +74,8 @@ struct VoiceAppearancePreview: View {
     func loadPairing() throws -> PairedBackend? { nil }
     func savePairing(_ pairing: PairedBackend) throws {}
     func removePairing() throws {}
-    func loadSnapshot() -> CachedSnapshot? { nil }
-    func saveSnapshot(_ snapshot: CachedSnapshot) {}
+    func loadSnapshot(backendID: String, deviceID: String) -> CachedSnapshot? { nil }
+    func saveSnapshot(_ snapshot: CachedSnapshot, deviceID: String, history: CachedHistoryChange?) {}
     func removeSnapshot() {}
     func hasConsent(backendID: String, providerID: String) -> Bool { false }
     func grantConsent(backendID: String, providerID: String) {}

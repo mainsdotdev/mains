@@ -119,7 +119,7 @@ struct ConversationView: View {
     private var isMateConversation: Bool { mateID != nil || mateSource != nil }
     private var hasLoadedHistory: Bool { run != nil && session.viewingRunID == runID && session.transcript.page != nil }
     private var waitsForMateConversation: Bool {
-        guard isMateConversation, !focusedVoice else { return false }
+        guard isMateConversation, !focusedVoice, session.isConnected else { return false }
         return !hasLoadedHistory || (mateID != nil && mateProfile == nil)
     }
     private var usesMateHeader: Bool { isMateConversation && !focusedVoice && !showsConnectionPill }
@@ -320,9 +320,14 @@ struct ConversationView: View {
         }
         .task(id: outputCheck) {
             let check = outputCheck
-            guard check.connected, check.viewing, check.status != nil else { return }
+            guard check.viewing, check.status != nil else { return }
             do {
-                let available = try await session.hasOutputs(runID)
+                let available: Bool
+                if check.connected { available = try await session.hasOutputs(runID) }
+                else {
+                    let saved = await session.savedOfflineOutputs(runID)
+                    available = !saved.isEmpty
+                }
                 try Task.checkCancellation()
                 guard check.owner == session.ownership, session.viewingRunID == runID else { return }
                 outputPresence = (check.owner, runID, available)
@@ -445,9 +450,7 @@ struct ConversationView: View {
     }
 
     @ViewBuilder private var mateConversationLoading: some View {
-        if !session.isConnected {
-            DisconnectedState(message: "Connect to your computer to open this Mate chat.").centered
-        } else if session.viewingRunID == runID, !hasLoadedHistory, let error = session.historyError {
+        if session.viewingRunID == runID, !hasLoadedHistory, let error = session.historyError {
             EmptyStateView(artwork: .chats, title: "Messages couldn't load", description: Text(error)) {
                 Button("Retry") { Task { await session.loadHistory(direction: session.historyRetryDirection) } }
                     .disabled(session.historyLoading)

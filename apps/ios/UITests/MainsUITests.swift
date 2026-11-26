@@ -338,8 +338,8 @@ final class MainsUITests: XCTestCase {
     func testHomeSidebarAlignsWithTheMainPane() {
         continueAfterFailure = false
         let app = makeApplication()
-        app.launchArguments += ["-native-demo-enabled-v1", "YES"]
-        app.launch()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
         let settings = app.buttons["openSettings"]
         let sidebar = app.buttons["openSidebar"]
         let close = app.buttons["closeSidebar"]
@@ -370,6 +370,26 @@ final class MainsUITests: XCTestCase {
         if !isInline {
             XCTAssertEqual(logo.frame.midX, sidebarButton.midX, accuracy: 1)
             XCTAssertEqual(close.frame.midY, sidebarButton.midY, accuracy: 1)
+
+            let homeShortcut = app.buttons["openHome"]
+            let search = app.buttons["sidebarSearch"]
+            let homeLogoX = logo.frame.minX
+            let homeShortcutX = homeShortcut.frame.minX
+            let homeSearchX = search.frame.minX
+            app.buttons["openWorkInbox"].tap()
+            let activity = app.navigationBars["Activity"]
+            XCTAssertTrue(activity.waitForExistence(timeout: 5))
+            XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+
+            let leadingEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.52))
+            let trailingEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.52))
+            leadingEdge.press(forDuration: 0.05, thenDragTo: trailingEdge)
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+            XCTAssertEqual(logo.frame.minX, homeLogoX, accuracy: 1)
+            XCTAssertEqual(homeShortcut.frame.minX, homeShortcutX, accuracy: 1)
+            XCTAssertEqual(search.frame.minX, homeSearchX, accuracy: 1)
+            close.tap()
+            XCTAssertTrue(activity.waitForExistence(timeout: 5))
         } else {
             XCTAssertTrue(sidebar.isHittable)
             XCTAssertEqual(settings.frame.midY, attachmentButton.midY, accuracy: 1)
@@ -2732,8 +2752,10 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(activity.waitForExistence(timeout: 10))
         XCTAssertEqual(activity.label, "Thinking")
         let tools = app.buttons["toolBlock-7"]
-        XCTAssertTrue(tools.waitForExistence(timeout: 5)); tools.tap()
+        XCTAssertTrue(tools.waitForExistence(timeout: 5))
         XCTAssertEqual(tools.value as? String, "Collapsed")
+        let firstTool = app.buttons["toolCall-7"]
+        XCTAssertFalse(firstTool.exists)
 
         let first = app.staticTexts["Hello from the computer."]
         let second = app.staticTexts["Reviewing the layout."]
@@ -2745,6 +2767,13 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(last.frame.minY - tools.frame.maxY, messageGap, accuracy: 2)
         // The button exposes its tap frame, while the activity exposes its label.
         XCTAssertEqual(activity.frame.midY - last.frame.maxY, tools.frame.midY - second.frame.maxY, accuracy: 2)
+
+        tools.tap()
+        XCTAssertTrue(firstTool.waitForExistence(timeout: 5))
+        XCTAssertEqual(tools.value as? String, "Expanded")
+        tools.tap()
+        XCTAssertTrue(firstTool.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(tools.value as? String, "Collapsed")
         forgetFixture(app)
     }
 
@@ -2761,11 +2790,22 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(activity.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Working on your computer…"].exists)
         XCTAssertFalse(app.staticTexts["Responding…"].exists)
-        let tool = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "toolCall-")).firstMatch
-        XCTAssertTrue(tool.waitForExistence(timeout: 10))
+        let tools = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "toolBlock-")).firstMatch
+        XCTAssertTrue(tools.waitForExistence(timeout: 10))
+        XCTAssertEqual(tools.value as? String, "Collapsed")
         XCTAssertTrue(app.staticTexts["Demo result"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["stopReply"].waitForNonExistence(timeout: 15))
         XCTAssertTrue(activity.waitForNonExistence(timeout: 5))
+
+        openSidebar(app)
+        let home = app.buttons["openHome"]
+        let activityShortcut = app.buttons["openWorkInbox"]
+        XCTAssertTrue(home.waitForExistence(timeout: 5))
+        XCTAssertTrue(activityShortcut.exists)
+        XCTAssertLessThan(home.frame.maxY, activityShortcut.frame.midY)
+        home.tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["closeSidebar"].exists)
     }
 
     func testProjectPickerCancelsAppliesAndClears() {
@@ -4226,17 +4266,15 @@ final class MainsUITests: XCTestCase {
         draft.tap()
         draft.typeText("Keep this Mate draft")
         _ = try await URLSession.shared.data(for: offline)
-        let chatMessage = app.staticTexts["Connect to your computer to view this Mate’s chats."]
+        let chatMessage = app.staticTexts["Showing chats saved on this iPhone."]
         XCTAssertTrue(chatMessage.waitForExistence(timeout: 5))
-        XCTAssertTrue(disconnected.exists)
-        XCTAssertEqual(disconnected.frame.midX, app.frame.midX, accuracy: 2)
-        XCTAssertLessThan(disconnected.frame.maxY, chatMessage.frame.minY)
-        XCTAssertFalse(app.staticTexts["mateChatsName"].exists)
-        XCTAssertFalse(chat.exists)
+        XCTAssertFalse(disconnected.exists)
+        XCTAssertTrue(app.staticTexts["mateChatsName"].exists)
+        XCTAssertTrue(chat.exists)
         XCTAssertFalse(draft.exists)
         attachScreenshot(app, name: "Mate chats disconnected")
-        XCTAssertTrue(chat.waitForExistence(timeout: 24))
-        XCTAssertFalse(disconnected.exists)
+        XCTAssertTrue(draft.waitForExistence(timeout: 24))
+        XCTAssertFalse(chatMessage.exists)
         XCTAssertEqual(draft.value as? String, "Keep this Mate draft")
         app.navigationBars["Chats"].buttons["BackButton"].tap()
 
@@ -4800,6 +4838,76 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(message.value as? String, "My next thought stays here")
         attachScreenshot(app, name: "Native chat – recovered connection")
         forgetFixture(app)
+    }
+
+    func testOfflineMatesAndChatTitlesOpenAfterRelaunch() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test-mate-info")
+        app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 8))
+        mate.tap()
+        let chat = app.staticTexts["Release check 1"]
+        XCTAssertTrue(chat.waitForExistence(timeout: 8))
+
+        var offline = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/offline")!)
+        offline.httpMethod = "POST"
+        offline.httpBody = Data(#"{"durationMs":20000}"#.utf8)
+        _ = try await URLSession.shared.data(for: offline)
+        app.terminate(); app.launch()
+        openSidebar(app)
+        app.buttons["openMates"].tap()
+        XCTAssertTrue(app.staticTexts["Connect to your computer to refresh Mates."].waitForExistence(timeout: 8))
+        XCTAssertTrue(mate.waitForExistence(timeout: 5)); mate.tap()
+        XCTAssertTrue(app.staticTexts["Showing chats saved on this iPhone."].waitForExistence(timeout: 5))
+        XCTAssertTrue(chat.exists)
+        XCTAssertFalse(app.textViews["homeMessageInput"].exists)
+        XCTAssertFalse(app.staticTexts["Computer disconnected"].exists)
+    }
+
+    func testOfflineAtlasPageAndFileOpenAfterRelaunch() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["openAtlas"].tap()
+        let page = app.buttons["atlasItem-fixture-atlas-page"]
+        XCTAssertTrue(page.waitForExistence(timeout: 8))
+        page.tap()
+        XCTAssertTrue(app.staticTexts["atlasPageTitle"].waitForExistence(timeout: 8))
+        let next = app.buttons["Next"]
+        XCTAssertTrue(next.waitForExistence(timeout: 5)); next.tap()
+        XCTAssertTrue(app.staticTexts["İstanbul 🌍"].waitForExistence(timeout: 8))
+        app.navigationBars.buttons["BackButton"].tap()
+
+        let report = app.buttons["atlasItem-fixture-atlas-doc"]
+        XCTAssertTrue(report.waitForExistence(timeout: 5)); report.tap()
+        let options = app.buttons["fileOptions"]
+        XCTAssertTrue(options.waitForExistence(timeout: 8)); options.tap()
+        let keep = app.buttons["keepFileOffline"]
+        XCTAssertTrue(keep.waitForExistence(timeout: 5)); keep.tap()
+        options.tap()
+        let removal = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "keepFileOffline", "Remove Offline Copy")).firstMatch
+        XCTAssertTrue(removal.waitForExistence(timeout: 5))
+        XCTAssertEqual(removal.label, "Remove Offline Copy")
+        app.buttons["Close preview"].tap()
+
+        var offline = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/offline")!)
+        offline.httpMethod = "POST"
+        offline.httpBody = Data(#"{"durationMs":20000}"#.utf8)
+        _ = try await URLSession.shared.data(for: offline)
+        app.terminate(); app.launch()
+        openSidebar(app)
+        app.buttons["openAtlas"].tap()
+        XCTAssertTrue(app.staticTexts["Showing Atlas items saved on this iPhone."].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["atlasItem-fixture-atlas-image"].exists)
+        XCTAssertTrue(report.waitForExistence(timeout: 3)); report.tap()
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Article summary"].waitForExistence(timeout: 5))
+        app.buttons["Close preview"].tap()
+        XCTAssertTrue(page.waitForExistence(timeout: 3)); page.tap()
+        XCTAssertTrue(next.waitForExistence(timeout: 5)); next.tap()
+        XCTAssertTrue(app.staticTexts["İstanbul 🌍"].waitForExistence(timeout: 5))
     }
 
     func testPairReadSendStreamAndRestore() throws {

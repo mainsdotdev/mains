@@ -102,7 +102,7 @@ struct DemoTests {
 
     @Test @MainActor func offlineDemoUsesNormalSessionCataloguesAndIsolatedStorage() async throws {
         let storage = MemoryStorage()
-        storage.snapshot = CachedSnapshot(backendID: "keep-real-cache", conversations: [], spaces: [], workspaces: [], histories: [:])
+        storage.snapshot = CachedSnapshot(backendID: "keep-real-cache", conversations: [], spaces: [], workspaces: [])
         storage.grantConsent(backendID: "real-computer", providerID: "codex")
         let originalConsent = storage.consents
         let session = BackendSession(storage: storage)

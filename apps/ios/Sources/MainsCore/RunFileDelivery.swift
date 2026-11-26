@@ -6,6 +6,50 @@ public enum RunFilePolicy {
     public static let textPageBytes = 64 * 1024
 }
 
+public enum OfflineFileKey: Hashable, Codable, Sendable {
+    case output(runID: String, artifactID: Int)
+    case attachment(runID: String, attachmentID: String)
+    case atlas(AtlasFileReference)
+
+    var cacheKey: String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return (try? encoder.encode(self)).map { String(decoding: $0, as: UTF8.self) }
+    }
+}
+
+public struct OfflineFile: Codable, Identifiable, Sendable {
+    public var id: OfflineFileKey { key }
+    public let key: OfflineFileKey
+    public let name: String
+    public let previewType: String
+    public let version: String
+    public let byteSize: Int
+
+    public init(key: OfflineFileKey, name: String, previewType: String, version: String, byteSize: Int) {
+        self.key = key
+        self.name = TranscriptMedia.fileName(name)
+        self.previewType = previewType
+        self.version = version
+        self.byteSize = byteSize
+    }
+
+    init(_ output: RunOutput) {
+        self.init(key: .output(runID: output.runId, artifactID: output.artifactId), name: output.name,
+                  previewType: output.previewType, version: output.version, byteSize: output.byteSize)
+    }
+
+    init(_ attachment: RunAttachmentFile) {
+        self.init(key: .attachment(runID: attachment.runId, attachmentID: attachment.attachmentId), name: attachment.name,
+                  previewType: attachment.previewType, version: attachment.version, byteSize: attachment.byteSize)
+    }
+
+    init(_ file: AtlasFile) {
+        self.init(key: .atlas(file.reference), name: file.name, previewType: file.previewType,
+                  version: file.version, byteSize: file.byteSize)
+    }
+}
+
 /// A host reference is data sent to run-scoped readers, never an iPhone URL.
 public struct RunFileReference: Equatable, Sendable {
     public let path: String

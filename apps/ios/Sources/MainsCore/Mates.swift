@@ -1,11 +1,13 @@
 import Foundation
 
-public struct MateDirectory: Decodable, Sendable {
+public struct MateDirectory: Codable, Sendable {
     public let mates: [Mate]
     public let teams: [MateTeam]
+
+    var offlineSummary: MateDirectory { MateDirectory(mates: mates.map(\.offlineSummary), teams: teams) }
 }
 
-public struct MateTeam: Decodable, Identifiable, Hashable, Sendable {
+public struct MateTeam: Codable, Identifiable, Hashable, Sendable {
     public let id: String
     public let name: String
 }
@@ -45,7 +47,7 @@ struct MateRobotCatalogue: Decodable, Sendable {
     }
 }
 
-public struct Mate: Decodable, Identifiable, Sendable {
+public struct Mate: Codable, Identifiable, Sendable {
     public let id: String
     public let name: String
     public let description: String
@@ -61,36 +63,43 @@ public struct Mate: Decodable, Identifiable, Sendable {
     public var ready: Bool { !needsSetup && isArchived != true }
 
     public func showsChat(_ chat: MateChat) -> Bool { chat.id != welcome?.runId || welcome?.state == "starting" }
+
+    var offlineSummary: Mate {
+        Mate(id: id, name: name, description: description, avatar: avatar, teamId: teamId,
+             providerId: providerId, model: model, isArchived: isArchived, pinnedAt: pinnedAt,
+             needsSetup: needsSetup, welcome: welcome.map { MateWelcome(runId: $0.runId, state: $0.state, question: nil, error: nil) },
+             details: nil)
+    }
 }
 
-public struct MateDetails: Decodable, Sendable {
+public struct MateDetails: Codable, Sendable {
     public let spaceName: String
     public let effort: String
     public let instructions: String
 }
 
-public struct MateWelcome: Decodable, Sendable {
+public struct MateWelcome: Codable, Sendable {
     public let runId: String
     public let state: String
     public let question: Question?
     public let error: String?
 
-    public struct Question: Decodable, Sendable {
+    public struct Question: Codable, Sendable {
         public let question: String
         public let options: [Option]
         public let idleMessage: String
         public let profileSetup: Setup?
     }
-    public struct Option: Decodable, Sendable {
+    public struct Option: Codable, Sendable {
         public let label: String
         public let description: String
     }
-    public struct Setup: Decodable, Sendable {
+    public struct Setup: Codable, Sendable {
         public let turns: [Turn]
         public let draft: MateProfile?
         public let saved: Bool?
     }
-    public struct Turn: Decodable, Equatable, Sendable {
+    public struct Turn: Codable, Equatable, Sendable {
         public let question: String
         public let answer: String
     }
@@ -102,7 +111,7 @@ public struct MateProfile: Codable, Sendable {
     public init(description: String, instructions: String) { self.description = description; self.instructions = instructions }
 }
 
-public struct MateChat: Decodable, Identifiable, Sendable {
+public struct MateChat: Codable, Identifiable, Sendable {
     public let id: String
     public let title: String?
     public let updatedAt: Date

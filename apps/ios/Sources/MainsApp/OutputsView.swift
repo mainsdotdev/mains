@@ -15,6 +15,8 @@ struct OutputsView: View {
     @State private var loading = false
     @State private var error: String?
     @State private var selection: RunOutput?
+    @State private var offlineSelection: OfflineFile?
+    @State private var savedOutputs: [OfflineFile] = []
     @State private var pageOwner: Int?
     var body: some View {
         ComposerSheet(title: "Outputs") {
@@ -24,8 +26,14 @@ struct OutputsView: View {
                     Text(error).foregroundStyle(.secondary)
                     Button("Try again") { Task { await load() } }
                 }
-                if page?.items.isEmpty == true { Text("No outputs yet.").foregroundStyle(.secondary) }
-                ForEach(page?.items ?? []) { output in
+                if session.isConnected && page?.items.isEmpty == true { Text("No outputs yet.").foregroundStyle(.secondary) }
+                if !session.isConnected && savedOutputs.isEmpty && !loading {
+                    Text("No outputs saved on this iPhone.").foregroundStyle(.secondary)
+                }
+                ForEach(savedOutputs) { file in
+                    Button { offlineSelection = file } label: { Label(file.name, systemImage: "arrow.down.circle") }
+                }
+                ForEach(session.isConnected ? page?.items ?? [] : []) { output in
                     Button { selection = output } label: {
                         HStack(spacing: 12) {
                             Image(systemName: output.previewType == "image" ? "photo" : "doc.text").foregroundStyle(.secondary)
@@ -41,22 +49,33 @@ struct OutputsView: View {
                         .accessibilityIdentifier("output-\(output.id)")
                         .contextMenu { if let pageOwner, AtlasSaveSource.supports(output.name) { AtlasSaveButton(session: session, source: .output(output), owner: pageOwner) } }
                 }
-                if !previous.isEmpty || page?.nextOffset != nil {
+                if session.isConnected && (!previous.isEmpty || page?.nextOffset != nil) {
                     HStack {
                         Button("Previous") { if let last = previous.popLast() { offset = last } }.disabled(previous.isEmpty || loading)
                         Spacer()
                         Button("Next") { if let next = page?.nextOffset { previous.append(offset); offset = next } }.disabled(page?.nextOffset == nil || loading)
                     }
                 }
-            }.scrollContentBackground(.hidden).pullToRefresh { await load() }.task(id: offset) { await load() }
+            }.scrollContentBackground(.hidden).pullToRefresh { await load() }
+                .task(id: "\(offset):\(session.isConnected):\(session.ownership)") { await load() }
         }
         .presentationDetents([.large])
         .fullScreenCover(item: $selection) { output in OutputPreviewView(session: session, output: output) }
+        .fullScreenCover(item: $offlineSelection, onDismiss: { Task { await load() } }) { file in
+            OutputPreviewView(session: session, savedFile: file)
+        }
     }
     private func load() async {
         let owner = session.ownership
         loading = true; error = nil
         defer { loading = false }
+        savedOutputs = []
+        if !session.isConnected {
+            let files = await session.savedOfflineOutputs(runID)
+            guard !Task.isCancelled, owner == session.ownership, !session.isConnected else { return }
+            savedOutputs = files
+            return
+        }
         do {
             let result = try await session.listOutputs(runID, offset: offset)
             try Task.checkCancellation()
@@ -74,12 +93,23 @@ struct OutputPreviewView: View {
     private let output: RunOutput?
     private let media: TranscriptMedia?
     private let linkedFile: RunLinkedFileSelection?
+    private let savedFile: OfflineFile?
     private let embedded: Bool
-    init(session: BackendSession, output: RunOutput, embedded: Bool = false) { self.session = session; self.output = output; media = nil; linkedFile = nil; self.embedded = embedded }
-    init(session: BackendSession, media: TranscriptMedia, embedded: Bool = false) { self.session = session; self.media = media; output = nil; linkedFile = nil; self.embedded = embedded }
-    init(session: BackendSession, linkedFile: RunLinkedFileSelection, embedded: Bool = false) { self.session = session; self.linkedFile = linkedFile; output = nil; media = nil; self.embedded = embedded }
+    init(session: BackendSession, output: RunOutput, embedded: Bool = false) { self.session = session; self.output = output; media = nil; linkedFile = nil; savedFile = nil; self.embedded = embedded }
+    init(session: BackendSession, media: TranscriptMedia, embedded: Bool = false) { self.session = session; self.media = media; output = nil; linkedFile = nil; savedFile = nil; self.embedded = embedded }
+    init(session: BackendSession, linkedFile: RunLinkedFileSelection, embedded: Bool = false) { self.session = session; self.linkedFile = linkedFile; output = nil; media = nil; savedFile = nil; self.embedded = embedded }
+    init(session: BackendSession, savedFile: OfflineFile, embedded: Bool = false) { self.session = session; self.savedFile = savedFile; output = nil; media = nil; linkedFile = nil; self.embedded = embedded }
     private var runID: String { output?.runId ?? media?.runID ?? linkedFile?.runID ?? "" }
-    private var name: String { downloadedName ?? output?.name ?? media?.name ?? linkedFile.flatMap { RunFileReference($0.href)?.name } ?? "File" }
+    private var name: String { downloadedName ?? savedFile?.name ?? output?.name ?? media?.name ?? linkedFile.flatMap { RunFileReference($0.href)?.name } ?? "File" }
+    private var offlineKey: OfflineFileKey? {
+        if let output { return .output(runID: output.runId, artifactID: output.artifactId) }
+        guard let media else { return nil }
+        switch media.source {
+        case .artifact(let id): return .output(runID: media.runID, artifactID: id)
+        case .attachment(let id): return .attachment(runID: media.runID, attachmentID: id)
+        default: return nil
+        }
+    }
     @Environment(\.dismiss) private var dismiss
     @Environment(\.conversationOutputPaneVisible) private var outputPaneVisible
     @State private var url: URL?
@@ -92,6 +122,8 @@ struct OutputPreviewView: View {
     @State private var retry = 0
     @State private var loadID = UUID()
     @State private var atlasSource: AtlasSaveSource?
+    @State private var offlineFile: OfflineFile?
+    @State private var offlinePreview: PreviewExportFile?
     @State private var loadedOwner: Int?
     var body: some View {
         Group {
@@ -99,13 +131,14 @@ struct OutputPreviewView: View {
                 previewContent.overlay(alignment: .topTrailing) {
                     if let url, let loadedOwner {
                         FileOptionsMenu(url: url, image: previewType == "image", session: session, owner: loadedOwner,
-                                        source: atlasSource, reload: { retry += 1 })
+                                        source: atlasSource, reload: { retry += 1 }, offlineFile: offlineFile)
                             .buttonStyle(.glass).padding(12)
                     }
                 }
             } else {
                 FilePreviewNavigation(name: name, url: url, previewType: previewType, session: session,
-                                      source: atlasSource, owner: loadedOwner ?? session.ownership, reload: { retry += 1 }) {
+                                      source: atlasSource, owner: loadedOwner ?? session.ownership,
+                                      reload: savedFile == nil ? { retry += 1 } : nil, offlineFile: offlineFile) {
                     previewContent
                 }
             }
@@ -147,15 +180,22 @@ struct OutputPreviewView: View {
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
         return type.conforms(to: .movie) || type.conforms(to: .video)
     }
-    private func cleanup() { if let folder { try? FileManager.default.removeItem(at: folder) }; folder = nil; url = nil }
+    private func cleanup() { if let folder { try? FileManager.default.removeItem(at: folder) }; folder = nil; url = nil; offlinePreview = nil }
     private func download() async {
         let ticket = UUID(); loadID = ticket
         let owner = session.ownership
-        atlasSource = nil; loadedOwner = nil
+        atlasSource = nil; loadedOwner = nil; offlineFile = nil
         cleanup(); error = nil; progress = 0
         var destination: URL?
         do {
             if let linkedFile { guard linkedFile.owner == session.ownership else { throw MainsError.changedBackend } }
+            if savedFile != nil || !session.isConnected, let file = try await fileForOfflinePreview() {
+                let reader = try await session.offlineFilePreview(file, owner: owner)
+                guard ticket == loadID else { return }
+                offlinePreview = reader; url = reader.url; offlineFile = file
+                previewType = file.previewType; downloadedName = file.name; loadedOwner = owner; relativePath = nil
+                return
+            }
             var selected = output
             var linkedMarkdown: RunLinkedMarkdown?
             if let linkedFile {
@@ -207,11 +247,21 @@ struct OutputPreviewView: View {
             try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: fileURL.path)
             downloadedName = fileName; url = fileURL
             atlasSource = AtlasSaveSource.supports(fileName) ? selected.map(AtlasSaveSource.output) ?? attachment.map(AtlasSaveSource.attachment) : nil
+            offlineFile = selected.map { OfflineFile($0) } ?? attachment.map { OfflineFile($0) }
             loadedOwner = owner
         } catch {
             if let destination { try? FileManager.default.removeItem(at: destination) }
             if ticket == loadID { cleanup(); if !Task.isCancelled { self.error = error.localizedDescription } }
         }
+    }
+
+    private func fileForOfflinePreview() async throws -> OfflineFile? {
+        if let savedFile { return savedFile }
+        guard let key = offlineKey else { return nil }
+        guard let file = await session.savedOfflineFiles().first(where: { $0.key == key }) else {
+            throw MainsError.server("This file isn’t saved on this iPhone.")
+        }
+        return file
     }
 }
 
@@ -313,6 +363,7 @@ struct FilePreviewNavigation<Content: View>: View {
     var savedInAtlas = false
     var openSourceChat: (() -> Void)? = nil
     var reload: (() -> Void)? = nil
+    var offlineFile: OfflineFile? = nil
     @ViewBuilder let content: Content
     @Environment(\.dismiss) private var dismiss
     private var image: Bool { previewType == "image" }
@@ -325,7 +376,8 @@ struct FilePreviewNavigation<Content: View>: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { Button("Close preview", systemImage: "xmark") { dismiss() } }
                     ToolbarItem(placement: .topBarTrailing) {
-                        if let url { FileOptionsMenu(url: url, image: image, session: session, owner: owner, source: source, savedInAtlas: savedInAtlas, openSourceChat: openSourceChat, reload: reload) }
+                        if let url { FileOptionsMenu(url: url, image: image, session: session, owner: owner, source: source,
+                                                     savedInAtlas: savedInAtlas, openSourceChat: openSourceChat, reload: reload, offlineFile: offlineFile) }
                     }
                 }
         }
@@ -355,6 +407,9 @@ struct FileOptionsMenu: View {
     var savedInAtlas = false
     var openSourceChat: (() -> Void)? = nil
     var reload: (() -> Void)? = nil
+    var offlineFile: OfflineFile? = nil
+    @State private var keptOffline: Bool?
+    @State private var changingOffline = false
     @State private var retention: Bool?
     @State private var retentionError: String?
     @State private var retryRetention = 0
@@ -376,7 +431,13 @@ struct FileOptionsMenu: View {
             Button(preparing ? "Preparing…" : "Save to Files", systemImage: "folder") { exportFile() }
                 .disabled(photos.saving || preparing).accessibilityIdentifier("saveFileToFiles")
             ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }.accessibilityIdentifier("shareOutput")
-            if let source {
+            if let offlineFile, session.canKeepFilesOffline, let keptOffline {
+                Button(keptOffline ? "Remove Offline Copy" : "Keep Offline",
+                       systemImage: keptOffline ? "trash" : "arrow.down.circle") {
+                    changeOffline(offlineFile, remove: keptOffline)
+                }.disabled(changingOffline).accessibilityIdentifier("keepFileOffline")
+            }
+            if let source, session.isConnected {
                 if retentionError != nil {
                     Button("Retry Atlas check", systemImage: "arrow.clockwise") { retryRetention += 1 }.disabled(!session.isConnected)
                 } else if let retention {
@@ -396,8 +457,16 @@ struct FileOptionsMenu: View {
         .buttonBorderShape(.circle)
         .accessibilityLabel("File options").accessibilityIdentifier("fileOptions")
         .disabled(owner != session.ownership)
+        .task(id: "\(owner):\(offlineFile?.version ?? ""):\(url)") {
+            keptOffline = nil
+            guard let offlineFile, session.canKeepFilesOffline else { return }
+            let saved = await session.savedOfflineFiles()
+            if !Task.isCancelled, owner == session.ownership {
+                keptOffline = saved.contains { $0.key == offlineFile.key && $0.version == offlineFile.version }
+            }
+        }
         .task(id: readKey) {
-            guard let source, owner == session.ownership else { return }
+            guard let source, owner == session.ownership, session.isConnected else { return }
             retentionError = nil
             do {
                 let saved = try await session.atlasSaveStatus(source, owner: owner)
@@ -414,6 +483,19 @@ struct FileOptionsMenu: View {
         .sensoryFeedback(.success, trigger: photos.savedURL)
         .onDisappear { operation = UUID() }
         .onChange(of: session.ownership) { _, _ in operation = UUID(); export = nil; error = nil }
+    }
+    private func changeOffline(_ file: OfflineFile, remove: Bool) {
+        changingOffline = true
+        Task {
+            defer { changingOffline = false }
+            do {
+                if remove { try await session.removeOffline(file, owner: owner) }
+                else { try await session.keepOffline(file, copying: url, owner: owner) }
+                if owner == session.ownership { keptOffline = !remove }
+            } catch {
+                if owner == session.ownership { permissionDenied = false; self.error = error.localizedDescription }
+            }
+        }
     }
     private func savePhoto() {
         guard owner == session.ownership, !photos.saving else { return }

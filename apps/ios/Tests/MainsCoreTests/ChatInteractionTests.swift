@@ -310,6 +310,49 @@ func attachmentOnlyDraftsPreserveFilesAcrossRefusalRecoveryAndUncertainDelivery(
     #expect(!disclosure.isExpanded(active: true))
 }
 
+@Test func browserCompletionTitlesTheExistingIOSActivityWithoutCountingAsProse() throws {
+    let page = try Wire.decoder().decode(HistoryPage.self, from: Data(#"""
+        {"artifacts":[
+          {"id":1,"runId":"run","kind":"user-prompt","content":"Check my mail","createdAt":{"$date":"1970-01-01T00:00:01Z"}},
+          {"id":2,"runId":"run","kind":"report","content":"I’ll check mail access.","createdAt":{"$date":"1970-01-01T00:00:02Z"}},
+          {"id":3,"runId":"run","kind":"report","content":"::browser-complete{title=\"Checked available mail access\"}","metadata":{"source":"agent_message","messagePhase":"commentary","turnId":1},"createdAt":{"$date":"1970-01-01T00:00:04Z"}},
+          {"id":4,"runId":"run","kind":"report","content":"Apple Mail is closed.","createdAt":{"$date":"1970-01-01T00:00:05Z"}}
+        ],"toolCalls":[
+          {"id":7,"toolName":"mcp__cua_repl__js","status":"done","metadata":{"turnId":1},"input":{"title":"Inspect mail sessions"},"createdAt":{"$date":"1970-01-01T00:00:03Z"}}
+        ],"turns":[],"hasOlder":false,"hasNewer":false}
+        """#.utf8))
+    var transcript = Transcript()
+    transcript.replace(page)
+    let rows = transcript.rows(pending: nil, runID: "run", providerID: "codex")
+    let section = try #require(TranscriptSection.build(rows).last)
+    let group = try #require(TranscriptGroup.build(section.previous).last)
+    #expect(section.label == "1 message · 1 tool call")
+    #expect(section.responseText == "I’ll check mail access.\n\nApple Mail is closed.")
+    #expect(group.id == "tool:7")
+    #expect(group.browserActivity?.text == "Checked available mail access")
+    #expect(group.rows.first?.toolPresentation?.detail == "Inspect mail sessions")
+    #expect(transcript.rows(pending: nil, runID: "run", forMate: true, providerID: "codex").map(\.id) == ["artifact:1", "artifact:2", "artifact:4"])
+    #expect(transcript.rows(pending: nil, runID: "run", providerID: "cursor").first { $0.id == "artifact:3" }?.kind == .response)
+}
+
+@Test func browserCompletionPreviewsStayOutOfProseAndUnpairedTitlesStayReadable() throws {
+    var transcript = Transcript()
+    let streamID = "codex-msg-run-browser"
+    transcript.receive(delta("::browser-com", id: streamID))
+    #expect(transcript.rows.isEmpty)
+    transcript.receive(delta(#"::browser-complete{title="Paused for a sign-in code"}"#, id: streamID))
+    #expect(transcript.rows.isEmpty)
+    let page = try samplePage(artifacts: #"""
+        [{"id":1,"runId":"run","kind":"report","content":"::browser-complete{title=\"Paused for a sign-in code\"}","metadata":{"source":"agent_message","messagePhase":"commentary","streamId":"codex-msg-run-browser"},"createdAt":{"$date":"1970-01-01T00:00:02Z"}},
+         {"id":2,"runId":"run","kind":"report","content":"```md\n::browser-complete{title=\"Example\"}\n```","metadata":{"source":"agent_message","messagePhase":"commentary","streamId":"codex-msg-run-example"},"createdAt":{"$date":"1970-01-01T00:00:03Z"}}]
+        """#)
+    transcript.replace(page)
+    let groups = TranscriptGroup.build(transcript.rows)
+    #expect(groups.map { $0.rows[0].kind } == [.browserActivity, .response])
+    #expect(groups.first?.rows.first?.text == "Paused for a sign-in code")
+    #expect(groups.last?.rows.first?.text == page.artifacts.last?.content)
+}
+
 @Test func pendingPromptAndPersistedPromptKeepOneIdentityAndChronologicalPosition() throws {
     let pending = PendingMessage(runID: "run", text: "Hi", date: Date(timeIntervalSince1970: 0.9), status: .sending,
                                  commandID: "native-send", channel: "runs:continue", payload: .null,

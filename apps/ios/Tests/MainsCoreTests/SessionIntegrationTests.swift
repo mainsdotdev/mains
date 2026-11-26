@@ -8,6 +8,8 @@ final class MemoryStorage: SessionStorage {
     func setDemoEnabled(_ enabled: Bool) { demoEnabled = enabled }
     var pairing: PairedBackend?
     var snapshot: CachedSnapshot?
+    var sqliteCache: SQLiteConversationCache?
+    private var histories: [String: HistoryPage] = [:]
     var consents: Set<String> = []
     var draftTexts: [TextDraftKey: String] = [:]
     func loadDraftText(_ key: TextDraftKey) throws -> String? { draftTexts[key] }
@@ -16,9 +18,26 @@ final class MemoryStorage: SessionStorage {
     func loadPairing() throws -> PairedBackend? { pairing }
     func savePairing(_ pairing: PairedBackend) throws { self.pairing = pairing }
     func removePairing() throws { pairing = nil; consents = [] }
-    func loadSnapshot() -> CachedSnapshot? { snapshot }
-    func saveSnapshot(_ snapshot: CachedSnapshot) { self.snapshot = snapshot }
-    func removeSnapshot() { snapshot = nil }
+    func loadSnapshot(backendID: String, deviceID: String) -> CachedSnapshot? {
+        if let sqliteCache { return sqliteCache.loadSnapshot(backendID: backendID, deviceID: deviceID) }
+        return snapshot
+    }
+    func loadHistory(backendID: String, deviceID: String, runID: String) async -> HistoryPage? {
+        if let sqliteCache { return await sqliteCache.loadHistory(backendID: backendID, deviceID: deviceID, runID: runID) }
+        return histories[runID]
+    }
+    func searchSavedMessages(_ query: String, backendID: String, deviceID: String) async -> [SavedMessageMatch] {
+        await sqliteCache?.searchSavedMessages(query, backendID: backendID, deviceID: deviceID) ?? []
+    }
+    func saveSnapshot(_ snapshot: CachedSnapshot, deviceID: String, history: CachedHistoryChange?) {
+        self.snapshot = snapshot
+        switch history {
+        case .replace(let runID, let page): histories[runID] = page
+        case .remove(let runID): histories[runID] = nil
+        case nil: break
+        }
+    }
+    func removeSnapshot() { snapshot = nil; histories = [:] }
     private func consentKey(_ backendID: String, _ providerID: String) -> String {
         (try! JSONEncoder().encode([backendID, providerID])).base64EncodedString()
     }
@@ -293,6 +312,8 @@ struct SessionIntegrationTests {
         #expect(restored.connection == .suspended)
         #expect(restored.lastSyncedAt == session.lastSyncedAt)
         #expect(restored.pairing?.pairedAt == session.pairing?.pairedAt)
+        await restored.selectConversation("fixture-run")
+        #expect(!restored.transcript.rows.isEmpty)
         try session.forget()
         #expect(storage.pairing == nil)
         #expect(storage.snapshot == nil)

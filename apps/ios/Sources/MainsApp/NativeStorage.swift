@@ -6,15 +6,14 @@ final class NativeStorage: SessionStorage {
     private let service = (Bundle.main.bundleIdentifier ?? "dev.mains.ios") + ".pairing"
     private let account = "paired-backend"
     private let defaults = UserDefaults.standard
+    private let cache = SQLiteConversationCache(directory: URL.cachesDirectory.appendingPathComponent("MainsConversations", isDirectory: true))
     private let draftStore = TextDraftFileStore(root: URL.applicationSupportDirectory.appendingPathComponent("MainsDrafts-v1", isDirectory: true))
     func loadDraftText(_ key: TextDraftKey) throws -> String? { try draftStore.load(key) }
     func saveDraftText(_ text: String, for key: TextDraftKey) throws { try draftStore.save(text, for: key) }
     func removeDraftTexts(backendID: String, deviceID: String) throws { try draftStore.remove(backendID: backendID, deviceID: deviceID) }
     var demoEnabled: Bool { defaults.bool(forKey: "native-demo-enabled-v1") }
     func setDemoEnabled(_ enabled: Bool) { defaults.set(enabled, forKey: "native-demo-enabled-v1") }
-    private var cacheURL: URL {
-        URL.cachesDirectory.appendingPathComponent("mains-native-snapshot.json")
-    }
+    private let legacySnapshot = URL.cachesDirectory.appendingPathComponent("mains-native-snapshot.json")
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
     }
@@ -46,17 +45,44 @@ final class NativeStorage: SessionStorage {
         defaults.removeObject(forKey: "ai-data-consents-v1")
     }
 
-    func loadSnapshot() -> CachedSnapshot? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: cacheURL.path),
-              (attributes[.size] as? Int ?? Int.max) <= 8 * 1024 * 1024,
-              let data = try? Data(contentsOf: cacheURL) else { return nil }
-        return try? Wire.decoder().decode(CachedSnapshot.self, from: data)
+    func loadSnapshot(backendID: String, deviceID: String) -> CachedSnapshot? {
+        try? FileManager.default.removeItem(at: legacySnapshot)
+        return cache.loadSnapshot(backendID: backendID, deviceID: deviceID)
     }
-    func saveSnapshot(_ snapshot: CachedSnapshot) {
-        guard let data = try? Wire.encoder().encode(snapshot), data.count <= 8 * 1024 * 1024 else { return }
-        try? data.write(to: cacheURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    func loadHistory(backendID: String, deviceID: String, runID: String) async -> HistoryPage? {
+        await cache.loadHistory(backendID: backendID, deviceID: deviceID, runID: runID)
     }
-    func removeSnapshot() { try? FileManager.default.removeItem(at: cacheURL) }
+    func searchSavedMessages(_ query: String, backendID: String, deviceID: String) async -> [SavedMessageMatch] {
+        await cache.searchSavedMessages(query, backendID: backendID, deviceID: deviceID)
+    }
+    func offlineValues(_ key: String, prefix: Bool, backendID: String, deviceID: String) async -> [Data] {
+        await cache.offlineValues(key, prefix: prefix, backendID: backendID, deviceID: deviceID)
+    }
+    func saveOfflineValue(_ data: Data, key: String, backendID: String, deviceID: String) {
+        cache.saveOfflineValue(data, key: key, backendID: backendID, deviceID: deviceID)
+    }
+    func removeOfflineValues(_ prefix: String, backendID: String, deviceID: String) {
+        cache.removeOfflineValues(prefix, backendID: backendID, deviceID: deviceID)
+    }
+    func offlineFiles(backendID: String, deviceID: String) async -> [OfflineFile] {
+        await cache.offlineFiles(backendID: backendID, deviceID: deviceID)
+    }
+    func offlineFileURL(_ file: OfflineFile, backendID: String, deviceID: String) async -> URL? {
+        await cache.offlineFileURL(file, backendID: backendID, deviceID: deviceID)
+    }
+    func saveOfflineFile(_ file: OfflineFile, copying source: URL, backendID: String, deviceID: String) async throws {
+        try await cache.saveOfflineFile(file, copying: source, backendID: backendID, deviceID: deviceID)
+    }
+    func removeOfflineFile(_ file: OfflineFile, backendID: String, deviceID: String) async throws {
+        try await cache.removeOfflineFile(file, backendID: backendID, deviceID: deviceID)
+    }
+    func saveSnapshot(_ snapshot: CachedSnapshot, deviceID: String, history: CachedHistoryChange?) {
+        cache.save(snapshot, deviceID: deviceID, history: history)
+    }
+    func removeSnapshot() {
+        cache.removeAll()
+        try? FileManager.default.removeItem(at: legacySnapshot)
+    }
     private func consentKey(_ backendID: String, _ providerID: String) -> String {
         // Encode a tuple rather than joining user-controlled identities with a delimiter.
         let data = try? JSONEncoder().encode([backendID, providerID])

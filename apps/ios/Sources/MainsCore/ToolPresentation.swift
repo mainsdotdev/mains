@@ -450,15 +450,31 @@ public struct ToolGroupPresentation: Sendable {
 
 /// Consecutive calls share one work summary; messages keep their original order.
 public struct TranscriptGroup: Identifiable, Sendable {
-    public let rows: [TranscriptRow]
+    public private(set) var rows: [TranscriptRow]
+    public private(set) var browserActivity: TranscriptRow? = nil
     public var id: String { rows[0].id }
     public static func build(_ rows: [TranscriptRow]) -> [Self] {
         var groups: [Self] = []
+        var lastBrowserCall: (groupIndex: Int, turnID: Int?)?
+        var followsBrowserActivity = false
         for row in rows {
-            if let last = groups.last, (row.kind == .tool || row.kind == .media), last.rows.first?.kind == row.kind,
+            if row.kind == .prompt { lastBrowserCall = nil }
+            if row.kind == .browserActivity {
+                if let call = lastBrowserCall, call.turnID == nil || row.turnID == nil || call.turnID == row.turnID {
+                    groups[call.groupIndex].browserActivity = row
+                } else { groups.append(Self(rows: [row])) }
+                lastBrowserCall = nil
+                followsBrowserActivity = true
+                continue
+            }
+            if !followsBrowserActivity, let last = groups.last, (row.kind == .tool || row.kind == .media), last.rows.first?.kind == row.kind,
                row.plan == nil, last.rows.first?.plan == nil {
-                groups[groups.count - 1] = Self(rows: last.rows + [row])
+                groups[groups.count - 1].rows.append(row)
             } else { groups.append(Self(rows: [row])) }
+            followsBrowserActivity = false
+            if let name = row.tool?.toolName, ToolPresentation.integration(for: name.lowercased())?.id == "cua_repl" {
+                lastBrowserCall = (groups.count - 1, row.turnID)
+            }
         }
         return groups
     }

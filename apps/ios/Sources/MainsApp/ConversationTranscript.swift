@@ -111,7 +111,10 @@ struct ConversationTranscript: View {
         return session.transcript.rowID(for: artifact)
     }
     private var page: HistoryPage? { session.viewingRunID == runID ? session.transcript.page : nil }
-    private var rows: [TranscriptRow] { session.viewingRunID == runID ? session.transcript.rows(pending: pending, runID: runID, forMate: isMate) : [] }
+    private var rows: [TranscriptRow] {
+        guard session.viewingRunID == runID else { return [] }
+        return session.transcript.rows(pending: pending, runID: runID, forMate: isMate, providerID: providerID)
+    }
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
     private var isMate: Bool { run?.assistantId != nil }
@@ -412,11 +415,13 @@ private struct ConversationActivitySheet: View {
     @State private var failedDirection = "refresh"
     @State private var fullMessage: ActivityMessageReference?
     private var valid: Bool { session.ownership == selection.owner && session.viewingRunID == selection.runID }
+    private var providerID: String? { session.conversations.first { $0.id == selection.runID }?.providerId }
     private var rows: [TranscriptRow] {
         guard let page, valid else { return [] }
         var transcript = Transcript(); transcript.replace(page)
-        if isMate { return transcript.rows(pending: nil, runID: selection.runID, forMate: true) }
-        var result = transcript.rows.filter { $0.kind != .tool && $0.kind != .subagents }
+        let projected = transcript.rows(pending: nil, runID: selection.runID, forMate: isMate, providerID: providerID)
+        if isMate { return projected }
+        var result = projected.filter { $0.kind != .tool && $0.kind != .subagents }
         result += page.toolCalls.map { call in
             TranscriptRow(id: "tool:\(call.id)", kind: .tool, text: "", date: call.createdAt, live: false,
                 deferredArtifactID: nil, tool: call)
@@ -436,7 +441,9 @@ private struct ConversationActivitySheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     ForEach(TranscriptGroup.build(rows)) { group in
-                        if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, isMate: isMate) }
+                        if group.rows.first?.kind == .tool {
+                            ChatToolBlock(session: session, rows: group.rows, browserActivityTitle: group.browserActivity?.text, isMate: isMate)
+                        }
                         else if let row = group.rows.first {
                             if row.id.hasPrefix("child-artifact:") { Text("Agent message").font(.caption.width(.expanded)).foregroundStyle(.secondary) }
                             ChatMessage(session: session, row: row, providerID: "", readContent: { if valid { fullMessage = ActivityMessageReference(id: $0) } },
@@ -469,8 +476,7 @@ private struct ConversationActivitySheet: View {
             .task { await load("refresh") }
             .sheet(item: $fullMessage) { item in if valid { NavigationStack { FullMessageView(session: session, artifactID: item.id) } } }
         }
-        .loadToolPluginIcons(session: session, runID: selection.runID,
-                             providerID: session.conversations.first { $0.id == selection.runID }?.providerId ?? "",
+        .loadToolPluginIcons(session: session, runID: selection.runID, providerID: providerID ?? "",
                              calls: page?.toolCalls ?? [], enabled: valid)
         .onChange(of: valid, initial: true) { _, valid in if !valid { fullMessage = nil; dismiss() } }
     }
@@ -543,7 +549,11 @@ private struct ChatTurnView: View {
             let copyRowID = live || lastResponse?.live == true ? nil : lastResponse?.id
             ForEach(TranscriptGroup.build(rows)) { group in
                 if let plan = group.rows.first?.plan, !isMate { ChatPlanCard(session: session, runID: forkRunID, plan: plan, providerID: providerID) }
-                else if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, live: live, isMate: isMate) }
+                else if group.rows.first?.kind == .tool {
+                    ChatToolBlock(session: session, rows: group.rows, browserActivityTitle: group.browserActivity?.text, isMate: isMate)
+                        .background(group.browserActivity.map { $0.id == searchRowID } == true ? Color.accentColor.opacity(0.08) : .clear,
+                                    in: .rect(cornerRadius: 8))
+                }
                 else if group.rows.first?.kind == .media { ChatMediaGallery(session: session, media: group.rows.flatMap(\.media)) }
                 else if let row = group.rows.first {
                     ChatMessage(session: session, row: row, providerID: providerID, readContent: readContent, isMate: isMate, openSubagents: openSubagents,

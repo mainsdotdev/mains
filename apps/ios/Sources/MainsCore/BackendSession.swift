@@ -6,7 +6,6 @@ public struct CachedSnapshot: Codable, Sendable {
     public let conversations: [Conversation]
     public let spaces: [Space]
     public let workspaces: [Workspace]
-    public let histories: [String: HistoryPage]
     public var collections: [ProjectCollection]? = nil
     public var projects: [CodeProject]? = nil
     public var gitStates: [WorkspaceGitState]? = nil
@@ -16,6 +15,11 @@ public struct CachedSnapshot: Codable, Sendable {
     public var lastSyncedAt: Date? = nil
 }
 
+public enum CachedHistoryChange: Sendable {
+    case replace(runID: String, page: HistoryPage)
+    case remove(runID: String)
+}
+
 @MainActor
 public protocol SessionStorage: AnyObject {
     var demoEnabled: Bool { get }
@@ -23,8 +27,17 @@ public protocol SessionStorage: AnyObject {
     func loadPairing() throws -> PairedBackend?
     func savePairing(_ pairing: PairedBackend) throws
     func removePairing() throws
-    func loadSnapshot() -> CachedSnapshot?
-    func saveSnapshot(_ snapshot: CachedSnapshot)
+    func loadSnapshot(backendID: String, deviceID: String) -> CachedSnapshot?
+    func loadHistory(backendID: String, deviceID: String, runID: String) async -> HistoryPage?
+    func searchSavedMessages(_ query: String, backendID: String, deviceID: String) async -> [SavedMessageMatch]
+    func offlineValues(_ key: String, prefix: Bool, backendID: String, deviceID: String) async -> [Data]
+    func saveOfflineValue(_ data: Data, key: String, backendID: String, deviceID: String)
+    func removeOfflineValues(_ prefix: String, backendID: String, deviceID: String)
+    func offlineFiles(backendID: String, deviceID: String) async -> [OfflineFile]
+    func offlineFileURL(_ file: OfflineFile, backendID: String, deviceID: String) async -> URL?
+    func saveOfflineFile(_ file: OfflineFile, copying source: URL, backendID: String, deviceID: String) async throws
+    func removeOfflineFile(_ file: OfflineFile, backendID: String, deviceID: String) async throws
+    func saveSnapshot(_ snapshot: CachedSnapshot, deviceID: String, history: CachedHistoryChange?)
     func removeSnapshot()
     func loadDraftText(_ key: TextDraftKey) throws -> String?
     func saveDraftText(_ text: String, for key: TextDraftKey) throws
@@ -38,6 +51,15 @@ public protocol SessionStorage: AnyObject {
 extension SessionStorage {
     public var demoEnabled: Bool { false }
     public func setDemoEnabled(_ enabled: Bool) {}
+    public func loadHistory(backendID: String, deviceID: String, runID: String) async -> HistoryPage? { nil }
+    public func searchSavedMessages(_ query: String, backendID: String, deviceID: String) async -> [SavedMessageMatch] { [] }
+    public func offlineValues(_ key: String, prefix: Bool, backendID: String, deviceID: String) async -> [Data] { [] }
+    public func saveOfflineValue(_ data: Data, key: String, backendID: String, deviceID: String) {}
+    public func removeOfflineValues(_ prefix: String, backendID: String, deviceID: String) {}
+    public func offlineFiles(backendID: String, deviceID: String) async -> [OfflineFile] { [] }
+    public func offlineFileURL(_ file: OfflineFile, backendID: String, deviceID: String) async -> URL? { nil }
+    public func saveOfflineFile(_ file: OfflineFile, copying source: URL, backendID: String, deviceID: String) async throws { throw MainsError.disconnected }
+    public func removeOfflineFile(_ file: OfflineFile, backendID: String, deviceID: String) async throws { throw MainsError.disconnected }
     public func loadDraftText(_ key: TextDraftKey) throws -> String? { nil }
     public func saveDraftText(_ text: String, for key: TextDraftKey) throws {}
     public func removeDraftTexts(backendID: String, deviceID: String) throws {}
@@ -208,6 +230,8 @@ public final class BackendSession {
     @ObservationIgnored private var historyTask: Task<Bool, Never>?
     @ObservationIgnored private var historySequence = 0
     @ObservationIgnored private var initialHistoryCursor: HistoryCursor?
+    @ObservationIgnored private var historySelection = UUID()
+    @ObservationIgnored private var offlineAtlasFavoritesRead: (generation: Int, revision: Int)?
     @ObservationIgnored private var historyRefreshNeeded = false
     @ObservationIgnored private var snapshotRefreshNeeded = false
     @ObservationIgnored private var generation = 0
@@ -475,6 +499,19 @@ public final class BackendSession {
               page.nextCursor.map({ (0...4).contains($0.rank) && validTimestamp($0.createdAt) && !$0.runId.isEmpty && $0.runId.utf8.count <= 800 }) ?? true,
               page.nextCursor == nil || page.nextCursor != cursor else { throw MainsError.invalidReply }
         return page
+    }
+
+    public func searchSavedConversations(_ query: String) async -> [ConversationSearchHit] {
+        guard !isDemo, let pairing else { return [] }
+        let owner = pairingOwner
+        let matches = await storage.searchSavedMessages(String(query.prefix(200)), backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId)
+        guard !Task.isCancelled, owner == pairingOwner else { return [] }
+        return matches.compactMap { hit in
+            guard let run = conversations.first(where: { $0.id == hit.runID && !$0.isArchived }) else { return nil }
+            return ConversationSearchHit(runId: run.id, title: run.displayTitle, providerId: run.providerId, mode: run.mode,
+                context: collections.first(where: { $0.id == run.collectionId })?.name,
+                updatedAt: run.updatedAt.timeIntervalSince1970 * 1000, snippet: hit.snippet, messageCursor: hit.cursor)
+        }
     }
 
     /// Activity paging has its own disposable page and never replaces the reader's transcript.
@@ -916,13 +953,60 @@ public final class BackendSession {
     }
 
     public func atlasLibrary(_ query: AtlasQuery) async throws -> AtlasLibraryPage {
+        if !isConnected { return try await savedAtlasLibrary(query) }
+        let revision = atlasRevision
         let result = try await atlasRead("atlas:mobileLibrary", fields: query.payload).decode(AtlasLibraryPage.self)
         guard result.items.count <= 50, (1...100_000).contains(result.page), Set(result.items.map(\.key)).count == result.items.count,
               result.items.allSatisfy({ validAtlasTags($0.tags ?? [], limit: 60)
                   && ($0.preview?.unicodeScalars.count ?? 0) <= 240
                   && ($0.fileName?.utf16.count ?? 0) <= 240 && ($0.mimeType?.utf8.count ?? 0) <= 256
                   && ($0.byteSize == nil || $0.byteSize! >= 0) }) else { throw MainsError.invalidReply }
+        if atlasRevision == revision && query.page == 1 && query.type == "all" && query.collectionID == nil &&
+            query.tagID == nil && query.text.isEmpty {
+            if query.scope == "favorites" {
+                saveOfflineValue(result.items, key: "atlas:favorites")
+                offlineAtlasFavoritesRead = (generation, revision)
+            }
+            else if query.scope == "all" { saveOfflineValue(result.items, key: "atlas:library") }
+        }
         return result
+    }
+
+    public func prepareOfflineAtlasFavorites() async {
+        guard !isDemo, isConnected,
+              offlineAtlasFavoritesRead?.generation != generation || offlineAtlasFavoritesRead?.revision != atlasRevision else { return }
+        var query = AtlasQuery()
+        query.scope = "favorites"
+        _ = try? await atlasLibrary(query)
+    }
+
+    private func savedAtlasLibrary(_ query: AtlasQuery) async throws -> AtlasLibraryPage {
+        let owner = pairingOwner
+        let library = await offlineValues([AtlasEntry].self, key: "atlas:library").first
+        let favorites = await offlineValues([AtlasEntry].self, key: "atlas:favorites").first
+        let visibleFavorites = favorites == nil && library == nil
+            ? await offlineValues([AtlasEntry].self, key: "atlas:visible-favorites").first : nil
+        let recent = await offlineValues(AtlasPageContent.self, key: "atlas:recent:", prefix: true).map(\.organizationEntry)
+        try Task.checkCancellation()
+        guard owner == pairingOwner, !isConnected else { throw MainsError.changedBackend }
+        guard library != nil || !(favorites ?? visibleFavorites ?? []).isEmpty || !recent.isEmpty else { throw MainsError.disconnected }
+        let list = library ?? []
+        let favoriteItems = favorites ?? visibleFavorites ?? list.filter(\.isFavorite)
+        let sourceRows = query.scope == "favorites" ? favoriteItems : list + favoriteItems + recent
+        var seen: Set<String> = []
+        let source = sourceRows.filter { seen.insert($0.pageId ?? $0.key).inserted }
+        let items = source.filter { item in
+            (query.type == "all" || item.kind == query.type) &&
+            (query.scope == "all" || query.scope == "favorites" && item.isFavorite || query.scope == "saved" && item.origin == "saved" ||
+             query.scope == "generated" && item.origin == "generated") &&
+            (query.collectionID == nil || item.collectionId == query.collectionID) &&
+            (query.tagID == nil || item.tags?.contains { $0.id == query.tagID } == true) &&
+            (query.text.isEmpty || item.title.localizedCaseInsensitiveContains(query.text) ||
+             item.tags?.contains { $0.name.localizedCaseInsensitiveContains(query.text) } == true)
+        }
+        let offset = min(max(query.page, 1), 100_000)
+        return AtlasLibraryPage(items: Array(items.dropFirst((offset - 1) * 50).prefix(50)),
+                                page: offset, hasNext: offset * 50 < items.count)
     }
 
     public var canSaveToAtlas: Bool { active && isConnected && pendingAtlasSave == nil }
@@ -938,16 +1022,50 @@ public final class BackendSession {
     }
 
     public func loadMates(mateID: String? = nil, archived: Bool = false) async throws -> MateDirectory {
+        let revision = matesRevision
         let args: [JSONValue] = archived ? [mateID.map(JSONValue.string) ?? .null, .bool(true)] : mateID.map { [.string($0)] } ?? []
         let directory = try await mateRead("assistants:mobileDirectory", args: args).decode(MateDirectory.self)
         guard directory.mates.count <= 200, directory.teams.count <= 100 else { throw MainsError.invalidReply }
+        if revision == matesRevision {
+            if let mateID {
+                if let mate = directory.mates.first(where: { $0.id == mateID }) {
+                    saveOfflineValue(mate.offlineSummary, key: "mates:profile:\(mateID):summary")
+                } else {
+                    removeOfflineValues("mates:profile:\(mateID):")
+                }
+            } else {
+                saveOfflineValue(directory.offlineSummary, key: archived ? "mates:archived" : "mates:directory")
+            }
+        }
         return directory
     }
 
     public func loadMateChats(_ mateID: String) async throws -> [MateChat] {
         let chats = try await mateRead("assistants:conversations", args: [.string(mateID)]).decode([MateChat].self)
         guard chats.count <= 100 else { throw MainsError.invalidReply }
+        saveOfflineValue(chats, key: "mates:chats:\(mateID):list")
         return chats
+    }
+
+    public func savedMates(archived: Bool = false) async -> MateDirectory? {
+        await offlineValues(MateDirectory.self, key: archived ? "mates:archived" : "mates:directory").first
+    }
+
+    public func savedMate(_ id: String) async -> Mate? {
+        let owner = pairingOwner
+        if let directory = await savedMates(), let mate = directory.mates.first(where: { $0.id == id }) { return mate }
+        guard owner == pairingOwner, !Task.isCancelled else { return nil }
+        if let directory = await savedMates(archived: true), let mate = directory.mates.first(where: { $0.id == id }) { return mate }
+        guard owner == pairingOwner, !Task.isCancelled else { return nil }
+        return await offlineValues(Mate.self, key: "mates:profile:\(id):summary").first.flatMap { $0.id == id ? $0 : nil }
+    }
+
+    public func savedMateChats(_ mateID: String) async -> [MateChat]? {
+        let owner = pairingOwner
+        if let saved = await offlineValues([MateChat].self, key: "mates:chats:\(mateID):list").first { return saved }
+        guard !isDemo, pairing != nil, owner == pairingOwner, !Task.isCancelled else { return nil }
+        let recent = conversations.filter { $0.assistantId == mateID && !$0.isArchived }
+        return recent.isEmpty ? nil : recent.map { MateChat(id: $0.id, title: $0.title, updatedAt: $0.updatedAt) }
     }
 
     public func loadMateAssignment(_ id: String, runID: String) async throws -> MateAssignment {
@@ -1320,7 +1438,14 @@ public final class BackendSession {
                       attempt.payload.objectValue["isFavorite"].map({ value["isFavorite"] == $0 }) ?? true,
                       attempt.payload.objectValue["collectionId"].map({ value.objectValue["collectionId"] == $0 }) ?? true else { throw MainsError.invalidReply }
             }
-            pendingAtlasSave = nil; atlasRevision += 1
+            pendingAtlasSave = nil
+            if let id = attempt.payload["id"].string, attempt.isTrashDeletion || attempt.isTrashChange && attempt.payload["trashed"].bool == true {
+                removeSavedAtlasPage(id)
+            }
+            if attempt.isTrashChange || attempt.isTrashDeletion || attempt.payload.objectValue["isFavorite"] != nil {
+                removeSavedAtlasFavorites()
+            }
+            atlasChanged()
             return item
         } catch {
             if attempt.owner == pairingOwner, pendingAtlasSave?.id == attempt.id {
@@ -1341,12 +1466,31 @@ public final class BackendSession {
     }
 
     public func atlasPage(_ id: String, offset: Int = 0, version: Int? = nil) async throws -> AtlasPageContent {
+        let cacheKey = offset == 0 ? "atlas:recent:\(id):page" : "atlas:page:\(id):\(offset)"
+        if !isConnected {
+            guard let copy = await offlineValues(AtlasPageContent.self, key: cacheKey).first,
+                  copy.id == id, copy.offset == offset, version == nil || version == copy.version else {
+                throw MainsError.server("This part isn’t saved on this iPhone. Connect to your computer to read it.")
+            }
+            return copy
+        }
+        let revision = atlasRevision
         var fields: [String: JSONValue] = ["id": .string(id), "offset": .number(Double(offset))]
         if let version { fields["version"] = .number(Double(version)) }
-        let page = try await atlasRead("atlas:readMobilePage", fields: fields).decode(AtlasPageContent.self)
+        let page: AtlasPageContent
+        do { page = try await atlasRead("atlas:readMobilePage", fields: fields).decode(AtlasPageContent.self) }
+        catch {
+            if case MainsError.server(let message) = error, ["Atlas page not found", "Atlas page not found or in Trash"].contains(message) {
+                removeSavedAtlasPage(id)
+            }
+            throw error
+        }
         let length = page.markdown.unicodeScalars.count
         guard page.id == id, page.offset == offset, page.version > 0, version == nil || version == page.version,
               length <= 16_384, page.nextOffset == nil || page.nextOffset == offset + length && length > 0 else { throw MainsError.invalidReply }
+        if atlasRevision == revision {
+            saveOfflineValue(page, key: cacheKey)
+        }
         return page
     }
 
@@ -1397,6 +1541,12 @@ public final class BackendSession {
     }
 
     public func loadModels(_ providerID: String, force: Bool = false) async {
+        let cacheKey = "models:\(providerID)"
+        if !isConnected {
+            if models[providerID] == nil, let saved = await offlineValues([ModelChoice].self, key: cacheKey).first,
+               models[providerID] == nil { models[providerID] = saved }
+            return
+        }
         guard let transport, isConnected, !loadingModels.contains(providerID), force || models[providerID] == nil else { return }
         let current = generation
         loadingModels.insert(providerID); modelErrors[providerID] = nil
@@ -1406,6 +1556,7 @@ public final class BackendSession {
             let choices = try list(value, key: "models", as: ModelChoice.self)
             guard current == generation, self.transport === transport else { return }
             models[providerID] = choices
+            saveOfflineValue(choices, key: cacheKey)
         } catch {
             guard current == generation, !(error is CancellationError) else { return }
             modelErrors[providerID] = error.localizedDescription
@@ -1433,9 +1584,9 @@ public final class BackendSession {
             pairing = try storage.loadPairing()
             if pairing == nil, storage.demoEnabled { try startDemo(); return }
             if pairing != nil { storage.setDemoEnabled(false) }
-            if let cached = storage.loadSnapshot(), cached.backendID == pairing?.descriptor.backendId {
+            if let pairing, let cached = storage.loadSnapshot(backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId),
+               cached.backendID == pairing.descriptor.backendId {
                 conversations = cached.conversations.map(safeConversation); spaces = cached.spaces; workspaces = cached.workspaces
-                histories = cached.histories; historyOrder = Array(histories.keys)
                 collections = cached.collections ?? []; projects = cached.projects ?? []; gitStates = cached.gitStates ?? []
                 selectedSpaceID = cached.selectedSpaceID
                 homeTargets = cached.homeTargets ?? [:]; composerSettings = cached.composerSettings ?? [:]
@@ -1547,7 +1698,7 @@ public final class BackendSession {
         initialHistoryCursor = nil
         activeEndpoint = nil; connectedDescriptor = nil; lastSyncedAt = nil
         consentRevision += 1
-        conversations = []; spaces = []; workspaces = []; histories = [:]; historyOrder = []
+        conversations = []; spaces = []; workspaces = []; histories = [:]; historyOrder = []; offlineAtlasFavoritesRead = nil
         transcript = Transcript(); viewingRunID = nil; pendingMessage = nil; pendingFork = nil; pendingAtlasSave = nil; pendingMateCommand = nil; matesRevision += 1; accountID = nil
         sending = false; stoppingRunID = nil; drafts = [:]
         homeDrafts = [:]; collections = []; projects = []; gitStates = []
@@ -1810,18 +1961,26 @@ public final class BackendSession {
     public func selectConversation(_ id: String, around cursor: HistoryCursor? = nil) async {
         historyTask?.cancel()
         historyRefreshNeeded = false
+        let selection = UUID(), owner = pairingOwner
+        historySelection = selection
         viewingRunID = id
         initialHistoryCursor = cursor
         startRemoteQueueWatch(id)
         transcript = Transcript()
         historyError = nil
         pendingApprovals = []; approvalExpiryTask?.cancel(); approvalExpiryTask = nil
-        if cursor == nil, let page = histories[id] { transcript.replace(page) }
         if cursor != nil { transcript.setFollowing(false) }
+        if (cursor == nil || !isConnected), let page = histories[id] {
+            transcript.replace(page)
+        } else if (cursor == nil || !isConnected), !isDemo, let pairing {
+            let page = await storage.loadHistory(backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId, runID: id)
+            guard !Task.isCancelled, pairingOwner == owner, historySelection == selection, viewingRunID == id else { return }
+            if let page, transcript.page == nil { transcript.replace(page) }
+        }
         if isConnected && !conversations.contains(where: { $0.id == id }) {
-            let owner = pairingOwner, current = generation
+            let current = generation
             _ = try? await readQueuedRun(id)
-            guard owner == pairingOwner, current == generation, viewingRunID == id, !Task.isCancelled else { return }
+            guard owner == pairingOwner, current == generation, historySelection == selection, viewingRunID == id, !Task.isCancelled else { return }
         }
         await loadHistory(direction: cursor == nil ? "latest" : "newer", initialCursor: cursor)
     }
@@ -1865,10 +2024,12 @@ public final class BackendSession {
                 guard !Task.isCancelled, self.generation == current, self.viewingRunID == runID, self.transport === transport,
                       actionRevision == self.conversationActionRevision else { return false }
                 if runJSON == .null {
+                    self.historySelection = UUID()
                     self.conversations.removeAll { $0.id == runID }; self.histories.removeValue(forKey: runID)
+                    self.historyOrder.removeAll { $0 == runID }
                     self.transcript = Transcript(); self.historyError = "This conversation was deleted on your computer."
                     self.pendingApprovals = []; self.approvalExpiryTask?.cancel(); self.approvalExpiryTask = nil
-                    self.saveCache(); return false
+                    self.saveCache(history: .remove(runID: runID)); return false
                 }
                 let page = try pageJSON.decode(HistoryPage.self)
                 let run = try runJSON.decode(Conversation.self)
@@ -1888,7 +2049,7 @@ public final class BackendSession {
                 self.histories[runID] = page
                 self.historyOrder.removeAll { $0 == runID }; self.historyOrder.append(runID)
                 while self.historyOrder.count > 4 { self.histories.removeValue(forKey: self.historyOrder.removeFirst()) }
-                self.saveCache()
+                self.saveCache(history: .replace(runID: runID, page: page))
                 return true
             } catch {
                 if !Task.isCancelled, self.generation == current, self.viewingRunID == runID {
@@ -1940,7 +2101,7 @@ public final class BackendSession {
     }
 
     private func event(_ channel: String, _ payload: JSONValue) {
-        if channel == "atlas:changed" { atlasRevision += 1; return }
+        if channel == "atlas:changed" { atlasChanged(); return }
         if channel == "assistants:changed" { matesRevision += 1; return }
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         if channel == "runs:realtimeEvent" {
@@ -2307,7 +2468,7 @@ public final class BackendSession {
                     }
                 }
                 retiredConversation = RetiredConversation(id: attempt.commandID, runID: attempt.runID)
-                saveCache()
+                saveCache(history: .remove(runID: attempt.runID))
             }
             // A replayed receipt may predate another device's project change.
             // Read current metadata instead of applying that old row locally.
@@ -2507,13 +2668,87 @@ public final class BackendSession {
         }
     }
 
-    private func saveCache() {
+    private func saveCache(history: CachedHistoryChange? = nil) {
         guard !isDemo, let pairing else { return }
         storage.saveSnapshot(CachedSnapshot(backendID: pairing.descriptor.backendId, conversations: conversations,
-                                           spaces: spaces, workspaces: workspaces, histories: histories,
+                                           spaces: spaces, workspaces: workspaces,
                                            collections: collections, projects: projects, gitStates: gitStates,
                                            selectedSpaceID: selectedSpaceID, homeTargets: homeTargets, composerSettings: composerSettings,
-                                           lastSyncedAt: lastSyncedAt))
+                                           lastSyncedAt: lastSyncedAt), deviceID: pairing.deviceId, history: history)
+    }
+
+    private func saveOfflineValue<Value: Encodable>(_ value: Value, key: String) {
+        guard !isDemo, let pairing, let data = try? JSONEncoder().encode(value) else { return }
+        storage.saveOfflineValue(data, key: key, backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId)
+    }
+
+    private func offlineValues<Value: Decodable>(_ type: Value.Type, key: String, prefix: Bool = false) async -> [Value] {
+        guard !isDemo, let pairing else { return [] }
+        let owner = pairingOwner
+        let values = await storage.offlineValues(key, prefix: prefix, backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId)
+        guard owner == pairingOwner, !Task.isCancelled else { return [] }
+        let decoder = JSONDecoder()
+        return values.compactMap { try? decoder.decode(type, from: $0) }
+    }
+
+    private func atlasChanged() {
+        atlasRevision += 1
+    }
+
+    private func removeSavedAtlasFavorites() {
+        for prefix in ["atlas:favorites", "atlas:visible-favorites", "atlas:library"] { removeOfflineValues(prefix) }
+    }
+
+    private func removeOfflineValues(_ prefix: String) {
+        guard !isDemo, let pairing else { return }
+        storage.removeOfflineValues(prefix, backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId)
+    }
+
+    private func removeSavedAtlasPage(_ id: String) {
+        for prefix in ["atlas:recent:\(id):", "atlas:page:\(id):"] {
+            removeOfflineValues(prefix)
+        }
+    }
+
+    public var canKeepFilesOffline: Bool { pairing != nil && !isDemo }
+
+    public func savedOfflineFiles() async -> [OfflineFile] {
+        guard canKeepFilesOffline, let pairing else { return [] }
+        let owner = pairingOwner
+        let files = await storage.offlineFiles(backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId)
+        return owner == pairingOwner && !Task.isCancelled ? files : []
+    }
+
+    public func savedOfflineOutputs(_ runID: String) async -> [OfflineFile] {
+        await savedOfflineFiles().filter { file in
+            if case .output(let id, _) = file.key { return id == runID }
+            return false
+        }
+    }
+
+    func offlineFilePreview(_ file: OfflineFile, owner: Int) async throws -> PreviewExportFile {
+        guard owner == pairingOwner, canKeepFilesOffline, let pairing else { throw MainsError.changedBackend }
+        guard let url = await storage.offlineFileURL(file, backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId) else {
+            throw MainsError.server("This file isn’t saved on this iPhone.")
+        }
+        try Task.checkCancellation()
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        let reader = try await Task.detached(priority: .userInitiated) { try PreviewExportFile(copying: url) }.value
+        try Task.checkCancellation()
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        return reader
+    }
+
+    public func keepOffline(_ file: OfflineFile, copying url: URL, owner: Int) async throws {
+        guard owner == pairingOwner, canKeepFilesOffline, let pairing else { throw MainsError.changedBackend }
+        try await storage.saveOfflineFile(file, copying: url, backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId)
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+    }
+
+    public func removeOffline(_ file: OfflineFile, owner: Int) async throws {
+        guard owner == pairingOwner, canKeepFilesOffline, let pairing else { throw MainsError.changedBackend }
+        try await storage.removeOfflineFile(file, backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId)
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
     }
 }
 

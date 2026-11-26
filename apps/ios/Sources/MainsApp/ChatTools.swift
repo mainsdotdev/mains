@@ -134,14 +134,11 @@ struct ChatToolBlock: View {
     #endif
     let session: BackendSession
     let rows: [TranscriptRow]
-    var live = false
+    var browserActivityTitle: String? = nil
     var isMate = false
-    @State private var disclosure = TranscriptDisclosure()
+    @State private var expanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var calls: [ToolCall] { rows.compactMap(\.tool) }
-    private var running: Bool { rows.contains { $0.tool != nil && $0.live } }
-    private var active: Bool { running || live }
-    private var expanded: Bool { disclosure.isExpanded(active: active) }
     var body: some View {
         let providerID = session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? ""
         if isMate {
@@ -165,17 +162,20 @@ struct ChatToolBlock: View {
             VStack(alignment: .leading, spacing: 6) {
                 if calls.count > 1 {
                     Button {
-                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { disclosure.toggle(active: active) }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { expanded.toggle() }
                     } label: {
                         HStack(spacing: 4) {
                             if !expanded {
-                                HStack(spacing: 4) {
-                                    ForEach(group.icons) { icon in
-                                        ChatToolIcon(asset: icon.asset, plugin: providerID == "codex" ? session.toolPluginIcon(icon.vendorID) : nil)
+                                if browserActivityTitle != nil { ChatToolIcon(asset: "tool-cursor", plugin: nil) }
+                                else {
+                                    HStack(spacing: 4) {
+                                        ForEach(group.icons) { icon in
+                                            ChatToolIcon(asset: icon.asset, plugin: providerID == "codex" ? session.toolPluginIcon(icon.vendorID) : nil)
+                                        }
                                     }
                                 }
                             }
-                            Text(group.summary).lineLimit(1)
+                            Text(browserActivityTitle ?? group.summary).lineLimit(1)
                             toolChevron(expanded)
                         }
                         .font(.footnote).foregroundStyle(.secondary)
@@ -187,13 +187,13 @@ struct ChatToolBlock: View {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(rows) { row in
                             if let call = row.tool {
-                                ChatToolRow(session: session, providerID: providerID, call: call, displayStatus: row.toolDisplayStatus)
+                                ChatToolRow(session: session, providerID: providerID, call: call, displayStatus: row.toolDisplayStatus,
+                                            browserActivityTitle: calls.count == 1 ? browserActivityTitle : nil)
                             }
                         }
                     }
                 }
             }
-            .onChange(of: active, initial: true) { _, active in disclosure.observe(active: active) }
         }
     }
 }
@@ -243,11 +243,15 @@ private struct ChatToolRow: View {
     let providerID: String
     let call: ToolCall
     var displayStatus: String? = nil
+    var browserActivityTitle: String? = nil
     @State private var expanded = false
     @State private var fullContent: ToolContentSelection?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         let view = ToolPresentation(call, status: displayStatus)
+        let detail = browserActivityTitle ?? view.detail
+        let showsOriginalDetail = browserActivityTitle != nil && !view.detail.isEmpty
+        let hasDetails = view.hasDetails || showsOriginalDetail
         let statFirst = view.kind == .glob || view.kind == .view
         let tint: Color = view.running ? .primary : .secondary
         VStack(alignment: .leading, spacing: 7) {
@@ -265,16 +269,16 @@ private struct ChatToolRow: View {
                     }.frame(width: 16)
                     Text(view.verb).fontWeight(.medium).foregroundStyle(tint).lineLimit(1).layoutPriority(1)
                     if statFirst { stat(view.stat) }
-                    if !view.detail.isEmpty {
+                    if !detail.isEmpty {
                         HStack(spacing: 4) {
                             if view.showsFile { fileIcon(view.detail) }
-                            Text(view.detail)
+                            Text(detail)
                                 .font(view.kind == .glob ? .system(.caption, design: .monospaced) : .footnote)
                                 .lineLimit(1)
                         }.foregroundStyle(.secondary)
                     }
                     if !statFirst { stat(view.stat) }
-                    if view.hasDetails { toolChevron(expanded) }
+                    if hasDetails { toolChevron(expanded) }
                     if view.diff && (view.added > 0 || view.removed > 0) {
                         HStack(spacing: 5) {
                             if view.added > 0 { Text("+\(view.added)").foregroundStyle(.green) }
@@ -283,13 +287,14 @@ private struct ChatToolRow: View {
                     }
                 }
                 .font(.footnote).frame(maxWidth: .infinity, minHeight: 30, alignment: .leading).contentShape(.rect)
-            }.buttonStyle(ChatPressStyle()).disabled(!view.hasDetails)
-                .accessibilityIdentifier("toolCall-\(call.id)").accessibilityValue(view.hasDetails ? (expanded ? "Expanded" : "Collapsed") : "")
+            }.buttonStyle(ChatPressStyle()).disabled(!hasDetails)
+                .accessibilityIdentifier("toolCall-\(call.id)").accessibilityValue(hasDetails ? (expanded ? "Expanded" : "Collapsed") : "")
                 .background(GeometryReader { geometry in
                     Color.clear.preference(key: ActiveToolFramesKey.self, value: view.running ? [call.id: geometry.frame(in: .global)] : [:])
                 })
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
+                    if showsOriginalDetail { Text(view.detail).foregroundStyle(.secondary) }
                     if !view.body.isEmpty || (view.showsInput && !view.input.isEmpty) {
                         ToolBody(text: view.body, diff: view.diff, command: view.kind == .command,
                                  input: view.showsInput ? view.input : nil, error: view.failed && view.showsInput)
@@ -316,21 +321,12 @@ private struct ChatToolRow: View {
     }
 
     @ViewBuilder private func fileIcon(_ detail: String) -> some View {
-        let file = TranscriptMedia.fileName(detail)
-        let name = switch (file as NSString).pathExtension.lowercased() {
-        case "swift": "swift"
-        case "ts", "mts", "cts": "typescript"
-        case "js", "mjs", "cjs": "javascript"
-        case "tsx", "jsx": "react"
-        case "json", "json5", "jsonc": "json"
-        case "py", "pyi", "pyw": "python"
-        default: ""
-        }
-        if name.isEmpty { RegistryIcon(token: "tool-file", size: 14) }
-        else {
-            Image(decorative: "registry-tool-file-" + name)
+        if let asset = WorkspaceFileArtwork.fileTypeAssetName(for: detail) {
+            Image(decorative: asset)
                 .resizable().scaledToFit().frame(width: 14, height: 14)
                 .accessibilityHidden(true)
+        } else {
+            RegistryIcon(token: "tool-file", size: 14)
         }
     }
 }

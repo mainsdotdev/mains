@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ConversationOutputSelection: Identifiable {
-    enum Source { case output(RunOutput), media(TranscriptMedia), linkedFile(RunLinkedFileSelection) }
+    enum Source { case output(RunOutput), media(TranscriptMedia), linkedFile(RunLinkedFileSelection), saved(OfflineFile) }
     let id = UUID()
     let source: Source
     let owner: Int
@@ -10,6 +10,7 @@ struct ConversationOutputSelection: Identifiable {
         case .output(let file): file.name
         case .media(let file): file.name
         case .linkedFile(let file): RunFileReference(file.href, relativeTo: file.base)?.name ?? "File"
+        case .saved(let file): file.name
         }
     }
 }
@@ -32,6 +33,7 @@ struct ConversationOutputsPane: View {
     @Binding var selection: ConversationOutputSelection?
     let close: () -> Void
     @State private var page: RunOutputsPage?
+    @State private var savedOutputs: [OfflineFile] = []
     @State private var offset = 0
     @State private var previous: [Int] = []
     @State private var loading = false
@@ -48,13 +50,18 @@ struct ConversationOutputsPane: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Menu {
-                    ForEach(page?.items ?? []) { output in
+                    ForEach(savedOutputs) { file in
+                        Button(file.name, systemImage: "arrow.down.circle") {
+                            selection = ConversationOutputSelection(source: .saved(file), owner: owner)
+                        }
+                    }
+                    ForEach(session.isConnected ? page?.items ?? [] : []) { output in
                         Button(output.name, systemImage: output.previewType == "image" ? "photo" : "doc.text") {
                             selection = ConversationOutputSelection(source: .output(output), owner: owner)
                         }.disabled(output.byteSize > output.downloadLimit || !session.isConnected)
                     }
-                    if !previous.isEmpty { Button("Previous outputs") { if let last = previous.popLast() { offset = last } }.disabled(loading) }
-                    if let next = page?.nextOffset, previous.count < 128 {
+                    if session.isConnected, !previous.isEmpty { Button("Previous outputs") { if let last = previous.popLast() { offset = last } }.disabled(loading) }
+                    if session.isConnected, let next = page?.nextOffset, previous.count < 128 {
                         Button("More outputs") { previous.append(offset); offset = next }.disabled(loading)
                     }
                 } label: {
@@ -97,15 +104,24 @@ struct ConversationOutputsPane: View {
         case .output(let output): OutputPreviewView(session: session, output: output, embedded: true)
         case .media(let media): OutputPreviewView(session: session, media: media, embedded: true)
         case .linkedFile(let file): OutputPreviewView(session: session, linkedFile: file, embedded: true)
+        case .saved(let file): OutputPreviewView(session: session, savedFile: file, embedded: true)
         }
     }
     private func load() async {
         let ticket = UUID(); readID = ticket
         let requested = offset
         loading = true; error = nil
+        savedOutputs = []
         defer { if readID == ticket { loading = false } }
         do {
             guard owner == session.ownership else { throw MainsError.changedBackend }
+            if !session.isConnected {
+                let files = await session.savedOfflineOutputs(runID)
+                guard !Task.isCancelled, ticket == readID, owner == session.ownership, !session.isConnected else { return }
+                savedOutputs = files
+                if selection == nil, let first = files.first { selection = .init(source: .saved(first), owner: owner) }
+                return
+            }
             let next = try await session.availableOutputs(runID, offset: requested)
             try Task.checkCancellation()
             guard ticket == readID, requested == offset, owner == session.ownership else { return }

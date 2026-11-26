@@ -129,7 +129,7 @@ struct SubagentDetailSheet: View {
                             DisclosureGroup("Task") { ChatMessageBody(text: prompt).padding(.top, 8) }.font(.subheadline)
                         }
                         ForEach(TranscriptGroup.build(flow.rows)) { group in
-                            if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, live: agent.state == .running) }
+                            if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows) }
                             else if let row = group.rows.first {
                                 if let artifactID = row.deferredArtifactID {
                                     SubagentStoredMessage(session: session, selection: selection, row: row, artifactID: artifactID)

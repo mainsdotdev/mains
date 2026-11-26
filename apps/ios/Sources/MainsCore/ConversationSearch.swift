@@ -1,5 +1,11 @@
 import Foundation
 
+public struct SavedMessageMatch: Sendable {
+    public let runID: String
+    public let snippet: String
+    public let cursor: HistoryCursor
+}
+
 public struct ConversationSearchCursor: Codable, Equatable, Sendable {
     public let rank: Int
     public let createdAt: Double

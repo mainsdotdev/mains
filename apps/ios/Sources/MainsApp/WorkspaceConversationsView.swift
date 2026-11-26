@@ -259,7 +259,7 @@ struct SearchView: View {
             } else if hasNoResults {
                 EmptyStateLayout {
                     if savedOnly {
-                        Text("Reconnect to search all conversations and messages. Showing saved chats.")
+                        Text("Showing chats and messages saved on this iPhone.")
                             .font(.footnote).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 16).padding(.top, 28)
@@ -274,34 +274,33 @@ struct SearchView: View {
                     TimelineView(.periodic(from: .now, by: 60)) { clock in
                         LazyVStack(alignment: .leading, spacing: 0) {
                             if savedOnly {
-                                Text(visibleError ?? "Reconnect to search all conversations and messages. Showing saved chats.")
+                                Text(visibleError ?? "Showing chats and messages saved on this iPhone.")
                                     .font(.footnote).foregroundStyle(.secondary).padding(.vertical, 12)
                                 if visibleError != nil { Button("Try again") { Task { await search() } }.disabled(!session.isConnected || loading) }
                                 if !conversations.isEmpty { sectionTitle("Saved chats") }
-                                ForEach(conversations) { run in
+                                ForEach(conversations.filter { run in !visibleHits.contains { $0.runId == run.id } }) { run in
                                     Button { dismiss(to: .conversation(run.id)) } label: {
                                         resultRow(title: run.displayTitle, context: place(of: run), snippet: nil, date: run.updatedAt, now: clock.date)
                                     }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-run-\(run.id)")
                                 }
-                            } else {
-                                if loading && visibleHits.isEmpty || resultQuery != needle {
-                                    ContentSkeleton(label: "Searching conversations and messages…")
-                                }
-                                if !visibleHits.isEmpty { sectionTitle("Chats and messages") }
-                                ForEach(visibleHits) { hit in
-                                    Button {
-                                        if let cursor = hit.messageCursor { dismiss(to: .searchMessage(hit.runId, cursor)) }
-                                        else { dismiss(to: .conversation(hit.runId)) }
-                                    } label: {
-                                        resultRow(title: hit.title, context: [hit.context, Experience.label(hit.mode)].compactMap { $0 }.joined(separator: " · "),
-                                                  snippet: hit.snippet, date: Date(timeIntervalSince1970: hit.updatedAt / 1000), now: clock.date)
-                                    }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-run-\(hit.runId)")
-                                }
-                                if nextCursor != nil && resultQuery == needle {
-                                    Button("More results") { Task { await loadMore() } }
-                                        .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44).disabled(loading)
-                                        .accessibilityIdentifier("loadMoreSearchResults")
-                                }
+                            }
+                            if loading && visibleHits.isEmpty || resultQuery != needle {
+                                ContentSkeleton(label: "Searching conversations and messages…")
+                            }
+                            if !visibleHits.isEmpty { sectionTitle(savedOnly ? "Saved messages" : "Chats and messages") }
+                            ForEach(visibleHits) { hit in
+                                Button {
+                                    if let cursor = hit.messageCursor { dismiss(to: .searchMessage(hit.runId, cursor)) }
+                                    else { dismiss(to: .conversation(hit.runId)) }
+                                } label: {
+                                    resultRow(title: hit.title, context: [hit.context, Experience.label(hit.mode)].compactMap { $0 }.joined(separator: " · "),
+                                              snippet: hit.snippet, date: Date(timeIntervalSince1970: hit.updatedAt / 1000), now: clock.date)
+                                }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-run-\(hit.runId)")
+                            }
+                            if !savedOnly && nextCursor != nil && resultQuery == needle {
+                                Button("More results") { Task { await loadMore() } }
+                                    .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44).disabled(loading)
+                                    .accessibilityIdentifier("loadMoreSearchResults")
                             }
                             if !workspaces.isEmpty {
                                 sectionTitle("Workspaces").padding(.top, 16)
@@ -372,17 +371,22 @@ struct SearchView: View {
         guard isPresented else { return }
         let ticket = UUID(), query = needle, owner = session.ownership
         requestID = ticket; resultQuery = query; hits = []; nextCursor = nil; searchError = nil; loading = false
-        guard !query.isEmpty, session.isConnected else { return }
+        guard !query.isEmpty else { return }
         loading = true
         defer { if requestID == ticket { loading = false } }
         do {
             if debounce { try await Task.sleep(for: .milliseconds(300)) }
-            let page = try await session.searchConversations(query)
+            let page: ConversationSearchPage
+            if session.isConnected { page = try await session.searchConversations(query) }
+            else { page = ConversationSearchPage(items: await session.searchSavedConversations(query), nextCursor: nil) }
             try Task.checkCancellation()
             guard requestID == ticket, needle == query, owner == session.ownership else { return }
             hits = page.items; nextCursor = page.nextCursor
         } catch {
             if !Task.isCancelled, requestID == ticket, owner == session.ownership {
+                let local = await session.searchSavedConversations(query)
+                guard !Task.isCancelled, requestID == ticket, needle == query, owner == session.ownership else { return }
+                hits = local
                 searchError = "Couldn’t search the computer. Reconnect or update Mains on your computer, then try again."
             }
         }

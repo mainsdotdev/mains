@@ -103,7 +103,7 @@ struct ChatMediaGallery: View {
                         if file.available { Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary) }
                     }.padding(14).frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
                         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 16))
-                }.buttonStyle(ChatPressStyle()).disabled(!file.available || !session.isConnected)
+                }.buttonStyle(ChatPressStyle()).disabled(!file.available)
                     .frame(maxWidth: prompt ? 296 : .infinity, alignment: .trailing)
                     .accessibilityIdentifier("transcriptMedia-" + file.id)
             }
@@ -134,7 +134,7 @@ private struct ChatImageTile: View {
     @Environment(\.conversationPaneVisible) private var paneVisible
     var body: some View {
         Button {
-            if image != nil { open() } else { retry += 1 }
+            if image != nil || !session.isConnected { open() } else { retry += 1 }
         } label: {
             ChatImageFrame(widthLimit: maxWidth, heightLimit: maxHeight, fixedHeight: fixedHeight) {
               ZStack {
@@ -153,7 +153,7 @@ private struct ChatImageTile: View {
             }
             .clipShape(.rect(cornerRadius: 18))
         }
-        .buttonStyle(ChatPressStyle()).disabled(!media.available || !session.isConnected)
+        .buttonStyle(ChatPressStyle()).disabled(!media.available)
         .accessibilityLabel(media.name).accessibilityIdentifier("transcriptImage-" + media.id)
         .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
         .task(id: "\(session.ownership):\(session.isConnected):\(media.runID):\(media.id):\(retry):\(visible):\(paneVisible)") {

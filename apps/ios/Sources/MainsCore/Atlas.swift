@@ -23,7 +23,7 @@ public struct AtlasFileReference: Codable, Hashable, Sendable {
     public static func saved(_ id: String) -> Self { Self(itemId: id) }
 }
 
-public struct AtlasEntry: Decodable, Identifiable, Sendable {
+public struct AtlasEntry: Codable, Identifiable, Sendable {
     public var id: String { key }
     public let key: String
     public let kind: String
@@ -124,10 +124,10 @@ public struct AtlasTrashPage: Decodable, Sendable {
     public let hasNext: Bool
     public let canDeletePermanently: Bool?
 }
-public struct AtlasPageOrganization: Decodable, Sendable {
+public struct AtlasPageOrganization: Codable, Sendable {
     public let collectionId: String?
 }
-public struct AtlasPageContent: Decodable, Sendable {
+public struct AtlasPageContent: Codable, Sendable {
     public let id: String
     public let title: String
     public let icon: String?

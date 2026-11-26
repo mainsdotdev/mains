@@ -382,7 +382,10 @@ underlying tooling.
   This requires an updated computer with the narrow `atlas:*Mobile*` readers
   (`mobileLibrary`, `readMobilePage`, `describeMobileFile`, `readMobileFile`, `readMobileImage`). Broad
   Atlas mutations/path resolvers remain unavailable to paired phones. Library
-  metadata and Page content stay out of the snapshot cache; stale pairing/connection
+  library and favorites first pages and recently read Markdown parts are available
+  read-only offline. Atlas metadata, model lists, and Mate directory summaries and
+  chat titles share a 2 MiB cache budget. Covers and
+  thumbnails are loaded from the connected computer. Stale pairing/connection
   reads cannot populate another session. Atlas changes refresh an open library,
   while a Page refresh explicitly restarts its reading version. Demo includes all
   four content kinds and a prepared generated file without a network connection.
@@ -668,12 +671,13 @@ underlying tooling.
   identity for **Check delivery**; this is not permission to resend after the
   backend's seven-day receipt retention.
 - The disposable SQLite cache restores up to 100 recent conversation descriptors
-  and the viewed older conversation on launch. It loads each of the four retained
-  history pages only when its conversation opens. Messages, tool calls, and turns
+  and the viewed older conversation on launch. It opens up to 20 saved history
+  pages under a 32 MiB SQLite file budget and retains four in memory. Search finds
+  saved foreground messages while the computer is unavailable. Messages, tool calls, and turns
   occupy separate tables. Each refresh replaces that conversation's rows and
   paging boundaries in one transaction. Live text stays in memory.
-  Updating from the JSON cache starts with an empty conversation cache that
-  repopulates after connecting to the computer.
+  A cache schema change can rebuild the cache, which repopulates after connecting
+  to the computer.
 - System typography, Dynamic Type, native navigation/sheets, selectable inline
   Markdown, headings, ordered/nested/task lists, quotes, horizontally scrollable GFM tables
   and fenced code, interactive keyboard dismissal
@@ -685,6 +689,9 @@ underlying tooling.
   64 KB UTF-8 pages; documents/images use Quick Look. ZIP and other unsupported
   formats still download and expose Share / Save to Files. Partial files are
   removed on failure/cancellation and temporary files are removed on close.
+  Use **Keep Offline** in the file options to retain a verified original. The
+  copy can be opened or removed in Settings → Offline files. This file cache has
+  a separate 200 MiB quota and is cleared when forgetting the paired computer.
   The output list keeps one page of up to 100 descriptors.
 - Local Markdown links resolve selected outputs by name in their conversation;
   duplicate names direct the user to Outputs. Work/Chat Markdown references also

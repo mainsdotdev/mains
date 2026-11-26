@@ -77,6 +77,12 @@ struct ChatMessage: View {
                 }
             case .notice:
                 Label(row.text, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
+            case .browserActivity:
+                HStack(spacing: 6) {
+                    RegistryIcon(token: "tool-cursor", size: 16).accessibilityHidden(true)
+                    Text(row.text).lineLimit(1)
+                }.font(.footnote).foregroundStyle(.secondary).frame(minHeight: TranscriptRowMetrics.summaryHeight)
+                    .accessibilityIdentifier(row.id)
             case .media: ChatMediaGallery(session: session, media: row.media)
             case .tool: EmptyView()
             case .subagents: SubagentSummaryRow(text: row.text, open: openSubagents)

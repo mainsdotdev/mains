@@ -2,7 +2,7 @@ import Foundation
 
 public struct TranscriptRow: Identifiable, Equatable, Sendable {
     public var plan: PlanProposal? { tool.flatMap(PlanProposal.init) }
-    public enum Kind: String, Sendable { case prompt, response, tool, notice, media, subagents }
+    public enum Kind: String, Sendable { case prompt, response, tool, notice, media, subagents, browserActivity }
     public let id: String
     public let kind: Kind
     public let text: String
@@ -135,6 +135,11 @@ public struct Transcript: Sendable {
         guard event["kind"].string == "report", ["agent_message_streaming", "assistant.message_delta"].contains(metadata["source"].string ?? "") else { return }
         guard !voiceNarration(metadata) else { return }
         guard let text = event["content"].string, !text.isEmpty else { streams.removeValue(forKey: id); return }
+        // The standalone Codex commentary becomes a title once its history row arrives.
+        if id.hasPrefix("codex-msg-"), metadata["source"].string == "agent_message_streaming", Self.isBrowserActivityPreview(text) {
+            streams.removeValue(forKey: id)
+            return
+        }
         clearThoughts(); suppressStoredThoughts = true
         streams[id] = TranscriptRow(id: "stream:" + id, kind: .response, text: text,
                                     date: streams[id]?.date ?? Date(timeIntervalSince1970: (payload["ts"].number ?? 0) / 1000),
@@ -216,7 +221,7 @@ public struct Transcript: Sendable {
 
     public var rows: [TranscriptRow] { projectedRows(forMate: false) }
 
-    private func projectedRows(forMate: Bool) -> [TranscriptRow] {
+    private func projectedRows(forMate: Bool, providerID: String? = nil) -> [TranscriptRow] {
         let artifacts = page?.artifacts ?? []
         let asyncHistory = forMate ? MateQuestion.asyncHistory(artifacts) : (questions: [:], representedReplies: [])
         let hiddenImageCopies = TranscriptMedia.hiddenGeneratedImageCopies(in: artifacts)
@@ -244,10 +249,19 @@ public struct Transcript: Sendable {
                 } else { kind = .prompt }
                 media = TranscriptMedia.prompt(metadata, runID: artifact.runId)
             case "report", "result", "command_result":
-                kind = .response
-                if metadata["source"].string == "assistant_assignment", let id = metadata["assignmentId"].string {
-                    mateTask = MateAssignmentLink(id: id, runID: artifact.runId)
-                    text = "Mate request"
+                let codex = providerID.map { $0 == "codex" } ?? (metadata["streamId"].string?.hasPrefix("codex-msg-") == true)
+                let source = metadata["source"].string
+                if artifact.kind == "report", codex, source == "agent_message_streaming", Self.isBrowserActivityPreview(text) { return nil }
+                if artifact.kind == "report", codex, source == "agent_message", metadata["messagePhase"].string == "commentary",
+                   let title = Self.browserActivityTitle(text) {
+                    kind = .browserActivity
+                    text = title
+                } else {
+                    kind = .response
+                    if source == "assistant_assignment", let id = metadata["assignmentId"].string {
+                        mateTask = MateAssignmentLink(id: id, runID: artifact.runId)
+                        text = "Mate request"
+                    }
                 }
             case "log":
                 guard metadata["level"].string == "error" || forMate && metadata["level"].string == "warn" else { return nil }
@@ -298,7 +312,7 @@ public struct Transcript: Sendable {
         // Match the desktop Mate transcript while leaving the full page available to approvals and history.
         guard forMate else { return projected }
         return projected.filter { row in
-            if row.kind == .subagents { return false }
+            if row.kind == .subagents || row.kind == .browserActivity { return false }
             guard let tool = row.tool else { return true }
             return tool.isMateQuestion || (tool.metadata?["mcpApp"] ?? .null) != .null
         }
@@ -334,13 +348,29 @@ public struct Transcript: Sendable {
 
     /// The optimistic prompt occupies its chronological slot from the first frame,
     /// then the durable artifact takes over that same identity without a second row.
-    public func rows(pending: PendingMessage?, runID: String, forMate: Bool = false) -> [TranscriptRow] {
-        var result = projectedRows(forMate: forMate)
+    public func rows(pending: PendingMessage?, runID: String, forMate: Bool = false, providerID: String? = nil) -> [TranscriptRow] {
+        var result = projectedRows(forMate: forMate, providerID: providerID)
         guard !isHistorical, let pending, !pending.isSteering, !pending.isQueueOwned, pending.runID == runID, page?.artifacts.contains(where: pending.matches) != true else { return result }
         result.append(TranscriptRow(id: "pending:" + pending.id, kind: .prompt, text: pending.text, date: pending.date,
                                     live: false, deferredArtifactID: nil, contextSkills: pending.contextSkills,
                                     delivery: pending.status, pendingAttachments: pending.attachments))
         return result.sorted(by: Self.ordered)
+    }
+
+    private static let browserActivityPrefix = #"::browser-complete{title=""#
+
+    private static func isBrowserActivityPreview(_ text: String) -> Bool {
+        let candidate = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !candidate.contains(where: \.isNewline) && (candidate.hasPrefix(browserActivityPrefix) ||
+            (candidate.hasPrefix("::") && browserActivityPrefix.hasPrefix(candidate)))
+    }
+
+    private static func browserActivityTitle(_ text: String) -> String? {
+        guard text.hasPrefix(browserActivityPrefix),
+              let match = text.wholeMatch(of: #/^::browser-complete\{title="((?:[^"\\\r\n]|\\["\\])+)"\}\s*/#) else { return nil }
+        let title = match.1.replacingOccurrences(of: #"\\(["\\])"#, with: "$1", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? nil : title
     }
 
     private static func turnID(_ metadata: JSONValue) -> Int? {

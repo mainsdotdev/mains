@@ -57,6 +57,7 @@ struct AtlasView: View {
     @Environment(\.calendar) private var calendar
     @State private var query = AtlasQuery()
     @State private var loadedLibrary: (query: AtlasQuery, owner: Int, page: AtlasLibraryPage)?
+    @State private var failedRead: LibraryRead?
     @State private var error: String?
     @State private var loading = false
     @State private var reload = 0
@@ -82,8 +83,7 @@ struct AtlasView: View {
         max(0, viewportHeight - (titleFrame?.height ?? 0) - (filterHeaderFrame?.height ?? 0))
     }
     private var library: AtlasLibraryPage? {
-        guard let loadedLibrary, loadedLibrary.query == query, loadedLibrary.owner == session.ownership,
-              session.isConnected else { return nil }
+        guard let loadedLibrary, loadedLibrary.query == query, loadedLibrary.owner == session.ownership else { return nil }
         return loadedLibrary.page
     }
     private var libraryOwner: Int? { library == nil ? nil : loadedLibrary?.owner }
@@ -224,11 +224,14 @@ struct AtlasView: View {
 
     @ViewBuilder private var libraryRows: some View {
         Group {
-            if !session.isConnected {
+            if !session.isConnected && library == nil && failedRead == loadKey {
                 DisconnectedState(message: "Connect to your computer to browse Atlas.")
                     .frame(minHeight: emptyContentHeight).listRowInsets(EdgeInsets())
-            } else if library == nil, error == nil {
+            } else if library == nil, failedRead != loadKey {
                 librarySkeleton
+            }
+            if !session.isConnected, library != nil {
+                Text("Showing Atlas items saved on this iPhone.").font(.footnote).foregroundStyle(.secondary)
             }
             if library == nil, session.pendingAtlasSave?.isUpdate == true, session.pendingAtlasSave?.status == .sending {
                 Text("Updating item…").foregroundStyle(.secondary)
@@ -472,19 +475,22 @@ struct AtlasView: View {
     private func load(_ request: LibraryRead) async {
         guard request == loadKey, !Task.isCancelled else { return }
         let ticket = UUID(); readID = ticket
-        if let loadedLibrary, loadedLibrary.owner != request.owner { self.loadedLibrary = nil }
+        if loadedLibrary?.owner != request.owner { loadedLibrary = nil }
+        failedRead = nil
         loading = true; error = nil
         defer { if readID == ticket { loading = false } }
-        guard request.connection == .connected else { return }
         do {
             // Keep the loaded page mounted while an Atlas change refreshes the same query.
-            let debounce = library == nil ? 250 : 75
-            try await Task.sleep(for: .milliseconds(debounce))
+            if request.connection == .connected { try await Task.sleep(for: .milliseconds(library == nil ? 250 : 75)) }
             let result = try await session.atlasLibrary(request.query)
             guard readID == ticket, request == loadKey, !Task.isCancelled else { return }
             loadedLibrary = (request.query, request.owner, result)
+            if request.query == AtlasQuery(), request.connection == .connected { await session.prepareOfflineAtlasFavorites() }
         } catch {
-            if readID == ticket, request == loadKey, !Task.isCancelled { self.error = error.localizedDescription }
+            if readID == ticket, request == loadKey, !Task.isCancelled {
+                failedRead = request
+                self.error = error.localizedDescription
+            }
         }
     }
 }
@@ -653,12 +659,9 @@ struct AtlasPageView: View {
         GeometryReader { geometry in
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-              if session.isConnected, let content, error == nil { pageHeader(content, width: geometry.size.width) }
+              if let content, error == nil { pageHeader(content, width: geometry.size.width) }
               VStack(alignment: .leading, spacing: 20) {
-                if !session.isConnected {
-                    DisconnectedState(message: "Connect to your computer to read this page.")
-                        .frame(minHeight: max(0, geometry.size.height - 24))
-                } else if let error {
+                if let error {
                     EmptyStateView(artwork: .pages, title: "Couldn’t read page", description: Text(error)) {
                         Button("Refresh page", action: refresh)
                     }
@@ -691,7 +694,7 @@ struct AtlasPageView: View {
         }
         .coordinateSpace(.named(Self.titleViewport))
         .background(Color(.systemBackground))
-        .navigationHeaderFade(coversSafeAreaAtRest: content?.coverFileId == nil || error != nil)
+        .navigationHeaderFade(coversSafeAreaAtRest: !session.isConnected || content?.coverFileId == nil || error != nil)
         .scrollingNavigationTitle("\(error == nil ? content?.title ?? "" : "")")
         .toolbarRole(.navigationStack)
         .toolbar {
@@ -725,7 +728,7 @@ struct AtlasPageView: View {
             }
             if !previous.isEmpty || content?.nextOffset != nil {
                 HStack {
-                    Button("Previous") { if let last = previous.popLast() { offset = last } }.disabled(previous.isEmpty || content == nil)
+                    Button("Previous") { if let last = previous.popLast() { offset = last } }.disabled(previous.isEmpty)
                     Spacer()
                     Text("Part \(previous.count + 1)").font(.caption).foregroundStyle(.secondary)
                     Spacer()
@@ -772,7 +775,6 @@ struct AtlasPageView: View {
         .task(id: key) {
             content = nil; error = nil; pageOwner = nil
             let owner = session.ownership
-            guard session.isConnected else { return }
             do {
                 let result = try await session.atlasPage(pageID, offset: offset, version: version)
                 try Task.checkCancellation()
@@ -855,8 +857,9 @@ struct AtlasPageView: View {
     }
     private func pageHeader(_ page: AtlasPageContent, width: CGFloat) -> some View {
         let icon = page.icon.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        let cover = session.isConnected ? page.coverFileId : nil
         return VStack(alignment: .leading, spacing: 0) {
-            if let cover = page.coverFileId {
+            if let cover {
                 AtlasPageCoverView(session: session, pageID: pageID, coverFileID: cover)
                     .frame(height: min(280, max(208, width * 0.56)))
             }
@@ -864,11 +867,11 @@ struct AtlasPageView: View {
                 if let icon { RegistryIcon(token: icon, size: iconSize, tint: .primary) }
                 // A cover extends the scroll view beneath the navigation bar.
                 PageTitle("\(page.title)", accessibilityID: "atlasPageTitle",
-                          viewport: page.coverFileId == nil ? nil : Self.titleViewport)
+                          viewport: cover == nil ? nil : Self.titleViewport)
                     .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             }
             .padding(.horizontal, 24)
-            .padding(.top, page.coverFileId != nil ? (icon != nil ? -28 : 20) : (icon != nil ? 24 : 12))
+            .padding(.top, cover != nil ? (icon != nil ? -28 : 20) : (icon != nil ? 24 : 12))
             .padding(.bottom, 24)
         }
     }
@@ -1133,6 +1136,7 @@ private struct AtlasBookmarkView: View {
     private func load(dismissIfMissing: Bool = false) async {
         let ticket = UUID(); readID = ticket; loading = true; error = nil
         defer { if readID == ticket { loading = false } }
+        guard session.isConnected else { return }
         do {
             guard owner == session.ownership, let id = entry.savedIdentity else { throw MainsError.changedBackend }
             let item = try await session.readAtlasBookmark(id)
@@ -1190,23 +1194,26 @@ struct AtlasFilePreview: View {
     var openConversation: ((String) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var file: AtlasFile?
+    @State private var offlineFile: OfflineFile?
+    @State private var offlinePreview: PreviewExportFile?
     @State private var url: URL?
     @State private var folder: URL?
     @State private var error: String?
     @State private var progress = 0.0
     @State private var retry = 0
     @State private var readID = UUID()
+    private var previewType: String { file?.previewType ?? offlineFile?.previewType ?? "unsupported" }
     var body: some View {
-        FilePreviewNavigation(name: file?.name ?? "Atlas file", url: url, previewType: file?.previewType ?? "unsupported",
+        FilePreviewNavigation(name: file?.name ?? offlineFile?.name ?? "Atlas file", url: url, previewType: previewType,
                               session: session, source: file.flatMap(AtlasSaveSource.file), owner: selection.owner,
                               savedInAtlas: file != nil && selection.reference.itemId != nil && file?.canSaveToLibrary != true,
                               openSourceChat: selection.sourceRunID.flatMap { id in openConversation.map { open in { open(id) } } },
-                              reload: { retry += 1 }) {
+                              reload: { retry += 1 }, offlineFile: offlineFile) {
             Group {
-                if let url, let file {
-                    if file.previewType == "image" { FullScreenFileImage(url: url) }
-                    else if ["markdown", "text"].contains(file.previewType) { LocalTextFilePreview(url: url, markdown: file.previewType == "markdown") }
-                    else if file.previewType != "unsupported", QLPreviewController.canPreview(url as NSURL) { OutputQuickLook(url: url).accessibilityIdentifier("atlasFilePreview") }
+                if let url {
+                    if previewType == "image" { FullScreenFileImage(url: url) }
+                    else if ["markdown", "text"].contains(previewType) { LocalTextFilePreview(url: url, markdown: previewType == "markdown") }
+                    else if previewType != "unsupported", QLPreviewController.canPreview(url as NSURL) { OutputQuickLook(url: url).accessibilityIdentifier("atlasFilePreview") }
                     else {
                         EmptyStateView(artwork: .documents, title: "File ready",
                                        description: Text("Use Share to save or open this file in another app.")).centered
@@ -1226,12 +1233,23 @@ struct AtlasFilePreview: View {
         .onDisappear { readID = UUID(); cleanup() }
         .onChange(of: session.ownership) { _, _ in readID = UUID(); cleanup(); dismiss() }
     }
-    private func cleanup() { if let folder { try? FileManager.default.removeItem(at: folder) }; folder = nil; url = nil }
+    private func cleanup() { if let folder { try? FileManager.default.removeItem(at: folder) }; folder = nil; url = nil; offlinePreview = nil }
     private func download() async {
         let ticket = UUID(); readID = ticket; cleanup(); error = nil; progress = 0
+        file = nil; offlineFile = nil
         var destination: URL?
         do {
             guard selection.owner == session.ownership else { throw MainsError.changedBackend }
+            if !session.isConnected {
+                let key = OfflineFileKey.atlas(selection.reference)
+                guard let saved = await session.savedOfflineFiles().first(where: { $0.key == key }) else {
+                    throw MainsError.server("This file isn’t saved on this iPhone.")
+                }
+                let reader = try await session.offlineFilePreview(saved, owner: selection.owner)
+                guard ticket == readID else { return }
+                offlinePreview = reader; offlineFile = saved; url = reader.url
+                return
+            }
             let descriptor = try await session.describeAtlasFile(selection.reference)
             try Task.checkCancellation()
             guard readID == ticket else { return }
@@ -1244,7 +1262,7 @@ struct AtlasFilePreview: View {
             try Task.checkCancellation()
             guard ticket == readID else { if let destination { try? FileManager.default.removeItem(at: destination) }; return }
             try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: target.path)
-            url = target
+            offlineFile = OfflineFile(descriptor); url = target
         } catch {
             if let destination { try? FileManager.default.removeItem(at: destination) }
             if ticket == readID { cleanup(); if !Task.isCancelled { self.error = error.localizedDescription } }

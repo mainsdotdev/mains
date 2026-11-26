@@ -83,7 +83,8 @@ private struct MateDirectoryView: View {
     let openMate: (String) -> Void
     var newMate: (([MateTeam]) -> Void)? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @State private var directory: MateDirectory?
+    @State private var loadedDirectory: (owner: Int, value: MateDirectory)?
+    @State private var checkedOfflineOwner: Int?
     @State private var error: String?
     @State private var reload = 0
     @State private var query = ""
@@ -91,7 +92,8 @@ private struct MateDirectoryView: View {
     private var canCreateMate: Bool {
         newMate != nil && directory != nil && session.isConnected && !session.mateCommandPending
     }
-    private var disconnectedWithoutMates: Bool { !session.isConnected && directory?.mates.isEmpty != false }
+    private var directory: MateDirectory? { loadedDirectory?.owner == session.ownership ? loadedDirectory?.value : nil }
+    private var disconnectedWithoutMates: Bool { !session.isConnected && directory == nil && checkedOfflineOwner == session.ownership }
     private var canChangeMatePin: Bool { session.isConnected && session.supportsMatePinning && !session.mateCommandPending }
 
     var body: some View {
@@ -373,11 +375,19 @@ private struct MateDirectoryView: View {
 
     private func load() async {
         let owner = session.ownership
-        guard session.isConnected else { return }
+        if !session.isConnected {
+            let saved = await session.savedMates(archived: archived)
+            guard !Task.isCancelled, owner == session.ownership, !session.isConnected else { return }
+            if let saved { loadedDirectory = (owner, saved) }
+            checkedOfflineOwner = owner
+            error = nil
+            return
+        }
+        checkedOfflineOwner = nil
         do {
             let result = try await session.loadMates(archived: archived)
             guard !Task.isCancelled, owner == session.ownership else { return }
-            directory = result
+            loadedDirectory = (owner, result)
             error = nil
         } catch {
             if !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription }
@@ -1011,6 +1021,8 @@ struct MateView: View {
     private enum ProfileField: Hashable { case description, instructions }
     @State private var mate: Mate?
     @State private var chats: [MateChat] = []
+    @State private var loadedChatList = false
+    @State private var checkedOfflineOwner: Int?
     @State private var answer = ""
     @State private var submittedSetup: SetupReply?
     @State private var editedProfile: MateProfile?
@@ -1035,10 +1047,10 @@ struct MateView: View {
     var body: some View {
         let title = showsSetup ? Text(mate?.name ?? "Mate") : Text("Chats")
         Group {
-            if !session.isConnected {
+            if !session.isConnected, mate == nil, checkedOfflineOwner == session.ownership {
                 DisconnectedState(message: "Connect to your computer to view this Mate’s chats.")
                     .centered.background(Color(.systemGroupedBackground))
-            } else if showsSetup, let mate, let welcome = mate.welcome, let question = welcome.question, let setup = question.profileSetup {
+            } else if session.isConnected, showsSetup, let mate, let welcome = mate.welcome, let question = welcome.question, let setup = question.profileSetup {
                 setupConversation(mate, welcome, question, setup)
             } else {
                 mateDetails
@@ -1083,7 +1095,10 @@ struct MateView: View {
                     if session.mateCommandUncertain { checkMateChange }
                     if let mate {
                         mateSummary(mate)
-                        if mate.ready, let welcome = mate.welcome { welcomeSection(mate, welcome) }
+                        if !session.isConnected {
+                            Text("Showing chats saved on this iPhone.").font(.footnote).foregroundStyle(.secondary)
+                        }
+                        if session.isConnected, mate.ready, let welcome = mate.welcome { welcomeSection(mate, welcome) }
                         if mate.ready || mate.isArchived == true {
                             VStack(alignment: .leading, spacing: 0) {
                                 if !composerFocused {
@@ -1094,7 +1109,7 @@ struct MateView: View {
                             .animation(.easeInOut(duration: 0.2), value: composerFocused)
                             .allowsHitTesting(!composerFocused)
                             .accessibilityHidden(composerFocused)
-                        } else {
+                        } else if session.isConnected {
                             ContentSkeleton(label: "Loading profile setup…", layout: .text)
                         }
                     } else if loading {
@@ -1111,7 +1126,7 @@ struct MateView: View {
             }, isEnabled: composerFocused)
         }
         .composerInset { editorExpanded in
-            if let mate, mate.ready {
+            if session.isConnected, let mate, mate.ready {
                 firstTaskComposer(mate, editorExpanded: editorExpanded) { composerFocused = $0 }
                     .onDisappear { composerFocused = false }
             }
@@ -1148,7 +1163,8 @@ struct MateView: View {
         return TimelineView(.periodic(from: .now, by: 60)) { clock in
             VStack(alignment: .leading, spacing: 16) {
                 if history.isEmpty {
-                    Text("No chats yet").font(.subheadline).foregroundStyle(.secondary)
+                    Text(!session.isConnected && !loadedChatList ? "No chats saved on this iPhone" : "No chats yet")
+                        .font(.subheadline).foregroundStyle(.secondary)
                         .padding(.horizontal, 4)
                 }
                 ForEach(days.keys.sorted(by: >), id: \.self) { day in
@@ -1427,8 +1443,23 @@ struct MateView: View {
         catch { if owner == session.ownership { self.error = error.localizedDescription } }
     }
     private func load() async {
-        guard session.isConnected else { return }
         let owner = session.ownership
+        if !session.isConnected {
+            let savedMate = await session.savedMate(mateID)
+            guard !Task.isCancelled, owner == session.ownership, !session.isConnected else { return }
+            if mate == nil { mate = savedMate }
+            if mate != nil {
+                let savedChats = await session.savedMateChats(mateID)
+                guard !Task.isCancelled, owner == session.ownership, !session.isConnected else { return }
+                if let savedChats { chats = savedChats; loadedChatList = true }
+            }
+            checkedOfflineOwner = owner
+            loading = false
+            error = nil
+            return
+        }
+        checkedOfflineOwner = nil
+        loading = true
         do {
             let directory = try await session.loadMates(mateID: mateID)
             guard !Task.isCancelled, owner == session.ownership else { return }
@@ -1449,6 +1480,7 @@ struct MateView: View {
                 let currentChats = try await session.loadMateChats(mateID)
                 guard !Task.isCancelled, owner == session.ownership else { return }
                 chats = currentChats
+                loadedChatList = true
             }
             error = nil
             loading = false

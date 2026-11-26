@@ -14,26 +14,52 @@ enum WorkspaceFileArtwork {
                 .withTintColor(.systemOrange, renderingMode: .alwaysOriginal)
         }
         if let asset = fileTypeAssetName(for: file.name), let image = UIImage(named: asset) {
-            return image.withRenderingMode(.alwaysOriginal)
+            return image.renderingMode == .alwaysTemplate
+                ? image.withTintColor(tint, renderingMode: .alwaysOriginal)
+                : image.withRenderingMode(.alwaysOriginal)
         }
         return (UIImage(named: "registry-tool-file") ?? UIImage(systemName: "doc.fill")!)
             .withTintColor(tint, renderingMode: .alwaysOriginal)
     }
 
-    static func fileTypeAssetName(for name: String) -> String? {
-        let asset: String? = switch (name as NSString).pathExtension.lowercased() {
+    static func fileTypeAssetName(for path: String) -> String? {
+        let components = path.split(omittingEmptySubsequences: false) { $0 == "/" || $0 == "\\" }
+        let name = components.last?.lowercased() ?? ""
+        if name == ".env" || name.hasPrefix(".env.") { return "registry-tool-file-env" }
+        let asset: String? = switch (name as NSString).pathExtension {
         case "swift": "tool-file-swift"
         case "ts", "mts", "cts": "tool-file-typescript"
         case "js", "mjs", "cjs": "tool-file-javascript"
         case "jsx", "tsx": "tool-file-react"
+        case "css", "scss", "sass", "less": "tool-file-css"
+        case "postcss": "tool-file-postcss"
+        case "html", "htm": "tool-file-html"
+        case "vue": "tool-file-vue"
+        case "svelte": "tool-file-svelte"
         case "json", "jsonc", "json5": "tool-file-json"
+        case "yaml", "yml": "tool-file-yaml"
+        case "xml", "plist", "xsd", "xsl": "tool-file-xml"
         case "py", "pyi", "pyw": "tool-file-python"
-        case "md", "mdx": "atlas-document-md"
+        case "go": "tool-file-go"
+        case "rs": "tool-file-rust"
+        case "rb", "erb": "tool-file-ruby"
+        case "java": "tool-file-java"
+        case "c", "h", "cc", "cpp", "cxx", "hpp", "hh": "tool-file-cpp"
+        case "sh", "bash", "zsh", "fish": "tool-file-shell"
+        case "env": "tool-file-env"
+        case "sql", "db", "sqlite", "sqlite3": "tool-file-database"
+        case "csv", "tsv": "tool-file-csv"
+        case "md", "mdx", "markdown": "atlas-document-md"
         case "txt", "text", "log", "rtf": "atlas-document-txt"
         case "doc", "docx": "atlas-document-docx"
         case "xls", "xlsx": "atlas-document-xlsx"
         case "ppt", "pptx": "atlas-document-pptx"
         case "pdf": "atlas-document-pdf"
+        case "mp3", "wav", "flac", "m4a", "ogg", "aac", "aiff", "opus": "atlas-document-audio"
+        case "mp4", "mov", "webm", "mkv", "avi", "m4v": "atlas-document-video"
+        case "png", "jpg", "jpeg", "gif", "webp", "avif", "heic", "bmp", "ico", "icns": "atlas-image"
+        case "svg": "tool-file-svg"
+        case "zip", "tar", "gz", "tgz", "bz2", "xz", "rar", "7z": "tool-file-archive"
         default: nil
         }
         return asset.map { "registry-" + $0 }

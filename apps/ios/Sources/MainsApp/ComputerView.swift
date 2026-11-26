@@ -111,6 +111,12 @@ struct ComputerView: View {
             AppIconSettings()
             SettingsSection("This phone") {
                 SettingsRow(title: "Name", value: UIDevice.current.name)
+                if session.canKeepFilesOffline {
+                    NavigationLink { OfflineFilesSettingsView(session: session) } label: {
+                        SettingsRow(title: "Offline files", symbol: "chevron.right", subtitle: "Open or remove files saved on this iPhone")
+                    }
+                    .accessibilityIdentifier("offlineFilesSettings")
+                }
                 if let pairing = session.pairing, !session.isDemo {
                     SettingsRow(title: "Device ID",
                                 subtitle: "As listed by Mains on your computer", value: String(pairing.deviceId.prefix(8)))
@@ -244,6 +250,52 @@ struct ComputerView: View {
         lines.append("Last synced: \(session.lastSyncedAt?.ISO8601Format() ?? "never")")
         lines.append("At: \(Date().ISO8601Format())")
         return lines.joined(separator: "\n")
+    }
+}
+
+private struct OfflineFilesSettingsView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    @State private var files: [OfflineFile] = []
+    @State private var selection: OfflineFile?
+    @State private var error: String?
+    @State private var loading = true
+    var body: some View {
+        List {
+            if loading { ProgressView() }
+            else if files.isEmpty { Text("Use Keep Offline in a file’s options to save it here.").foregroundStyle(.secondary) }
+            ForEach(files) { file in
+                Button { selection = file } label: {
+                    SettingsRow(title: file.name, symbol: "doc", subtitle: ByteCountFormatter.string(fromByteCount: Int64(file.byteSize), countStyle: .file))
+                }
+                .swipeActions {
+                    Button("Remove", role: .destructive) { Task { await remove(file) } }
+                }
+            }
+        }
+        .navigationTitle("Offline files")
+        .task(id: session.ownership) { await load() }
+        .fullScreenCover(item: $selection, onDismiss: { Task { await load() } }) { file in
+            OutputPreviewView(session: session, savedFile: file)
+        }
+        .onChange(of: session.ownership) { _, _ in selection = nil; files = [] }
+        .alert("Couldn’t remove file", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(error ?? "") }
+    }
+
+    private func load() async {
+        let owner = session.ownership
+        let saved = await session.savedOfflineFiles()
+        if !Task.isCancelled, owner == session.ownership { files = saved; loading = false }
+    }
+
+    private func remove(_ file: OfflineFile) async {
+        let owner = session.ownership
+        do { try await session.removeOffline(file, owner: owner); await load() }
+        catch { if owner == session.ownership { self.error = error.localizedDescription } }
     }
 }
 
