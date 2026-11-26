@@ -16,7 +16,7 @@ struct SidebarView: View {
     let openConversation: (String) -> Void
     let openWorkspace: (String) -> Void
     let openProject: (String) -> Void
-    let selectSpace: (String) -> Void
+    let startConversation: (String) -> Void
     let search: () -> Void
     let settings: () -> Void
     let openHome: () -> Void
@@ -25,15 +25,16 @@ struct SidebarView: View {
     let openMates: () -> Void
     @State private var pendingMode: String?
     @State private var providersExpanded = false
+    @State private var providerScrollPosition = ScrollPosition(edge: .leading)
     @Namespace private var modeSelection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .subheadline) private var modeLabelWidth: CGFloat = 36
-    @ScaledMetric(relativeTo: .body) private var searchLabelWidth: CGFloat = 110
     @ScaledMetric(relativeTo: .title3) private var shortcutIconSize: CGFloat = 24
     static let controlInset: CGFloat = 16
     static let headerDiscSize: CGFloat = 40
     private static let bottomBarHeight: CGFloat = 48
+    private static let utilityControlWidth: CGFloat = 48
     private let menuInset: CGFloat = 12
     private let menuIconWidth: CGFloat = 22
     private let menuIconSize: CGFloat = 20
@@ -206,82 +207,110 @@ struct SidebarView: View {
     }
     private var bottomBar: some View {
         GeometryReader { geometry in
-            let control: CGFloat = 44
             let gap: CGFloat = 8
-            let available = geometry.size.width
-            let providerWidth = providersExpanded
-                ? min(control + CGFloat(otherSpaces.count) * (control + gap) + (otherSpaces.isEmpty ? 0 : 16), max(control, available - 2 * control - 2 * gap))
-                : control
-            let searchWidth = max(control, available - providerWidth - control - 2 * gap)
-            let compactSearch = searchWidth < searchLabelWidth
-            HStack(spacing: gap) {
-                providerSwitcher(width: providerWidth)
-                Button {
-                    setProvidersExpanded(false)
-                    search()
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass").font(.system(size: 19))
-                        if !compactSearch {
-                            Text("Search").font(.body).foregroundStyle(.secondary).fixedSize()
-                                .transition(.opacity)
-                            Spacer(minLength: 0)
-                        }
-                    }
-                    .padding(.horizontal, compactSearch ? 0 : 14)
-                    .frame(width: compactSearch ? control : searchWidth, height: control)
-                    .foregroundStyle(.primary)
-                    .contentShape(.capsule)
+            let stripAvailable = geometry.size.width - 2 * Self.utilityControlWidth - SpaceDisc.size - 2 * gap
+            let stripContentWidth = CGFloat(otherSpaces.count) * (SpaceDisc.size + gap) - gap
+            let stripWidth = max(0, min(stripAvailable, stripContentWidth))
+            HStack(spacing: 0) {
+                providerSwitcher(stripWidth: stripWidth, gap: gap)
+                Spacer(minLength: gap)
+                HStack(spacing: 0) {
+                    utilityButton("Search", symbol: "magnifyingglass", identifier: "sidebarSearch", action: search)
+                    utilityButton("Settings", symbol: "gearshape", identifier: "openSettings", action: settings)
                 }
-                .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 22))
-                .accessibilityLabel("Search").accessibilityIdentifier("sidebarSearch")
-                .frame(width: searchWidth, alignment: providersExpanded ? .trailing : .center)
-                RoundControl(symbol: "gearshape", label: "Settings", size: control, rectangularHitArea: true) {
-                    setProvidersExpanded(false)
-                    settings()
-                }.accessibilityIdentifier("openSettings")
+                .background(alignment: .center) {
+                    Color.clear.modifier(GlassSurface(radius: SpaceDisc.size / 2, interactive: false))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
             }
             .frame(height: Self.bottomBarHeight)
-            .animation(controlAnimation, value: providersExpanded)
-            .animation(controlAnimation, value: available)
         }.frame(height: Self.bottomBarHeight)
     }
-    private func providerSwitcher(width: CGFloat) -> some View {
-        HStack(spacing: 8) {
-            if let space {
-                SpaceDisc(space: space, selected: true) { setProvidersExpanded(!providersExpanded) }
-                    .accessibilityHint(providersExpanded ? "Hide providers" : "Show providers")
-                    .accessibilityValue(providersExpanded ? "Expanded" : "Collapsed")
-                    .disabled(otherSpaces.isEmpty)
-            } else {
-                Image(systemName: "square.stack").foregroundStyle(.secondary).frame(width: 44, height: 44)
-                    .accessibilityLabel("No provider selected")
-            }
-            if providersExpanded && !otherSpaces.isEmpty {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
-                        ForEach(otherSpaces) { item in
-                            SpaceDisc(space: item, selected: false) {
-                                setProvidersExpanded(false)
-                                selectSpace(item.id)
-                            }
-                        }
-                    }.padding(.vertical, 2)
-                }
-                .scrollIndicators(.hidden)
-                .contentMargins(.horizontal, 8, for: .scrollContent)
-                .scrollClipDisabled()
-                .frame(width: max(0, width - 52), height: 48)
-                .modifier(SidebarScrollFade(axis: .horizontal))
-                .accessibilityIdentifier("sidebarProviderStrip")
-                .transition(.opacity)
-            }
+    private func utilityButton(_ title: LocalizedStringKey, symbol: String, identifier: String, action: @escaping () -> Void) -> some View {
+        Button {
+            setProvidersExpanded(false)
+            action()
+        } label: {
+            Image(systemName: symbol).font(.system(size: 18))
+                .frame(width: Self.utilityControlWidth, height: SpaceDisc.size)
+                .contentShape(.rect)
         }
-        .frame(width: width, height: 48, alignment: .leading)
-        .accessibilityElement(children: .contain).accessibilityLabel("Providers")
+        .buttonStyle(ChatPressStyle())
+        .accessibilityLabel(title).accessibilityIdentifier(identifier)
+    }
+    @ViewBuilder private func providerSwitcher(stripWidth: CGFloat, gap: CGFloat) -> some View {
+        if let space {
+            let fill = Provider.accent(space.providerId)
+            ZStack(alignment: .leading) {
+                if stripWidth > 0 {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: gap) {
+                            ForEach(otherSpaces) { item in
+                                SpaceDisc(space: item, selected: false) {
+                                    setProvidersExpanded(false)
+                                    startConversation(item.id)
+                                }
+                                .modifier(GlassSurface(radius: SpaceDisc.size / 2))
+                            }
+                        }.padding(.vertical, 2)
+                    }
+                    .scrollIndicators(.hidden)
+                    .scrollClipDisabled()
+                    .scrollPosition($providerScrollPosition)
+                    .frame(width: stripWidth, height: Self.bottomBarHeight)
+                    .modifier(SidebarScrollFade(axis: .horizontal))
+                    .mask(alignment: .leading) {
+                        let maskWidth = stripWidth + 16
+                        LinearGradient(stops: [
+                            .init(color: .white, location: 0),
+                            .init(color: .white, location: stripWidth / maskWidth),
+                            .init(color: .clear, location: 1)
+                        ], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: maskWidth)
+                        .offset(x: providersExpanded ? 0 : -maskWidth)
+                    }
+                    .opacity(providersExpanded ? 1 : 0)
+                    .animation(controlAnimation?.delay(providersExpanded ? 0.06 : 0), value: providersExpanded)
+                    .accessibilityIdentifier("sidebarProviderStrip")
+                    .padding(.leading, SpaceDisc.size + gap)
+                    .allowsHitTesting(providersExpanded)
+                    .accessibilityHidden(!providersExpanded)
+                }
+                HStack(spacing: 0) {
+                    SpaceDisc(space: space, selected: true) { setProvidersExpanded(!providersExpanded) }
+                        .accessibilityHint(providersExpanded ? "Hide providers" : "Show providers")
+                        .accessibilityValue(providersExpanded ? "Expanded" : "Collapsed")
+                        .disabled(otherSpaces.isEmpty)
+                    if !providersExpanded {
+                        Button { startConversation(space.id) } label: {
+                            Text("New Chat").font(.subheadline.weight(.semibold))
+                                .lineLimit(1).minimumScaleFactor(0.75)
+                                .padding(.leading, 2).padding(.trailing, 14)
+                                .frame(minWidth: SpaceDisc.size, minHeight: SpaceDisc.size)
+                                .foregroundStyle(.white)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(ChatPressStyle())
+                        .accessibilityIdentifier("sidebarNewChat")
+                        .transition(.opacity)
+                    }
+                }
+                .background(fill, in: .capsule)
+                .clipShape(.capsule)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.14).delay(providersExpanded ? 0 : 0.16),
+                           value: providersExpanded)
+            }
+            .accessibilityElement(children: .contain).accessibilityLabel("Providers")
+        } else {
+            Image(systemName: "square.stack").foregroundStyle(.secondary)
+                .frame(width: SpaceDisc.size, height: SpaceDisc.size)
+                .accessibilityLabel("No provider selected")
+        }
     }
     private func setProvidersExpanded(_ expanded: Bool) {
-        withAnimation(controlAnimation) { providersExpanded = expanded }
+        if expanded { providerScrollPosition.scrollTo(edge: .leading) }
+        providersExpanded = expanded
     }
     private func modeSwitcher(showLabel: Bool) -> some View {
         HStack(spacing: 8) {

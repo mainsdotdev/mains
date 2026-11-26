@@ -359,7 +359,7 @@ final class MainsUITests: XCTestCase {
             sidebar.tap()
             XCTAssertTrue(close.waitForExistence(timeout: 5))
         }
-        XCTAssertTrue(settings.isHittable)
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
         let logo = app.images["sidebarMainsLogo"]
         let mode = app.buttons["sidebarMode-developer"]
         XCTAssertTrue(logo.exists)
@@ -390,6 +390,10 @@ final class MainsUITests: XCTestCase {
             XCTAssertEqual(search.frame.minX, homeSearchX, accuracy: 1)
             close.tap()
             XCTAssertTrue(activity.waitForExistence(timeout: 5))
+            leadingEdge.press(forDuration: 0.05, thenDragTo: trailingEdge)
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            settings.tap()
+            XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
         } else {
             XCTAssertTrue(sidebar.isHittable)
             XCTAssertEqual(settings.frame.midY, attachmentButton.midY, accuracy: 1)
@@ -856,8 +860,9 @@ final class MainsUITests: XCTestCase {
         openSidebar(app)
         let settings = app.buttons["openSettings"]
         let search = app.buttons["sidebarSearch"]
-        XCTAssertEqual(settings.frame.midX, close.frame.midX, accuracy: 1)
-        XCTAssertGreaterThan(search.frame.width, app.frame.width / 2)
+        XCTAssertEqual(settings.frame.maxX, close.frame.maxX, accuracy: 1)
+        XCTAssertEqual(search.frame.maxX, settings.frame.minX, accuracy: 1)
+        XCTAssertEqual(search.frame.midY, settings.frame.midY, accuracy: 1)
         XCTAssertGreaterThan(search.frame.minY, keyboardTop)
         let project = app.buttons["collection-fixture-kitchen"]
         XCTAssertEqual(project.label, "Kitchen Notes, expanded")
@@ -4649,6 +4654,61 @@ final class MainsUITests: XCTestCase {
         openSidebar(app)
         XCTAssertTrue(app.buttons["sidebarMode-chat"].isSelected)
         app.buttons["closeSidebar"].tap()
+        forgetFixture(app)
+    }
+
+    func testSidebarNewChatOpensTheActiveOrChosenProvider() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        let conversation = pairFixture(app, code: "ios-test-home")
+        let newChat = app.buttons["sidebarNewChat"]
+        let codex = app.buttons["space-fixture-space"]
+        let claude = app.buttons["space-fixture-claude"]
+        let search = app.buttons["sidebarSearch"]
+        let settings = app.buttons["openSettings"]
+        let close = app.buttons["closeSidebar"]
+        let welcome = app.staticTexts["homeWelcomeTitle"]
+
+        XCTAssertTrue(newChat.isHittable && codex.isSelected)
+        attachScreenshot(app, name: "Sidebar new chat and utilities")
+        conversation.tap()
+        XCTAssertTrue(app.textViews["messageInput"].waitForExistence(timeout: 5))
+        let leadingEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.52))
+        let trailingEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.52))
+        leadingEdge.press(forDuration: 0.05, thenDragTo: trailingEdge)
+        XCTAssertTrue(newChat.waitForExistence(timeout: 5))
+        newChat.tap()
+        XCTAssertTrue(welcome.waitForExistence(timeout: 5))
+        XCTAssertEqual(welcome.label, "What’s on your mind?")
+
+        openSidebar(app)
+        let codexFrame = codex.frame
+        let searchFrame = search.frame
+        let settingsFrame = settings.frame
+        codex.tap()
+        XCTAssertTrue(newChat.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(claude.isHittable)
+        XCTAssertEqual(codex.frame, codexFrame)
+        XCTAssertEqual(search.frame, searchFrame)
+        XCTAssertEqual(settings.frame, settingsFrame)
+        attachScreenshot(app, name: "Sidebar expanded providers")
+        codex.tap()
+        XCTAssertTrue(claude.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(newChat.isHittable)
+        XCTAssertEqual(codex.frame, codexFrame)
+        codex.tap()
+        XCTAssertTrue(claude.waitForExistence(timeout: 5))
+        claude.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(welcome.label, "What are we building?")
+        openSidebar(app)
+        XCTAssertTrue(claude.isSelected && newChat.isHittable)
+
+        search.tap()
+        XCTAssertTrue(app.textFields["globalSearchInput"].waitForExistence(timeout: 5))
+        app.buttons["closeGlobalSearch"].tap()
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
         forgetFixture(app)
     }
 

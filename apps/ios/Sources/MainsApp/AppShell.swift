@@ -197,7 +197,7 @@ struct AppShell: View {
                                     headerTopInset: headerTopInset, leadingInset: leadingInset,
                                     openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
                                     openProject: { open(.project($0)) },
-                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings,
+                                    startConversation: startSidebarConversation, search: showSearch, settings: showSettings,
                                     openHome: goHome, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) }, openMates: { open(.mates) })
                             .background(sidebar.isInline ? Color(.systemBackground) : .clear)
                             .opacity(sidebar.isInline ? 1 : progress)
@@ -405,17 +405,21 @@ struct AppShell: View {
             else { open(.mate(mateID)) }
         } else { goHome() }
     }
+    private func startSidebarConversation(in spaceID: String) {
+        if session.selectedSpaceID != spaceID { session.selectSpace(spaceID) }
+        goHome()
+    }
     private func showSettings() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         path.append(.settings)
         closeDrawerAfterNavigation()
     }
-    private var drawerAnimation: Animation? {
-        reduceMotion ? nil : .easeInOut(duration: 0.34)
+    private func drawerAnimation(opening: Bool) -> Animation? {
+        reduceMotion ? nil : .easeInOut(duration: opening ? 0.28 : 0.34)
     }
     private func toggleWideSidebar(visible: Bool) {
         if !visible { drawerViewport.dismissKeyboard() }
-        withAnimation(drawerAnimation) {
+        withAnimation(drawerAnimation(opening: !visible)) {
             wideSidebarHidden = visible; drawerOpen = false
         }
     }
@@ -436,7 +440,7 @@ struct AppShell: View {
         if open && !drawerOpen { drawerViewport.dismissKeyboard() }
         drawerTransition += 1
         let transition = drawerTransition
-        withAnimation(drawerAnimation, completionCriteria: .logicallyComplete) {
+        withAnimation(drawerAnimation(opening: open), completionCriteria: .logicallyComplete) {
             drag = 0
             drawerOpen = open
         } completion: {

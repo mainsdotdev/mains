@@ -777,6 +777,7 @@ struct BridgeReadOnlyNotice: View {
 }
 
 struct SpaceDisc: View {
+    static let size: CGFloat = 44
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
@@ -784,15 +785,14 @@ struct SpaceDisc: View {
     let selected: Bool
     let action: () -> Void
     var body: some View {
-        let accent = Provider.accent(space.providerId)
+        let tint: Color = selected ? .white : .primary
         Button(action: action) {
             Group {
-                if space.icon != nil { RegistryIcon(token: space.icon, size: 25, tint: selected ? accent : .primary) }
-                else { Text(String(space.name.prefix(1)).uppercased()).font(.title3.weight(.semibold)) }
-            }.frame(width: 44, height: 44).contentShape(.circle)
+                if space.icon != nil { RegistryIcon(token: space.icon, size: 22, tint: tint, useStoredColor: !selected) }
+                else { Text(String(space.name.prefix(1)).uppercased()).font(.title3.weight(.semibold)).foregroundStyle(tint) }
+            }.frame(width: Self.size, height: Self.size).contentShape(.rect)
         }
         .buttonStyle(ChatPressStyle())
-        .modifier(GlassSurface(radius: 22, tint: selected ? accent.opacity(0.3) : .clear))
         .accessibilityLabel("\(space.name) space")
         .accessibilityIdentifier("space-\(space.id)")
         .accessibilityAddTraits(selected ? .isSelected : [])
