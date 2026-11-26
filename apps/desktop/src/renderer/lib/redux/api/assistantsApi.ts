@@ -1,7 +1,9 @@
 import { CHANNELS } from "@mains/contracts/channels";
+import type { AssistantSkill, AssistantSkillCatalog, AssistantSkillDraft } from "@mains/contracts/assistants";
 import type { Assistant, AssistantTeam, AssistantTeamWork, AssistantOverview, CreateAssistant, ChangeAssistantTeam, UpdateAssistantProfile, SaveAssistantMemory, AssistantMemory, AssistantAssignment, AssignAssistantTask, AssistantConversation, SendAssistantMessage, AssistantExecution, AssistantProfileSetupAction, AssistantPullRequestReview, ReviewPullRequestWithAssistant, SetAssistantPinned } from "@mains/contracts/assistants";
 import type { PrRefInput } from "@mains/contracts/pull-requests";
 import { baseApi } from "./baseApi";
+import { appEvents } from "@/lib/transport/events";
 export const assistantsApi = baseApi.injectEndpoints({
     endpoints: (b) => ({
         assistantAssignment: b.query<AssistantAssignment | null, { accountId: string; id: string }>({ query: ({ accountId, id }) => ({ handler: CHANNELS.assistants.assignment, args: [accountId, id] }), providesTags: ["Assistants"] }),
@@ -12,6 +14,23 @@ export const assistantsApi = baseApi.injectEndpoints({
             invalidatesTags: ["Assistants", "AssistantChats"],
         }),
         assistantOverview: b.query<AssistantOverview, string>({ query: accountId => ({ handler: CHANNELS.assistants.overview, args: [accountId] }), providesTags: ["Assistants"] }),
+        assistantSkillCatalog: b.query<AssistantSkillCatalog, { accountId: string; id: string; providerId: string }>({
+            query: ({ accountId, id }) => ({ handler: CHANNELS.assistants.skillCatalog, args: [accountId, id] }),
+            providesTags: (_result, _error, { providerId }) => ["Assistants", { type: "ProviderSkills", id: providerId }, { type: "ProviderInstalledPlugins", id: providerId }],
+            async onCacheEntryAdded({ providerId }, { dispatch, cacheEntryRemoved }) {
+                const off = appEvents.providers.onSkillsUpdated(event => {
+                    if (event.providerId === providerId) dispatch(baseApi.util.invalidateTags([{ type: "ProviderSkills", id: providerId }]));
+                });
+                try { await cacheEntryRemoved; } finally { off(); }
+            },
+        }),
+        generateAssistantSkill: b.mutation<AssistantSkillDraft, { accountId: string; id: string; request: string }>({
+            query: ({ accountId, id, request }) => ({ handler: CHANNELS.assistants.generateSkill, args: [accountId, id, request], timeoutMs: 90_000 }),
+        }),
+        saveAssistantSkill: b.mutation<AssistantSkill, { accountId: string; id: string; input: { draft: AssistantSkillDraft } | { document: string } }>({
+            query: ({ accountId, id, input }) => ({ handler: CHANNELS.assistants.saveSkill, args: [accountId, id, input] }),
+            invalidatesTags: (_result, error) => error ? [] : ["Assistants"],
+        }),
         assistantTeamWork: b.query<AssistantTeamWork, { accountId: string; teamId: string }>({
             query: ({ accountId, teamId }) => ({ handler: CHANNELS.assistants.teamWork, args: [accountId, teamId], timeoutMs: 10_000 }),
             providesTags: ["AssistantTeamWork"], keepUnusedDataFor: 0,
@@ -78,4 +97,5 @@ export const assistantsApi = baseApi.injectEndpoints({
     }),
 });
 export const { useSetupAssistantProfileMutation, useAssistantAssignmentQuery, usePrepareAssistantWelcomeMutation, useRespondAssistantWelcomeMutation, useAssistantOverviewQuery, useCreateAssistantTeamMutation, useCreateAssistantMutation, useChangeAssistantTeamMutation, useUpdateAssistantProfileMutation, useArchiveAssistantMutation, useSaveAssistantMemoryMutation, useRemoveAssistantMemoryMutation, useAssistantConversationsQuery, useSendAssistantMessageMutation, useAssignAssistantTaskMutation, useReconcileAssistantTaskMutation, useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation } = assistantsApi;
+export const { useAssistantSkillCatalogQuery, useGenerateAssistantSkillMutation, useSaveAssistantSkillMutation } = assistantsApi;
 export const { useReviewPullRequestWithAssistantMutation, useAssistantPullRequestReviewsQuery, useRemoveAssistantMutation, useSetAssistantPinnedMutation, useAssistantTeamWorkQuery } = assistantsApi;

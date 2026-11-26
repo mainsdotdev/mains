@@ -17,6 +17,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { z } from "zod";
+import { MATE_SKILL_CREATOR_ID } from "../../assistants/assistant-skill-creator";
 import { handleAtlasReadPage, handleAtlasCreatePage, handleAtlasUpdatePage, handleAtlasListCovers } from "./atlas-tools";
 import type { Tool as CopilotTool } from "@github/copilot-sdk";
 import { PROVIDER_IDS, type ProviderId } from "@mains/contracts/provider-ids";
@@ -134,6 +135,10 @@ const assistantTool = <S extends z.ZodObject<any>>(name: string, description: st
   },
 });
 const assistantToolDefs: MainsToolDef[] = [
+  assistantTool("ReadAssistantSkill", "Read a skill listed in the current Mate instructions, including the built-in Skill Creator.", z.object({ skillId: z.union([z.literal(MATE_SKILL_CREATOR_ID), z.string().regex(/^[a-f0-9]{64}$/)]) })),
+  assistantTool("CreateAssistantSkill", "Save and assign one reusable SKILL.md to this Mate. Use only when the user asks to create a skill, after reading the Skill Creator. Supply the Markdown body without YAML frontmatter. This registers instructions for future work.", z.object({
+    name: z.string().max(64), title: z.string().max(100), description: z.string().max(1024), markdown: z.string().max(65536), examplePrompt: z.string().max(1000).optional(),
+  }).strict()),
   assistantTool("AskAssistantQuestion", "Ask the user for information required to continue and wait for their answer. Call this tool by itself before work that depends on the answer; do not launch dependent work in parallel. Returns the user's exact answer as this tool's result. If canceled or unanswered, stop dependent work and explain the missing information without guessing. Use this instead of asynchronous questions for required details such as destination, dates or budget.", AskAssistantQuestionSchema),
   assistantTool("ListAssistants", "List your team's active assistants and roles before delegating work.", z.object({})),
   assistantTool("ListAssistantTasks", "List open and recent assignments you can access before starting related work. Continue an existing assignment instead of duplicating it. Use ReadAssistantTask for the complete report and evidence.", z.object({})),

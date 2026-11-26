@@ -21,10 +21,11 @@ import { AssistantAssignments } from "./assistant-assignments";
 import { AssistantChatsPanel } from "./assistant-chats-panel";
 import { AssistantRoutines } from "./assistant-routines";
 import { AssistantTeamEditor } from "./assistant-team-editor";
+import { AssistantRuntimeFields, assistantRuntimeDraft, type AssistantRuntimeDraft } from "./assistant-runtime-fields";
 import { errorText, isAssistantWorking } from "../lib/assistant-ui";
 import type { AssistantAvatarState } from "../lib/assistant-avatar-activity";
 
-type EditableProfile = AssistantProfile & Pick<Assistant, "teamId" | "model" | "effort">;
+type EditableProfile = AssistantProfile & Pick<Assistant, "teamId" | "model" | "effort"> & AssistantRuntimeDraft;
 
 function effortLabel(effort: string) {
   const label = formatEffortLevel(effort);
@@ -73,7 +74,7 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
   function beginEdit(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     const { name, description, instructions, avatar, teamId, model, effort } = assistant;
-    const original = { name, description, instructions, avatar, teamId, model, effort };
+    const original = { name, description, instructions, avatar, teamId, model, effort, ...assistantRuntimeDraft(assistant) };
     setFailure("");
     setEdit({ original, draft: original });
   }
@@ -101,9 +102,12 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!edit || !canEdit || !canSaveModel || archiving || creatingTeam || saving.current) return;
-    const { name, description, instructions, avatar, teamId, model, effort } = edit.draft;
+    const { name, description, instructions, avatar, teamId, model, effort, permissionMode, codexApprovalMode, skillIds } = edit.draft;
     if (!name.trim() || !instructions.trim()) return;
-    const { teamId: expectedTeamId, model: expectedModel, effort: expectedEffort, ...expectedProfile } = edit.original;
+    const { teamId: expectedTeamId, model: expectedModel, effort: expectedEffort, permissionMode: expectedMode,
+      codexApprovalMode: expectedApprovalMode, skillIds: expectedIds, ...expectedProfile } = edit.original;
+    const permissionChanged = permissionMode !== expectedMode || codexApprovalMode !== expectedApprovalMode;
+    const skillsChanged = JSON.stringify(skillIds) !== JSON.stringify(expectedIds);
     saving.current = true;
     setFailure("");
     try {
@@ -111,6 +115,10 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
         profile: { name: name.trim(), description: description.trim(), instructions: instructions.trim(), avatar },
         ...(teamId !== expectedTeamId && { teamChange: { teamId, expectedTeamId } }),
         ...(modelChanged && { modelChange: { model, effort, expectedModel, expectedEffort } }),
+        ...(skillsChanged && { skillChange: { ids: skillIds, expectedIds } }),
+        ...(permissionChanged && { permissionChange: { mode: permissionMode, expectedMode,
+          ...(assistant.providerId === "codex" && { approvalMode: codexApprovalMode, expectedApprovalMode }),
+        } }),
       }).unwrap();
       closeEditor();
     } catch (requestError) {
@@ -197,6 +205,7 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
         <AgentMarkdown className="leading-6 [&_p]:my-2 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">{assistant.instructions}</AgentMarkdown>
       </>}
     </div>
+    <AssistantRuntimeFields assistant={assistant} draft={draft} canManageSkills={canEdit && !archiving} disabled={isLoading} onChange={changeDraft} />
     {!!(failure || error) && <p role="alert" className="text-sm text-danger">{failure || error}</p>}
     <div className="flex justify-end gap-2">
       {draft ? <Fragment key="editing">
@@ -259,12 +268,12 @@ export function AssistantInfoPanel({ assistant, overview, avatarState, chats, se
         <Button ref={closeRef} variant="icon" aria-label="Close mate panel" tooltip="Close mate panel"
           tooltipPosition="bottom-left" onClick={onClose}><Close className="size-4" /></Button>
       </div>
-      <div className="shrink-0 overflow-x-auto px-4 pb-4 noscrollbar">
+      <div className={`shrink-0 overflow-x-auto px-4 noscrollbar ${tab === "tasks" ? "pb-4" : "pb-1"}`}>
         <SegmentedTabs aria-label="Mate information" variant="plain" panelId="assistant-info-content" value={tab} onChange={onTabChange}
           options={[{ value: "profile", label: "Details" }, { value: "chats", label: "Chats" }, { value: "memory", label: "Memory" }, { value: "tasks", label: activeTasks ? `Assignments · ${activeTasks}` : "Assignments" }, { value: "routines", label: "Routines" }]} />
       </div>
       <div id="assistant-info-content" role="tabpanel" aria-label={tab === "routines" ? "Routines" : tab === "chats" ? "Chats" : tab === "memory" ? "Memory" : tab === "tasks" ? "Assignments" : "Details"}
-        className={`min-h-0 flex-1 ${tab === "tasks" ? "flex flex-col" : "scroll-bounce overflow-y-auto px-5 pb-6"}`}>
+        className={`min-h-0 flex-1 ${tab === "tasks" ? "flex flex-col" : "scroll-bounce overflow-y-auto scroll-pt-3 px-5 pt-3 pb-[calc(25dvh_+_1.5rem)] [mask-image:linear-gradient(to_bottom,transparent,black_0.75rem)]"}`}>
         {tab === "routines" ? <AssistantRoutines assistant={assistant} onOpenChat={onSelectChat} />
           : tab === "chats" ? <AssistantChatsPanel chats={chats} selectedRunId={selectedRunId} error={chatsError} disabled={assistant.isArchived} onSelect={onSelectChat} onRetry={onRetryChats} />
           : tab === "memory" ? <AssistantMemoryPanel key={assistant.id} assistant={assistant} memories={overview.memories} />

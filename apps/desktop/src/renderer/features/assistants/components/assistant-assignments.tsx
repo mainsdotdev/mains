@@ -40,7 +40,7 @@ export function AssistantAssignments({ assistant, assignments, assistants, openA
           </Button>
         </div>
       )}
-      <div ref={listViewport} className="scroll-bounce min-h-0 flex-1 space-y-3 overflow-y-auto scroll-pt-4 px-5 pb-6 pt-4 [mask-image:linear-gradient(to_bottom,transparent,black_1rem)]">
+      <div ref={listViewport} className="scroll-bounce min-h-0 flex-1 space-y-3 overflow-y-auto scroll-pt-4 px-5 pt-4 pb-[calc(25dvh_+_1.5rem)] [mask-image:linear-gradient(to_bottom,transparent,black_1rem)]">
         {creating && <AssistantAssignmentForm assistant={assistant} onClose={closeForm} onAssigned={closeForm} />}
         {!assignments.length && !creating && (
           <p className="rounded-2xl glass-card px-3 py-6 text-center text-sm text-primary-600 dark:text-primary-400">No assignments yet.</p>

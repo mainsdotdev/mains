@@ -60,6 +60,26 @@ export interface AssistantTeam {
     name: string;
     createdAt: Date;
 }
+export const MATE_CODEX_APPROVAL_MODES = ["on-request", "untrusted", "never"] as const;
+export type MateCodexApprovalMode = (typeof MATE_CODEX_APPROVAL_MODES)[number];
+export const MAX_MATE_SKILLS = 20;
+export interface AssistantSkill {
+    id: string;
+    name: string;
+    description: string;
+    storage?: "local";
+}
+export interface AssistantSkillDraft {
+    name: string;
+    title: string;
+    description: string;
+    markdown: string;
+    examplePrompt?: string;
+}
+export interface AssistantSkillCatalog {
+    skills: AssistantSkill[];
+    pluginSkillIds: string[];
+}
 export interface Assistant {
     id: string;
     accountId: string;
@@ -75,6 +95,8 @@ export interface Assistant {
     isArchived: boolean;
     pinnedAt?: Date | null;
     conversationSettings: ConversationSettings;
+    skills?: AssistantSkill[];
+    codexApprovalMode?: MateCodexApprovalMode;
     spaceSnapshot: {
         id: string;
         accountId: string;
@@ -118,6 +140,13 @@ export interface UpdateAssistantProfile {
     expectedProfile: AssistantProfile;
     teamChange?: { teamId: string | null; expectedTeamId: string | null };
     modelChange?: AssistantModelChange;
+    skillChange?: { ids: string[]; expectedIds: string[] };
+    permissionChange?: {
+        mode: string;
+        expectedMode: string;
+        approvalMode?: MateCodexApprovalMode | null;
+        expectedApprovalMode?: MateCodexApprovalMode | null;
+    };
 }
 export interface AssistantMemory {
     id: string;
@@ -285,9 +314,11 @@ export interface AssistantProfileDraft {
     instructions: string;
 }
 export interface AssistantProfileSetup {
-    turns: Array<{ question: string; answer: string }>;
+    turns: Array<{ question: string; answer: string; questionAt?: number }>;
+    questionAt?: number;
     draft?: AssistantProfileDraft;
     saved?: true;
+    savedAt?: number;
 }
 export type AssistantProfileSetupAction =
     | { action: "answer"; step: number; answer: string }
@@ -311,6 +342,7 @@ export interface AssistantWelcome {
     error: string | null;
     execution?: AssistantExecution;
     createdAt: Date;
+    updatedAt?: Date;
 }
 
 export type MobileMateIdentity = Pick<Assistant, "id" | "name" | "avatar" | "isArchived">;

@@ -53,7 +53,7 @@ export function ComposerSendTargetSelect({
         className={
           variant === "title"
             ? "flex max-w-full items-center gap-2 rounded-lg px-1.5 py-1 text-s font-medium text-primary-900 hover:bg-primary-200/40 dark:text-primary-100 dark:hover:bg-primary/5"
-            : "button-neutral flex max-w-full items-center gap-1.5 rounded-full py-1 pl-2 pr-1.5 text-xs text-primary-700 dark:text-primary-300"
+            : "button-neutral border-0 flex max-w-full items-center gap-1.5 rounded-full py-1 pl-2 pr-1.5 text-xs text-primary-700 dark:text-primary-300"
         }
       >
         {variant === "chip" &&

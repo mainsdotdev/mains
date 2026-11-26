@@ -1192,7 +1192,7 @@ html.mains-web.dark #root {
 
   .dark & {
     background-color: color-mix(in srgb, var(--mate-bubble-tint) 15%, var(--color-primary-950));
-    color: var(--mate-bubble-tint);
+    color: color-mix(in srgb, var(--mate-bubble-tint) 88%, white);
   }
 
   & .prose :where(h1, h2, h3, h4, h5, h6, p, ul, ol, li, th, td, blockquote, strong, em, code, a, button) {
@@ -1674,10 +1674,11 @@ html.mains-web.dark #root {
 .preview-git-before { animation-name: preview-git-before; }
 .preview-git-after { animation-name: preview-git-after; }
 
-/* The PR form snapshots keep their native pixel size as the shared surface
+/* Editor snapshots keep their native pixel size as the shared surface
    grows or shrinks. Cropping and overlapping their fades preserves visible
    content throughout the move without stretching the text. */
-::view-transition-group(pr-editor) {
+::view-transition-group(pr-editor),
+::view-transition-group(mate-skills) {
   background: var(--glass-fill-surface);
   border-radius: 0.75rem;
   overflow: hidden;
@@ -1686,7 +1687,9 @@ html.mains-web.dark #root {
 }
 
 ::view-transition-old(pr-editor),
-::view-transition-new(pr-editor) {
+::view-transition-new(pr-editor),
+::view-transition-old(mate-skills),
+::view-transition-new(mate-skills) {
   width: 100%;
   height: 100%;
   object-fit: none;
@@ -1694,19 +1697,21 @@ html.mains-web.dark #root {
   mix-blend-mode: normal;
 }
 
-::view-transition-old(pr-editor) {
-  animation: pr-editor-content-out 200ms ease-in both;
+::view-transition-old(pr-editor),
+::view-transition-old(mate-skills) {
+  animation: panel-editor-content-out 200ms ease-in both;
 }
 
-::view-transition-new(pr-editor) {
-  animation: pr-editor-content-in 280ms ease-out 40ms both;
+::view-transition-new(pr-editor),
+::view-transition-new(mate-skills) {
+  animation: panel-editor-content-in 280ms ease-out 40ms both;
 }
 
-@keyframes pr-editor-content-out {
+@keyframes panel-editor-content-out {
   to { opacity: 0; }
 }
 
-@keyframes pr-editor-content-in {
+@keyframes panel-editor-content-in {
   from { opacity: 0; }
   to { opacity: 1; }
 }

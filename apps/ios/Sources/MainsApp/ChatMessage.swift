@@ -285,7 +285,7 @@ struct PromptBubble: View {
 
     var body: some View {
         let dark = colorScheme == .dark
-        let ink = mateTint?.mix(with: dark ? .white : .black, by: dark ? 0.25 : 0.60, in: .device) ?? .white
+        let ink = mateTint?.mix(with: dark ? .white : .black, by: dark ? 0.12 : 0.60, in: .device) ?? .white
         let surface = mateTint?.mix(with: dark ? .black : .white, by: dark ? 0.78 : 0.84, in: .device) ?? fill
         InlineContextText(text: text, skills: skills, ink: ink).textSelection(.enabled).font(.body).lineSpacing(3)
             .padding(.horizontal, 16).padding(.vertical, 12)

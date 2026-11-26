@@ -707,7 +707,7 @@ struct MateAvatarBackdrop: View {
     private static func tint(for avatar: MateAvatar) -> Color {
         // Silver's catalogue tint follows the green iris. Use the casing color here.
         avatar.shape == "metal-silver"
-            ? Color(red: 0.49, green: 0.62, blue: 0.73)
+            ? Color(red: 0.41, green: 0.52, blue: 0.61)
             : MateRobotAssets.chatTint(for: avatar)
     }
 

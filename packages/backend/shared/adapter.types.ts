@@ -15,6 +15,7 @@ import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provide
 export type { ConnectorOAuthStartResult } from "@mains/contracts/provider-connectors";
 export type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 import type { ProviderTurnLineage, RealtimeVoiceCatalog, VoiceOrbColor, VoiceOrbStyle } from "@mains/contracts/realtime";
+import type { MateCodexApprovalMode } from "@mains/contracts/assistants";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import type { AsyncQuestionReply } from "@mains/contracts/async-questions";
 import type { ModeToolPolicy } from "./mode-harness";
@@ -61,6 +62,8 @@ export interface RunExecutionContext {
  * Request to start a work run
  */
 export interface WorkRunRequest {
+  /** Resolved by the backend from the owning Mate profile. */
+  mateApprovalMode?: MateCodexApprovalMode;
   providerTurnLineage?: ProviderTurnLineage;
   /** Display correlation only; does not alter provider input acceptance. */
   clientPromptId?: string;
@@ -444,6 +447,7 @@ export type WorkRunEventHandler = (event: WorkRunEvent) => void | Promise<void>;
  * Request to continue an existing run (resume session)
  */
 export interface WorkRunContinueRequest {
+  mateApprovalMode?: MateCodexApprovalMode;
   asyncQuestionReply?: AsyncQuestionReply;
   providerTurnLineage?: ProviderTurnLineage;
   clientPromptId?: string;
@@ -515,6 +519,7 @@ export type WorkRunSteerRequest = Pick<WorkRunContinueRequest,
  * Creates a new session branched from the source run's session state.
  */
 export interface WorkRunForkRequest {
+  mateApprovalMode?: MateCodexApprovalMode;
   /** The new run ID for the forked session */
   runId: string;
   /** The source run whose session will be forked */
@@ -1470,6 +1475,8 @@ export interface CommandInfo {
  * Skills are Claude Agent SDK capabilities defined as SKILL.md files
  */
 export interface SkillInfo {
+  /** Owning installed plugin, when the provider reports one. */
+  pluginId?: string | null;
   /** Skill name (e.g., "explain-code", "deploy") */
   name: string;
   /** Human-readable description of what the skill does */

@@ -8,7 +8,7 @@ import {
 } from "react";
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery } from "@/lib/redux/api/assistantsApi";
-import { AssistantProfileSetupHistory } from "@/features/assistants/components/assistant-profile-setup";
+import { AssistantProfileSetupHistory, AssistantSetupMessage } from "@/features/assistants/components/assistant-profile-setup";
 import { AssistantTaskCard } from "@/features/assistants/components/assistant-task-card";
 import { readAssistantTaskInput, type AssistantWelcomeQuestion } from "@mains/contracts/assistants";
 import { AgentMarkdown } from "@/components/agent-markdown";
@@ -570,11 +570,11 @@ function InfoGroupImpl({
 
   if (event.type === "artifact" && event.metadata?.source === "assistant_welcome") {
     const setup = (event.metadata.question as AssistantWelcomeQuestion | undefined)?.profileSetup;
-    if (setup?.saved) return <div className="space-y-3 text-sm text-primary-900 dark:text-primary-100">
-      <AssistantProfileSetupHistory setup={setup} />
-      <div className={bubble ? MESSAGE_BUBBLE : "py-3"}><AgentMarkdown>{event.content}</AgentMarkdown></div>
+    const body = <div className={bubble ? MESSAGE_BUBBLE : "py-3"}><AgentMarkdown>{event.content}</AgentMarkdown></div>;
+    return <div className="space-y-3 text-sm text-primary-900 dark:text-primary-100">
+      {setup?.saved && <AssistantProfileSetupHistory setup={setup} recordedAt={event.timestamp} showFooter={bubble} />}
+      {bubble ? <AssistantSetupMessage content={event.content} receivedAt={setup?.savedAt ?? event.timestamp}>{body}</AssistantSetupMessage> : body}
     </div>;
-    return <div className={`${bubble ? MESSAGE_BUBBLE : "py-3"} text-primary-900 dark:text-primary-100`}><AgentMarkdown>{event.content}</AgentMarkdown></div>;
   }
 
   // Codex delivers async questions on agentMessage items. Their report

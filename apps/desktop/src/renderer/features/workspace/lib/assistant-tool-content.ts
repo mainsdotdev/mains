@@ -1,6 +1,8 @@
 import { coerceToolOutput } from "./parse-tool-content";
 
 export const ASSISTANT_TOOL_LABELS: Record<string, string> = {
+  ReadAssistantSkill: "Read assigned mate skill",
+  CreateAssistantSkill: "Created mate skill",
   AskAssistantQuestion: "Asked a question",
   ListAssistants: "Listed mates",
   ListAssistantTasks: "Listed mate assignments",

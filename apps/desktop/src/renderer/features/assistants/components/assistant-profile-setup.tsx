@@ -1,7 +1,8 @@
-import { useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { AssistantProfileDraft, AssistantProfileSetup, AssistantProfileSetupAction, AssistantWelcome } from "@mains/contracts/assistants";
 import { Button, Input, Textarea } from "@/components/ui";
 import { useSmoothText } from "@/features/workspace/hooks/use-smooth-text";
+import { ResponseFooter } from "@/features/workspace/components/response-footer";
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 import { cn } from "@/lib/cn";
 import { useSetupAssistantProfileMutation } from "@/lib/redux/api/assistantsApi";
@@ -15,13 +16,28 @@ const sendTransition = { duration: 260, easing: "cubic-bezier(0.22, 1, 0.36, 1)"
 type SetupTurn = AssistantProfileSetup["turns"][number];
 type SubmittedAnswer = SetupTurn & { step: number };
 
-export function AssistantProfileSetupHistory({ setup, sending }: {
-  setup: AssistantProfileSetup;
-  sending?: { step: number; ref: RefObject<HTMLParagraphElement | null> };
+export function AssistantSetupMessage({ content, receivedAt, children }: {
+  content: string;
+  receivedAt?: Date | number;
+  children?: ReactNode;
 }) {
-  return setup.turns.map(({ question, answer }, index) => (
+  return <div className="group/agent-turn flex w-fit max-w-full flex-col gap-2">
+    {children ?? <p className={bubble}>{content}</p>}
+    <ResponseFooter content={content} receivedAt={receivedAt} revealOnHover />
+  </div>;
+}
+
+export function AssistantProfileSetupHistory({ setup, firstQuestionAt, recordedAt, sending, showFooter = true }: {
+  setup: AssistantProfileSetup;
+  firstQuestionAt?: Date;
+  recordedAt?: Date;
+  sending?: { step: number; ref: RefObject<HTMLParagraphElement | null> };
+  showFooter?: boolean;
+}) {
+  return setup.turns.map(({ question, answer, questionAt }, index) => (
     <div key={index} className="flex flex-col gap-3">
-      <p className={bubble}>{question}</p>
+      {showFooter ? <AssistantSetupMessage content={question} receivedAt={questionAt ?? (index === 0 ? firstQuestionAt : undefined) ?? recordedAt} />
+        : <p className={bubble}>{question}</p>}
       <p ref={sending?.step === index ? sending.ref : undefined} className={`${bubbleLayout} origin-top-right self-end bg-mate-user-bubble`}>{answer}</p>
     </div>
   ));
@@ -69,6 +85,7 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
   const step = setup.turns.length;
   const answerText = answer.step === step ? answer.text : "";
   const pendingAnswer = submittedAnswer?.step === step ? submittedAnswer : null;
+  const questionAt = setup.questionAt ?? (step === 0 ? welcome.createdAt : undefined);
   const disabled = busy || request.isLoading || !!pendingAnswer;
   const platform = getRuntimeOS();
   const usesCommand = platform === "darwin";
@@ -89,15 +106,15 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
     sendOrigin.current = !reducedMotion && column && input
       ? { columnTop: column.getBoundingClientRect().top, inputTop: input.getBoundingClientRect().top }
       : null;
-    setSubmittedAnswer({ step, question: questionText, answer: text });
+    setSubmittedAnswer({ step, question: questionText, answer: text, questionAt: questionAt === undefined ? undefined : new Date(questionAt).getTime() });
     void submit({ action: "answer", step, answer: text });
   }
   const draft = edit ?? setup.draft;
   return (
     <div className="mt-5 flex flex-col gap-4 text-sm leading-relaxed text-primary-900 dark:text-primary-100">
-      <AssistantProfileSetupHistory setup={pendingAnswer ? { ...setup, turns: [...setup.turns, pendingAnswer] } : setup}
+      <AssistantProfileSetupHistory setup={pendingAnswer ? { ...setup, turns: [...setup.turns, pendingAnswer] } : setup} firstQuestionAt={welcome.createdAt}
         sending={submittedAnswer ? { step: submittedAnswer.step, ref: replyRef } : undefined} />
-      {setup.saved ? <p className={bubble}>{question.idleMessage}</p>
+      {setup.saved ? <AssistantSetupMessage content={question.idleMessage} receivedAt={setup.savedAt ?? welcome.updatedAt} />
         : welcome.state === "failed" ? (
           <div className="space-y-2">
             <p role="alert" className="whitespace-pre-wrap break-words text-danger">{welcome.error ? errorText(welcome.error) : "Could not draft the profile."}</p>
@@ -139,13 +156,15 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
           </div>
         ) : (
           <>
-            <div className="grid">
-              {/* Reserve the full question's height while revealing its text. */}
-              {!questionComplete && <p className={`${bubble} pointer-events-none col-start-1 row-start-1 opacity-0 select-none`}>{questionText}</p>}
-              <p aria-hidden={!questionComplete || undefined} className={cn(bubble, "col-start-1 row-start-1 self-start", !displayedQuestion && "opacity-0")}>
-                {displayedQuestion}
-              </p>
-            </div>
+            <AssistantSetupMessage content={questionComplete ? questionText : ""} receivedAt={questionComplete ? questionAt : undefined}>
+              <div className="grid">
+                {/* Reserve the full question's height while revealing its text. */}
+                {!questionComplete && <p className={`${bubble} pointer-events-none col-start-1 row-start-1 opacity-0 select-none`}>{questionText}</p>}
+                <p aria-hidden={!questionComplete || undefined} className={cn(bubble, "col-start-1 row-start-1 self-start", !displayedQuestion && "opacity-0")}>
+                  {displayedQuestion}
+                </p>
+              </div>
+            </AssistantSetupMessage>
             <form inert={!questionComplete} aria-hidden={!questionComplete || undefined}
               className={cn("flex flex-col items-end gap-2 transition-[opacity,translate] duration-250 ease-out motion-reduce:transition-none",
                 questionComplete ? "translate-y-0 opacity-100" : "translate-y-3 opacity-0")} onSubmit={event => {

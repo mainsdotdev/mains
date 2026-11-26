@@ -517,6 +517,16 @@ export const assistantWork = {
         assertCurrent();
         if (name === "AskAssistantQuestion")
             return askAssistantQuestion(run, args);
+        if (name === "ReadAssistantSkill") {
+            const skill = await assistantsService.readSkill(assistant.id, run.accountId, text(args.skillId, "Skill", 64));
+            assertCurrent();
+            return skill;
+        }
+        if (name === "CreateAssistantSkill") {
+            const skill = await assistantsService.saveSkill(assistant.id, run.accountId, { draft: args }, true, assertCurrent);
+            changed();
+            return skill;
+        }
         if (ASSISTANT_ROUTINE_TOOLS.includes(name)) {
             const result = assistantRoutineTool(run, assistant.id, name, args);
             if (!["ListAssistantRoutines", "ReadAssistantRoutine"].includes(name)) changed();

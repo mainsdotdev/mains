@@ -9,14 +9,14 @@ import { AssistantRobotAvatar } from "./assistant-robot-avatar";
 import "./assistant-avatar.css";
 
 export const AVATAR_COLORS = {
-  coral: { label: "Coral", fill: "#EE7567", light: "#F5A08F", ink: "#B34E42" },
-  amber: { label: "Amber", fill: "#DDA13B", light: "#F1C46B", ink: "#936110" },
-  lime: { label: "Lime", fill: "#95BD51", light: "#C0DE85", ink: "#5A7D23" },
-  mint: { label: "Mint", fill: "#42AE95", light: "#81CFB4", ink: "#237D66" },
-  cyan: { label: "Cyan", fill: "#36ABC5", light: "#86D7E7", ink: "#147B92" },
-  blue: { label: "Blue", fill: "#569ADB", light: "#94C2EF", ink: "#3575B4" },
-  violet: { label: "Violet", fill: "#9274D3", light: "#B7A0E7", ink: "#7753AD" },
-  rose: { label: "Rose", fill: "#D96CA4", light: "#ECA4C9", ink: "#AD417B" },
+  coral: { label: "Coral", fill: "#C86257", light: "#E19384", ink: "#A8493E" },
+  amber: { label: "Amber", fill: "#BA8732", light: "#DEB462", ink: "#8A5B0F" },
+  lime: { label: "Lime", fill: "#7D9F44", light: "#B1CC7A", ink: "#557621" },
+  mint: { label: "Mint", fill: "#37927D", light: "#77BEA6", ink: "#217660" },
+  cyan: { label: "Cyan", fill: "#2D90A5", light: "#7BC6D5", ink: "#137489" },
+  blue: { label: "Blue", fill: "#4881B8", light: "#88B2DC", ink: "#326EA9" },
+  violet: { label: "Violet", fill: "#8268B8", light: "#A893D5", ink: "#704EA3" },
+  rose: { label: "Rose", fill: "#B65B8A", light: "#D997B9", ink: "#A33D74" },
 } as const;
 
 export function assistantMentionTextColor(avatar?: Avatar): string {

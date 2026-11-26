@@ -5,7 +5,7 @@ import { Provider } from "react-redux";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Assistant, AssistantAssignment, AssistantConversation, AssistantTeam, AssistantTeamWork, AssistantWelcome, SetAssistantPinned, UpdateAssistantProfile } from "@mains/contracts/assistants";
+import type { Assistant, AssistantAssignment, AssistantConversation, AssistantSkill, AssistantTeam, AssistantTeamWork, AssistantWelcome, SetAssistantPinned, UpdateAssistantProfile } from "@mains/contracts/assistants";
 import type { ToolApprovalRequest } from "@mains/contracts/runs";
 import type { Pulse } from "@/lib/redux/api/pulseApi";
 import type { ModelInfo } from "@/lib/redux/api/providersApi";
@@ -36,6 +36,9 @@ const archiveResult = vi.hoisted(() => ({
 const setPinned = vi.hoisted(() => vi.fn());
 const removeMate = vi.hoisted(() => vi.fn());
 const updateProfile = vi.hoisted(() => vi.fn());
+const generateSkill = vi.hoisted(() => vi.fn());
+const saveSkill = vi.hoisted(() => vi.fn());
+const catalogSkills = vi.hoisted(() => [] as AssistantSkill[]);
 const readTeamWork = vi.hoisted(() => vi.fn());
 const readAssignment = vi.hoisted(() => vi.fn());
 const assignTask = vi.hoisted(() => vi.fn());
@@ -50,6 +53,12 @@ vi.mock("@/lib/redux/api", () => ({
 }));
 vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantOverviewQuery: () => ({ currentData: { assistants: mocks.assistants, teams: mocks.teams, assignments, memories: [], welcomes }, refetch: vi.fn() }),
+  useAssistantSkillCatalogQuery: () => ({ currentData: {
+    skills: catalogSkills,
+    pluginSkillIds: [],
+  } }),
+  useGenerateAssistantSkillMutation: () => [generateSkill, {}],
+  useSaveAssistantSkillMutation: () => [saveSkill, {}],
   useAssistantTeamWorkQuery: readTeamWork,
   useAssistantAssignmentQuery: readAssignment,
   useAssignAssistantTaskMutation: () => [assignTask, {}],
@@ -60,6 +69,10 @@ vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useUpdateAssistantProfileMutation: () => [updateProfile, { isLoading: mocks.savingProfile }],
   useCreateAssistantMutation: () => [createMate, {}],
   useCreateAssistantTeamMutation: () => [createTeam, {}],
+}));
+vi.mock("@/lib/redux/api/providersApi", () => ({
+  useGetProviderByIdQuery: () => ({ currentData: { config: { approvalMode: "on-request" } } }),
+  useGetCodexPermissionsQuery: () => ({ currentData: { profilesSupported: true, profiles: [], allowedSandboxModes: null, allowedApprovalPolicies: null, requiresNamedProfile: false } }),
 }));
 vi.mock("@/lib/redux/api/pulseApi", () => ({
   useGetPulsesQuery: () => ({ currentData: mocks.routines, refetch: vi.fn() }),
@@ -123,7 +136,8 @@ beforeEach(() => {
   assignments.length = 0;
   createTeam.mockReset().mockImplementation((input: Pick<AssistantTeam, "accountId" | "name">) =>
     ({ unwrap: () => Promise.resolve({ ...input, id: "new-team", createdAt: new Date(0) }) }));
-  updateProfile.mockReset().mockImplementation(({ id, profile, teamChange, modelChange }: UpdateAssistantProfile) => ({
+  catalogSkills.splice(0, catalogSkills.length, { id: "travel-skill", name: "Travel research", description: "Compare transport" });
+  updateProfile.mockReset().mockImplementation(({ id, profile, teamChange, modelChange, skillChange }: UpdateAssistantProfile) => ({
     unwrap: async () => {
       const assistant = mocks.assistants.find(assistant => assistant.id === id)!;
       Object.assign(assistant, profile);
@@ -132,6 +146,7 @@ beforeEach(() => {
         assistant.model = modelChange.model;
         assistant.effort = modelChange.effort;
       }
+      if (skillChange) assistant.skills = skillChange.ids.map(id => catalogSkills.find(skill => skill.id === id)!);
       return assistant;
     },
   }));
@@ -146,7 +161,7 @@ beforeEach(() => {
   mocks.refetchChats.mockReset();
   mocks.teams = [{ id: "team", accountId: "account", name: "Mains", createdAt: new Date(0) }, { id: "website-team", accountId: "account", name: "Website team", createdAt: new Date(0) }, { id: "foreign-team", accountId: "foreign-account", name: "Foreign team", createdAt: new Date(0) }];
   mocks.chats = ["first", "second"].map((id, index) => ({ id, title: index ? "Second release" : "First release", goal: id, status: "succeeded", mode: index ? "work" : "developer", workspaceId: index ? null : "mains-ios", workspaceName: index ? null : "feat/ios", projectName: index ? null : "mains", createdAt: new Date(), updatedAt: new Date(Date.now() - (index + 1) * 60_000) }));
-  mocks.assistants = [{ id: "release", accountId: "account", teamId: "team", name: "Release", description: "Own releases", instructions: "Verify the release before distribution.", isArchived: false, providerId: "codex", avatar: { shape: "sphere", color: "blue" }, model: "model", effort: "high", spaceSnapshot: { name: "Codex" } } as Assistant];
+  mocks.assistants = [{ id: "release", accountId: "account", teamId: "team", name: "Release", description: "Own releases", instructions: "Verify the release before distribution.", isArchived: false, providerId: "codex", avatar: { shape: "sphere", color: "blue" }, model: "model", effort: "high", conversationSettings: { model: "model", config: { sandboxMode: "workspace-write" } }, spaceSnapshot: { name: "Codex" } } as Assistant];
   mocks.assistants.push({ ...mocks.assistants[0], id: "website", name: "Website", description: "Own the website" });
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("matchMedia", vi.fn(() => ({
@@ -548,6 +563,133 @@ describe("assistant profile and conversation", () => {
     }));
     expect(within(panel).getByText("new-model", { exact: true })).toBeTruthy();
     expect(screen.getByTestId("conversation").textContent).toBe("first");
+  });
+
+  it("saves skills and permission choices with the Mate profile", async () => {
+    setup("/assistants?assistant=release&run=first&tab=profile");
+    const panel = await screen.findByRole("complementary", { name: "About Release" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
+    const form = within(panel).getByRole("form", { name: "Edit mate profile" });
+    fireEvent.click(within(form).getByRole("button", { name: "Expand Skills" }));
+    const skills = within(screen.getByRole("dialog", { name: "Skills" }));
+    fireEvent.click(skills.getByRole("button", { name: "Add skills" }));
+    expect(await screen.findByRole("searchbox", { name: "Search skills" })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("option", { name: /Travel research/ }));
+    expect(skills.getByText("Travel research")).toBeTruthy();
+    fireEvent.click(skills.getByRole("button", { name: "Minimize Skills" }));
+    expect(within(form).getByRole("region", { name: "Skills" }).textContent).toContain("1 assigned");
+    fireEvent.click(within(form).getByRole("button", { name: "Mate sandbox or profile" }));
+    fireEvent.click(await screen.findByRole("option", { name: /Read Only/ }));
+    fireEvent.click(within(form).getByRole("button", { name: "Mate approval policy" }));
+    fireEvent.click(await screen.findByRole("option", { name: /Untrusted/ }));
+    expect(updateProfile).not.toHaveBeenCalled();
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(within(panel).queryByRole("form", { name: "Edit mate profile" })).toBeNull());
+    expect(updateProfile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      id: "release", skillChange: { ids: ["travel-skill"], expectedIds: [] },
+      permissionChange: { mode: "read-only", expectedMode: "workspace-write", approvalMode: "untrusted", expectedApprovalMode: null },
+    }));
+  });
+
+  it("generates a local skill and saves its assignment from the expanded Skills editor", async () => {
+    const draft = { name: "cheap-flight-finder", title: "Cheap flight finder", description: "Find low fares.",
+      markdown: "Prefer Skyscanner when available and use another source when needed." };
+    generateSkill.mockReturnValueOnce({ unwrap: async () => draft });
+    saveSkill.mockReturnValueOnce({ unwrap: async () => {
+      const created: AssistantSkill = { id: "new-skill", name: draft.title, description: draft.description, storage: "local" };
+      catalogSkills.push(created);
+      return created;
+    } });
+    const { refresh } = setup("/assistants?assistant=release&run=first&tab=profile");
+    const panel = await screen.findByRole("complementary", { name: "About Release" });
+    expect(within(panel).queryByRole("region", { name: "Plugins" })).toBeNull();
+    const summary = within(panel).getByRole("region", { name: "Skills" });
+    expect(summary.textContent).toContain("0 assigned");
+    fireEvent.click(within(summary).getByRole("button", { name: "Expand Skills" }));
+    const skills = within(screen.getByRole("dialog", { name: "Skills" }));
+    expect(skills.getByRole("heading", { name: "Release Skills" })).toBeTruthy();
+    expect(skills.getByText("No skills assigned")).toBeTruthy();
+    expect(skills.getByRole("button", { name: "Import SKILL.md" })).toBeTruthy();
+    fireEvent.click(skills.getByRole("button", { name: "Create with Mains" }));
+    fireEvent.change(skills.getByRole("textbox", { name: "Skill workflow" }), { target: { value: "Compare cheap flights" } });
+    fireEvent.click(skills.getByRole("button", { name: "Generate draft" }));
+    await waitFor(() => expect(skills.getByRole<HTMLTextAreaElement>("textbox", { name: "Skill Markdown" }).value).toBe(draft.markdown));
+    fireEvent.click(skills.getByRole("button", { name: "Save skill" }));
+    expect(await skills.findByText(draft.title)).toBeTruthy();
+    expect(saveSkill).toHaveBeenCalledWith({ accountId: "account", id: "release", input: { draft } });
+    expect(updateProfile).not.toHaveBeenCalled();
+    fireEvent.click(skills.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Skills" })).toBeNull());
+    refresh();
+    expect(screen.getByRole("region", { name: "Skills" }).textContent).toContain("1 assigned");
+    expect(updateProfile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ skillChange: { ids: ["new-skill"], expectedIds: [] } }));
+  });
+
+  it("animates the Skills panel in both directions and keeps its draft when minimizing", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(document, "startViewTransition");
+    const start = vi.fn((update: () => void) => {
+      update();
+      return { finished: Promise.resolve(), skipTransition: vi.fn() };
+    });
+    Object.defineProperty(document, "startViewTransition", { configurable: true, value: start });
+    try {
+      setup("/assistants?assistant=release&run=first&tab=profile");
+      const summary = await screen.findByRole("region", { name: "Skills" });
+      const expand = within(summary).getByRole("button", { name: "Expand Skills" });
+      expect(summary.style.viewTransitionName).toBe("mate-skills");
+      fireEvent.click(expand);
+      const dialog = screen.getByRole("dialog", { name: "Skills" });
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(dialog.style.viewTransitionName).toBe("mate-skills");
+      await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Create with Mains" }));
+      fireEvent.change(within(dialog).getByRole("textbox", { name: "Skill workflow" }), { target: { value: "Check routes" } });
+      fireEvent.keyDown(dialog, { key: "Escape" });
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("dialog", { name: "Skills" })).toBeNull();
+      await waitFor(() => expect(document.activeElement).toBe(expand));
+      fireEvent.click(expand);
+      expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Skill workflow" }).value).toBe("Check routes");
+    } finally {
+      if (descriptor) Object.defineProperty(document, "startViewTransition", descriptor);
+      else Reflect.deleteProperty(document, "startViewTransition");
+    }
+  });
+
+  it("shows available assignments and keeps unavailable skills behind a separate disclosure", async () => {
+    mocks.assistants[0].skills = [...catalogSkills, { id: "missing", name: "Meeting prep", description: "Prepare meetings and follow-ups" }];
+    setup("/assistants?assistant=release&run=first&tab=profile");
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Skills" }));
+    const skills = within(screen.getByRole("dialog", { name: "Skills" }));
+    expect(skills.getByText("Travel research")).toBeTruthy();
+    expect(skills.getByRole("button", { name: "New skill" })).toBeTruthy();
+    const unavailable = skills.getByRole("button", { name: "Unavailable skills, 1" });
+    expect(unavailable.getAttribute("aria-expanded")).toBe("false");
+    expect(skills.queryByRole("button", { name: "Remove Meeting prep" })).toBeNull();
+    fireEvent.click(unavailable);
+    expect(unavailable.getAttribute("aria-expanded")).toBe("true");
+    expect(skills.getByText("Prepare meetings and follow-ups")).toBeTruthy();
+    fireEvent.click(skills.getByRole("button", { name: "Remove Meeting prep" }));
+    expect(skills.queryByRole("button", { name: /Unavailable skills/ })).toBeNull();
+    expect(skills.getByRole("button", { name: "Save changes" })).toBeTruthy();
+    expect(updateProfile).not.toHaveBeenCalled();
+  });
+
+  it("fades the bottom of the skill list only while more rows can scroll into view", async () => {
+    catalogSkills.push(
+      { id: "second", name: "Review notes", description: "Review notes" },
+      { id: "third", name: "Plan meetings", description: "Plan meetings" },
+    );
+    mocks.assistants[0].skills = [...catalogSkills];
+    setup("/assistants?assistant=release&run=first&tab=profile");
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Skills" }));
+    const list = screen.getByRole("list", { name: "Active skills" });
+    Object.defineProperties(list, { clientHeight: { value: 136 }, scrollHeight: { value: 208 } });
+    fireEvent.scroll(list);
+    expect(list.className).toContain("mask-image");
+    list.scrollTop = 72;
+    fireEvent.scroll(list);
+    expect(list.className).not.toContain("mask-image");
   });
 
   it("keeps the draft on save failure and lets the user cancel it", async () => {

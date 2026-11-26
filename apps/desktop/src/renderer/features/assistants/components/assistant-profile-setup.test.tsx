@@ -70,6 +70,16 @@ it("shows a new welcome and its answer form immediately with reduced motion", ()
   expect(screen.getByRole("textbox", { name: "Setup answer" })).toBeTruthy();
 });
 
+it("shows copy actions and saved times for setup messages before the first chat", () => {
+  const createdAt = new Date("2026-11-26T17:05:00Z");
+  const updatedAt = new Date("2026-11-26T17:10:00Z");
+  const { container } = render(<AssistantProfileSetupCard {...props} welcome={{ ...welcome, createdAt, updatedAt, state: "skipped",
+    question: { ...question, profileSetup: { saved: true, turns: [{ question: question.question, answer: "Check signing" }] } },
+  }} />);
+  expect(screen.getAllByRole("button", { name: "Copy response" })).toHaveLength(2);
+  expect([...container.querySelectorAll("time")].map(time => time.dateTime)).toEqual([createdAt.toISOString(), updatedAt.toISOString()]);
+});
+
 it.each([
   { platform: "darwin", modifier: { metaKey: true }, label: "⌘↵", keyshortcuts: "Meta+Enter" },
   { platform: "win32", modifier: { ctrlKey: true }, label: "Ctrl+Enter", keyshortcuts: "Control+Enter" },

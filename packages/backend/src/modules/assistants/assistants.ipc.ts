@@ -29,6 +29,9 @@ export function registerAssistantsIpc() {
     }));
     ipcMain.handle(CHANNELS.assistants.assignment, handle((accountId: string, id: string) => assistantsService.assignment(accountId, id)));
     ipcMain.handle(CHANNELS.assistants.overview, handle((accountId: string) => assistantsService.overview(accountId)));
+    ipcMain.handle(CHANNELS.assistants.skillCatalog, handle((accountId: string, id: string) => assistantsService.skillCatalog(id, accountId)));
+    ipcMain.handle(CHANNELS.assistants.generateSkill, handle((accountId: string, id: string, request: unknown) => assistantsService.generateSkill(id, accountId, request, assistantWork.guard())));
+    ipcMain.handle(CHANNELS.assistants.saveSkill, handle((accountId: string, id: string, skill: unknown) => changed(() => assistantsService.saveSkill(id, accountId, skill, false, assistantWork.guard()))));
     ipcMain.handle(CHANNELS.assistants.teamWork, handle(readAssistantTeamWork));
     ipcMain.handle(CHANNELS.assistants.createTeam, handleWithContext((ctx, payload: unknown) => changed(async () => {
         if (ctx?.deviceId) await assistantsMobile.assertAccount(text(object(payload).accountId, "Account"));

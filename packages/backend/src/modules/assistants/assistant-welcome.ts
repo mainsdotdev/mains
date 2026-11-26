@@ -95,6 +95,7 @@ export const assistantWelcome = {
                     const value = readWelcomePayload(raw);
                     if (value.question !== undefined && setup.turns.length === 1) {
                         previous.question = text(value.question, "Follow-up question", 1000);
+                        setup.questionAt = Date.now();
                     } else {
                         setup.draft = {
                             description: text(value.description, "Description", 1000),
@@ -160,7 +161,8 @@ export const assistantWelcome = {
             if (typeof value.step === "number" && Number.isInteger(value.step) && setup.turns[value.step]?.answer === answer) return;
             if (row.state !== "ready" || setup.saved || setup.draft || value.step !== setup.turns.length || setup.turns.length >= 2)
                 throw new Error("This setup question is no longer active");
-            setup.turns.push({ question: question.question, answer });
+            const questionAt = setup.questionAt ?? (setup.turns.length === 0 ? row.createdAt.getTime() : undefined);
+            setup.turns.push({ question: question.question, answer, questionAt });
             assistantsRepo.patchWelcome(id, { state: "pending", question: JSON.stringify(question), error: null });
             changed();
             this.prepare(id);
@@ -176,6 +178,7 @@ export const assistantWelcome = {
         if (row.state !== "ready" || setup.saved || !setup.draft) throw new Error("This profile draft is no longer active");
         setup.draft = { description, instructions };
         setup.saved = true;
+        setup.savedAt = Date.now();
         assistantsRepo.transaction(() => {
             assistantsRepo.saveProfile(id, accountId, { description, instructions });
             assistantsRepo.patchWelcome(id, { state: "skipped", question: JSON.stringify(question), error: null });

@@ -173,15 +173,16 @@ describe("codex.driver / app-server protocol", () => {
     process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
     process.env.MAINS_CODEX_FIXTURE_PROFILES = JSON.stringify([{ id: "project-edit", description: "Project only", allowed: true }]);
     process.env.MAINS_CODEX_FIXTURE_REQUIREMENTS = JSON.stringify({ allowedPermissionProfiles: { "project-edit": true } });
-    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 1000, sandboxMode: "danger-full-access", permissionProfile: "project-edit" });
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 1000, sandboxMode: "danger-full-access", permissionProfile: "project-edit", approvalMode: "on-request" });
     drivers.push(driver);
-    const acquired = await driver.createSession(request("profile-source"));
+    const acquired = await driver.createSession({ ...request("profile-source"), mateApprovalMode: "untrusted" });
     await driver.executePrompt(acquired.session, acquired.prompt, async () => {}, new AbortController().signal);
     const resumed = await driver.resumeSession!({ runId: "profile-source", accountId: "account-1", execution: request("profile-source").execution, message: "Continue" });
     await driver.executePrompt(resumed.session, resumed.prompt, async () => {}, new AbortController().signal);
-    await driver.forkSession!({ runId: "profile-fork", sourceRunId: "profile-source", accountId: "account-1", execution: request("profile-fork").execution, message: "Fork" });
+    await driver.forkSession!({ runId: "profile-fork", sourceRunId: "profile-source", accountId: "account-1", execution: request("profile-fork").execution, message: "Fork", mateApprovalMode: "never" });
     const requests = readProtocolLog(logPath).filter((entry) => ["thread/start", "thread/resume", "thread/fork"].includes(String(entry.method)));
     expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "thread/resume", "thread/fork"]);
+    expect(requests.map(entry => (entry.params as Record<string, unknown>).approvalPolicy)).toEqual(["untrusted", "on-request", "never"]);
     for (const entry of requests) {
       expect(entry.params).toMatchObject({ permissions: "project-edit", config: { model_reasoning_summary: "auto" } });
       expect(entry.params).not.toHaveProperty("sandbox");

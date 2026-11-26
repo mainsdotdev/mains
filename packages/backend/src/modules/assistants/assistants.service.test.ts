@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { eq } from "drizzle-orm";
@@ -17,6 +17,7 @@ vi.mock("../providers/adapters", async () => ({
 }));
 import { assistantsService } from "./assistants.service";
 import { assistantsRepo } from "./assistants.repo";
+import { readLocalSkill } from "./assistant-skills";
 import { assistantsMobile } from "./assistants-mobile";
 import { assistantWelcome } from "./assistant-welcome";
 import { assistantWork } from "./assistant-work";
@@ -140,6 +141,113 @@ describe("Mate voice conversations", () => {
         assistantsService.archive(mate.id, mate.accountId, true);
         await expect(runsService.startRealtime(payload)).rejects.toThrow("Assistant is unavailable");
         if (client === "Mate Chats") await expect(runsService.createRealtimeConversation(create)).rejects.toThrow("Assistant is unavailable");
+    });
+});
+
+describe("Mate runtime settings", () => {
+    it("applies saved instructions, assigned skills and Codex permissions when resuming a chat", async () => {
+        assistantWork.start();
+        const mate = await makeAssistant("Travel");
+        const other = await makeAssistant("Other");
+        const document = join(root, "SKILL.md");
+        writeFileSync(document, "Compare fares with luggage included.");
+        vi.spyOn(providersService, "getSkills").mockResolvedValue([
+            { name: "travel", path: document, description: "Compare fares" },
+            { name: "disabled", path: document, modelInvocable: false },
+        ]);
+        const { skills: [skill] } = await assistantsService.skillCatalog(mate.id, mate.accountId);
+        expect(skill).toEqual({ id: expect.stringMatching(/^[a-f0-9]{64}$/), name: "Travel", description: "Compare fares" });
+        expect((await assistantsService.skillCatalog(mate.id, mate.accountId)).skills).toHaveLength(1);
+        vi.spyOn(providersService, "getCodexPermissions").mockResolvedValue({ profilesSupported: true,
+            profiles: [], allowedSandboxModes: ["workspace-write", "read-only"], allowedApprovalPolicies: ["on-request", "untrusted"], requiresNamedProfile: false });
+        const { runId } = await assistantWork.sendChat(mate.accountId, mate.id, "Plan a trip", "settings-initial");
+        await settled(runId);
+        const { name, description, instructions, avatar } = mate;
+        const expectedProfile = { name, description, instructions, avatar };
+        const input = { id: mate.id, accountId: mate.accountId, expectedProfile, profile: { ...expectedProfile, instructions: "Use trains first." },
+            skillChange: { ids: [skill.id], expectedIds: [] }, permissionChange: { mode: "read-only", expectedMode: "workspace-write", approvalMode: "untrusted", expectedApprovalMode: null } } as const;
+        await expect(assistantsService.updateProfile({ ...input, permissionChange: { ...input.permissionChange, approvalMode: "never" } })).rejects.toThrow("managed Codex policy");
+        const saved = await assistantsService.updateProfile(input);
+        expect(saved).toMatchObject({ skills: [skill], codexApprovalMode: "untrusted", conversationSettings: { config: { sandboxMode: "read-only" } } });
+        await expect(assistantsService.updateProfile(input)).resolves.toEqual(saved);
+        await expect(assistantsService.readSkill(other.id, other.accountId, skill.id)).rejects.toThrow("not assigned");
+        expect((await assistantsService.readSkill(mate.id, mate.accountId, skill.id)).instructions).toContain("luggage included");
+        const result = await dispatchMainsTool("ReadAssistantSkill", { skillId: skill.id }, { runId, workspaceId: null, rootPath: null });
+        expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("luggage included") });
+
+        await assistantWork.sendChat(mate.accountId, mate.id, "Compare the fares", "settings-resume", runId);
+        await settled(runId);
+        const resumed = driver.calls.resumeSession[0];
+        expect(resumed).toMatchObject({ mateApprovalMode: "untrusted", configSnapshot: { sandboxMode: "read-only" } });
+        expect(resumed.extraInstructions).toContain("Use trains first.");
+        expect(resumed.extraInstructions).toContain(skill.id);
+        expect(resumed.extraInstructions).not.toContain("luggage included");
+        expect(await assistantsService.runInstructions(mate.id, mate.accountId, "Compare fares", false)).toContain("SKILL.md");
+        await assistantsService.updateProfile({ ...input, skillChange: { ids: [], expectedIds: [skill.id] } });
+        await expect(assistantsService.readSkill(mate.id, mate.accountId, skill.id)).rejects.toThrow("not assigned");
+    });
+
+    it("creates one persistent SKILL.md through chat, keeps it local to the account, and reads it on resume", async () => {
+        assistantWork.start();
+        const mate = await makeAssistant("Travel");
+        const other = await makeAssistant("Weather");
+        vi.spyOn(providersService, "getSkills").mockResolvedValue([]);
+        const { runId } = await assistantWork.sendChat(mate.accountId, mate.id, "Create a cheap flight finder skill", "create-flight-skill");
+        await settled(runId);
+        const ctx = { runId, workspaceId: null, rootPath: null };
+        expect(driver.calls.createSession[0].extraInstructions).toContain("mains-skill-creator");
+        const guide = await dispatchMainsTool("ReadAssistantSkill", { skillId: "mains-skill-creator" }, ctx);
+        expect(JSON.stringify(guide.content)).toContain("another suitable authorized source");
+        const draft = { name: "cheap-flight-finder", title: "Cheap flight finder", description: "Compare fares.",
+            markdown: "Prefer Skyscanner when available. Otherwise use another flight source and name it." };
+        const generateText = vi.fn().mockResolvedValue(JSON.stringify(draft));
+        vi.mocked(createWorkAdapter).mockReturnValue({ ...createWorkRunAdapter(driver.driver), generateText });
+        expect(await assistantsService.generateSkill(mate.id, mate.accountId, "Compare low fares", () => {})).toEqual(draft);
+        expect(generateText).toHaveBeenCalledWith(expect.stringContaining("Compare low fares"), expect.objectContaining({ isolated: true, model: mate.model }));
+        const first = await dispatchMainsTool("CreateAssistantSkill", draft, ctx);
+        expect(await dispatchMainsTool("CreateAssistantSkill", draft, ctx)).toEqual(first);
+        const [skill] = assistantsService.require(mate.id, mate.accountId).skills ?? [];
+        expect(skill).toMatchObject({ name: draft.title, storage: "local" });
+        const stored = await assistantsService.readSkill(mate.id, mate.accountId, skill.id);
+        expect(readFileSync(stored.documentPath!, "utf8")).toContain(draft.markdown);
+        await expect(assistantsService.readSkill(other.id, other.accountId, skill.id)).rejects.toThrow("not assigned");
+        await expect(assistantsService.saveSkill(mate.id, mate.accountId, { draft: { ...draft, markdown: "Changed" } }, false, () => {})).rejects.toThrow("already uses this name");
+        await assistantWork.sendChat(mate.accountId, mate.id, "Find a flight", "use-flight-skill", runId);
+        await settled(runId);
+        expect(driver.calls.resumeSession[0].extraInstructions).toContain(skill.id);
+        expect(driver.calls.resumeSession[0].extraInstructions).not.toContain(draft.markdown);
+
+        const imported = await assistantsService.saveSkill(mate.id, mate.accountId, { document: "---\nname: compare-trains\ndescription: >\n  Compare rail fares\n  and transfer times.\n---\n# Compare trains\n\nCheck the route." }, false, () => {});
+        expect(imported).toMatchObject({ name: "Compare trains", description: "Compare rail fares and transfer times.", storage: "local" });
+        expect((await assistantsService.skillCatalog(other.id, other.accountId)).skills).toContainEqual(imported);
+        await expect(readLocalSkill("separate", skill.id)).resolves.toBeNull();
+    });
+
+    it("excludes plugin-owned skills from the Mate skill catalog", async () => {
+        const mate = await makeAssistant("Meetings");
+        const document = join(root, "SKILL.md");
+        writeFileSync(document, "Write a meeting agenda.");
+        const providerSkills = vi.spyOn(providersService, "getSkills").mockResolvedValue([
+            { name: "notion:meeting-prep", path: document, pluginId: "notion@marketplace" },
+        ]);
+        expect(await assistantsService.skillCatalog(mate.id, mate.accountId)).toEqual({ skills: [], pluginSkillIds: [expect.any(String)] });
+        providerSkills.mockResolvedValue([]);
+        expect(await assistantsService.skillCatalog(mate.id, mate.accountId)).toEqual({ skills: [], pluginSkillIds: [] });
+    });
+
+    it("uses each Claude Mate’s permission mode and retains the Work tool restrictions", async () => {
+        const mate = await makeAssistant("Writing", "claude_code");
+        const other = await makeAssistant("Reading", "claude_code");
+        const { name, description, instructions, avatar } = mate;
+        const profile = { name, description, instructions, avatar };
+        await assistantsService.updateProfile({ id: mate.id, accountId: mate.accountId, profile, expectedProfile: profile,
+            permissionChange: { mode: "acceptEdits", expectedMode: "default" } });
+        const { runId } = await assistantWork.sendChat(mate.accountId, mate.id, "Write a note", "claude-mate-settings");
+        await settled(runId);
+        expect(driver.calls.createSession.find(call => call.runId === runId)).toMatchObject({
+            configSnapshot: { permissionMode: "acceptEdits" }, toolPolicy: { disallowedTools: ["Bash"] },
+        });
+        expect(assistantsService.require(other.id, other.accountId).conversationSettings.config.permissionMode).toBe("default");
     });
 });
 
@@ -1191,6 +1299,8 @@ describe("one-time assistant welcome", () => {
         const first = { action: "answer", step: 0, answer: "Help with releases" };
         assistantWelcome.setupProfile("default", assistant.id, first);
         await vi.waitFor(() => expect(read().question?.question).toBe("Which release checks should I run?"));
+        const followUpAt = read().question?.profileSetup?.questionAt;
+        expect(followUpAt).toEqual(expect.any(Number));
         assistantWelcome.setupProfile("default", assistant.id, first);
         expect(generate).toHaveBeenCalledTimes(1);
         await assistantWork.stop();
@@ -1204,7 +1314,11 @@ describe("one-time assistant welcome", () => {
         assistantWelcome.setupProfile("default", assistant.id, { action: "save", profile });
         assistantWelcome.setupProfile("default", assistant.id, { action: "save", profile });
         expect(assistantsService.require(assistant.id, "default")).toMatchObject(profile);
-        expect(read()).toMatchObject({ state: "skipped", runId, question: { profileSetup: { saved: true } } });
+        expect(read()).toMatchObject({ state: "skipped", runId, question: { profileSetup: {
+            saved: true, savedAt: expect.any(Number), turns: [
+                { questionAt: read().createdAt.getTime() }, { questionAt: followUpAt },
+            ],
+        } } });
         expect(driver.calls.createSession).toHaveLength(0);
         expect((await assistantWork.sendChat("default", assistant.id, "Check this build", `welcome-${assistant.id}`, runId)).runId).toBe(runId);
         await settled(runId);

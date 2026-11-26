@@ -1156,6 +1156,7 @@ export function createCodexCapabilities(
                 : undefined;
           skills.push({
             name: skill.name,
+            pluginId: skill.pluginId,
             description:
               skill.interface?.shortDescription ||
               skill.shortDescription ||

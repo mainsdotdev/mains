@@ -13,15 +13,16 @@ enum MateRobotAssets {
 
     static func chatTint(for avatar: MateAvatar) -> Color {
         let canonical = catalogue?.styles.lazy.flatMap(\.presets).first { $0.id == avatar.shape }?.color
+        // Match the desktop Mate accent fills.
         let rgb: UInt32 = switch canonical ?? avatar.color {
-        case "coral": 0xEE7567
-        case "amber": 0xDDA13B
-        case "lime": 0x95BD51
-        case "mint": 0x42AE95
-        case "cyan": 0x36ABC5
-        case "violet": 0x9274D3
-        case "rose": 0xD96CA4
-        default: 0x569ADB
+        case "coral": 0xC86257
+        case "amber": 0xBA8732
+        case "lime": 0x7D9F44
+        case "mint": 0x37927D
+        case "cyan": 0x2D90A5
+        case "violet": 0x8268B8
+        case "rose": 0xB65B8A
+        default: 0x4881B8
         }
         return Color(.sRGB, red: Double((rgb >> 16) & 255) / 255,
                      green: Double((rgb >> 8) & 255) / 255, blue: Double(rgb & 255) / 255)

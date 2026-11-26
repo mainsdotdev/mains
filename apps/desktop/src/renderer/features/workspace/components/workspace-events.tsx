@@ -53,7 +53,7 @@ import { selectActiveTool } from "../lib/select-active-tool";
 import { selectActiveCompaction } from "../lib/select-active-compaction";
 import { ProviderAuthNotice } from "./provider-auth-notice";
 import { classifyRunErrorKind } from "../../../../shared/run-errors";
-import { ArrowUp, Brain, BrowserCursor, ChevronDown, Fork } from "@/components/ui/icons";
+import { ArrowUp, Brain, BrowserCursor, ChevronDown } from "@/components/ui/icons";
 import {
   useGetAppSettingsQuery,
   useGetProviderAccountInfoQuery,
@@ -63,9 +63,9 @@ import { getProviderVariant } from "@/lib/provider-variants";
 import { isDocumentRenderImage } from "@/lib/document-viewer";
 import { dedupeGeneratedImageCopies } from "../lib/dedupe-generated-images";
 import { resolveModelDisplayName } from "@/lib/model-display";
-import { Button, CopyButton, Text, Tooltip } from "@/components/ui";
+import { Button, Text, Tooltip } from "@/components/ui";
 import { formatCostFromMicros, formatDurationMs } from "@/lib/format";
-import { formatAbsoluteDate } from "@/lib/format-date";
+import { ResponseFooter } from "./response-footer";
 import { PromptSuggestionChips } from "./prompt-suggestion-chips";
 import { TurnChangesCard } from "./turn-changes-card";
 import { TranscriptList, type TranscriptListRow } from "./transcript-list";
@@ -76,11 +76,6 @@ import { ToolActivityPresenceProvider } from "../lib/tool-activity-presence";
 function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
 }
-
-const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
-  hour: "numeric",
-  minute: "2-digit",
-});
 
 /**
  * Assistant-error codes an auth notice already speaks for. Anything else the
@@ -259,8 +254,8 @@ function SessionTimeBar({
   const hasUsage = turn && (turn.inputTokens || turn.outputTokens || turn.cacheReadTokens || turn.cacheWriteTokens || turn.costMicros);
 
   return (
-    <Text as="div" size="s" tone="muted" className={`flex items-center gap-2 -mt-1 ${revealOnHover ? "opacity-0 pointer-events-none transition-opacity duration-150 group-hover/agent-turn:opacity-100 group-hover/agent-turn:pointer-events-auto group-focus-within/agent-turn:opacity-100 group-focus-within/agent-turn:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto motion-reduce:transition-none" : ""}`}>
-      {hasUsage ? (
+    <ResponseFooter content={info.responseContent} receivedAt={info.receivedAt} revealOnHover={revealOnHover} onFork={onFork ? handleFork : undefined}
+      duration={hasUsage ? (
         <Tooltip
           content={<UsageTooltipContent turn={turn} />}
           position="top-right"
@@ -270,37 +265,7 @@ function SessionTimeBar({
         </Tooltip>
       ) : (
         <span>{formatDurationMs(info.elapsed)}</span>
-      )}
-      {info.responseContent && (
-        <>
-          <span className="size-0.75 rounded-full bg-current opacity-50" />
-          <CopyButton
-            text={info.responseContent}
-            tooltip="Copy response"
-            variant="bare"
-            className="flex items-center gap-1 hover:text-primary-900 dark:hover:text-primary-100 transition-colors cursor-pointer"
-          />
-        </>
-      )}
-      {onFork && (
-        <>
-          <Button
-            tooltip="Fork run from here"
-            onClick={handleFork}
-            className="flex items-center gap-1 ml-0.5 hover:text-primary-900 dark:hover:text-primary-100 transition-colors cursor-pointer"
-          >
-            <Fork className="size-3.5 rotate-90" />
-          </Button>
-        </>
-      )}
-      {info.receivedAt && Number.isFinite(info.receivedAt.getTime()) && (
-        <Text as="span" size="xs" tone="faint" className={`ml-1 shrink-0 select-none whitespace-nowrap tabular-nums ${revealOnHover ? "" : "opacity-0 transition-opacity group-hover/agent-turn:opacity-100 group-focus-within/agent-turn:opacity-100 motion-reduce:transition-none"}`}>
-          <time dateTime={info.receivedAt.toISOString()} title={formatAbsoluteDate(info.receivedAt)}>
-            {messageTimeFormatter.format(info.receivedAt)}
-          </time>
-        </Text>
-      )}
-    </Text>
+      )} />
   );
 }
 
@@ -668,9 +633,12 @@ export function WorkspaceEvents({
         onSuggestionSelect &&
         isRunCompleted &&
         index === lastSuggestionIndex;
-      const sessionBarForThis = sessionTimes.has(index)
-        ? sessionTimes.get(index)!
-        : null;
+      const firstEvent = group.events[0];
+      const isMateWelcome = appearance === "assistant" && firstEvent?.metadata?.source === "assistant_welcome";
+      const sessionBarForThis = isMateWelcome ? undefined : sessionTimes.get(index);
+      const mateReply = appearance === "assistant" && group.type === "response" && firstEvent?.metadata?.kind === "report" &&
+        !isMateWelcome && firstEvent.metadata.source !== "codex_async_questions" && firstEvent.metadata.source !== "assistant_assignment" &&
+        firstEvent.metadata.streaming !== true && firstEvent.content.trim() ? firstEvent : undefined;
       const planToolName =
         group.type === "tool_calls" && group.events.length === 1
           ? toolEventPlanName(group.events[0])
@@ -764,13 +732,13 @@ export function WorkspaceEvents({
             />
           )}
           {group.type !== "prompt_suggestion" && turnChangesCard}
-          {group.type !== "prompt_suggestion" && sessionBarForThis && (
+          {group.type !== "prompt_suggestion" && (sessionBarForThis ? (
             <SessionTimeBar
-              info={sessionBarForThis}
+              info={mateReply ? { ...sessionBarForThis, responseContent: mateReply.content, receivedAt: mateReply.timestamp } : sessionBarForThis}
               revealOnHover={appearance === "assistant"}
               onFork={index === lastSessionIndex && isRunCompleted && onForkRun ? handleFork : undefined}
             />
-          )}
+          ) : mateReply && <ResponseFooter content={mateReply.content} receivedAt={mateReply.timestamp} revealOnHover />)}
         </TranscriptItemScope>
       );
     },
@@ -801,12 +769,13 @@ export function WorkspaceEvents({
   const transcriptRows = useMemo<TranscriptListRow[]>(() => turnRenderRows.map((row, rowIndex) => {
     const first = row.kind === "flat" ? row.indices[0] : row.previousSegments[0]?.[0] ?? row.lastSegment[0];
     const id = `row-${row.kind === "flat" ? "flat" : "acc"}-${eventGroups[first]?.id}`;
+    const hasWelcomeMessages = appearance === "assistant" && eventGroups[first]?.events[0]?.metadata?.source === "assistant_welcome";
     return { id, groupIndex: row.kind === "flat" ? first : undefined,
-      render: () => <TranscriptItemScope id={id}><div className="group/agent-turn space-y-4">{row.kind === "flat"
+      render: () => <TranscriptItemScope id={id}><div className={hasWelcomeMessages ? "space-y-4" : "group/agent-turn space-y-4"}>{row.kind === "flat"
         ? row.indices.map(renderGroupAt)
         : <AgentTurnMessagesAccordion {...row} renderGroup={renderGroupAt}
           isRunInProgress={isRunning && !history?.historical && !suppressLiveAccordionForStaleEvents && rowIndex === turnRenderRows.length - 1} />}{row.suggestionIndices?.map(renderGroupAt)}</div></TranscriptItemScope> };
-  }), [turnRenderRows, eventGroups, renderGroupAt, isRunning, history?.historical, suppressLiveAccordionForStaleEvents]);
+  }), [turnRenderRows, eventGroups, renderGroupAt, isRunning, history?.historical, suppressLiveAccordionForStaleEvents, appearance]);
 
   const activeTool = useMemo(() => selectActiveTool(currentEvents), [currentEvents]);
   const hasStreamingResponse = useMemo(() => appearance === "assistant" ? isAssistantReplyStreaming(displayEvents) : displayEvents.some((event) =>

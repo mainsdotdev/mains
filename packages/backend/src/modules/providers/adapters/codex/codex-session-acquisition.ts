@@ -331,7 +331,7 @@ export function createCodexSessionAcquisition(
    * each call site — create, resume, and fork all need it, and three copies is
    * how `sandbox` ended up re-derived after every spread.
    */
-  async function threadSettingsFor(overrides: Record<string, unknown> = {}, cwd?: string, mode?: string) {
+  async function threadSettingsFor(overrides: Record<string, unknown> = {}, cwd?: string, mode?: string, mateApprovalMode?: WorkRunRequest["mateApprovalMode"]) {
     const sandboxMode =
       typeof overrides.sandboxMode === "string"
         ? (overrides.sandboxMode as CodexAdapterConfig["sandboxMode"])
@@ -340,7 +340,7 @@ export function createCodexSessionAcquisition(
       ? overrides.additionalDirectories as string[]
       : config.additionalDirectories ?? [];
     let permissionProfile = typeof overrides.permissionProfile === "string" ? overrides.permissionProfile : config.permissionProfile ?? "";
-    const approvalPolicy = config.approvalMode ?? "on-request";
+    const approvalPolicy = mateApprovalMode ?? config.approvalMode ?? "on-request";
     const catalog = await readCodexPermissions(await ensureServer(cwd), cwd);
     if (mode === "chat") permissionProfile = catalog.profiles.some((profile) => profile.id === ":read-only" && profile.allowed) ? ":read-only" : "";
     const sandbox = mode === "chat" ? "read-only" : mapSandboxMode(sandboxMode);
@@ -409,7 +409,7 @@ export function createCodexSessionAcquisition(
       request.configSnapshot ?? {}
     ) as Record<string, unknown>;
     const toggles = runTogglesFor(overrides);
-    const settings = await threadSettingsFor(overrides, request.execution.cwd, request.mode);
+    const settings = await threadSettingsFor(overrides, request.execution.cwd, request.mode, request.mateApprovalMode);
     const threadStartParams: CodexThreadStartParams = {
       cwd: request.execution.cwd,
       ...settings,
@@ -498,7 +498,7 @@ export function createCodexSessionAcquisition(
     const resumeOverrides = (
       request.configSnapshot ?? {}
     ) as Record<string, unknown>;
-    const settings = await threadSettingsFor(resumeOverrides, request.execution.cwd, request.mode);
+    const settings = await threadSettingsFor(resumeOverrides, request.execution.cwd, request.mode, request.mateApprovalMode);
     try {
       const resumeResult = await server.sendRequest("thread/resume", {
         threadId,
@@ -636,7 +636,7 @@ export function createCodexSessionAcquisition(
     const forkOverrides = (
       request.configSnapshot ?? {}
     ) as Record<string, unknown>;
-    const settings = await threadSettingsFor(forkOverrides, request.execution.cwd, request.mode);
+    const settings = await threadSettingsFor(forkOverrides, request.execution.cwd, request.mode, request.mateApprovalMode);
     const forkResult = await server.sendRequest("thread/fork", {
       threadId: sourceThreadId,
       excludeTurns: true,
@@ -784,7 +784,7 @@ export function createCodexSessionAcquisition(
       await bridge?.start();
       let model = await effectiveModel(request.model);
       const overrides = request.configSnapshot ?? {};
-      const settings = await threadSettingsFor(overrides, request.execution.cwd, request.mode);
+      const settings = await threadSettingsFor(overrides, request.execution.cwd, request.mode, request.mateApprovalMode);
       const turn = turnSettingsFor(overrides);
       const params = {
         cwd: request.execution.cwd, ...settings,

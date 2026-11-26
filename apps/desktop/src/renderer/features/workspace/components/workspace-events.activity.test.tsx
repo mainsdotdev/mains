@@ -119,7 +119,10 @@ it("shows assistant messages as a conversation without technical groups or activ
   expect(view.queryByText(/tool calls?/i)).toBeNull();
   expect(view.queryByText(/read a file/i)).toBeNull();
   expect(view.queryByRole("button", { name: /messages?|tool calls?/i })).toBeNull();
-  expect(view.getByRole("button", { name: "Copy response" })).toBeTruthy();
+  expect(view.getAllByRole("button", { name: "Copy response" })).toHaveLength(2);
+  expect([...view.container.querySelectorAll("time")].map(time => time.dateTime)).toEqual([
+    first.timestamp.toISOString(), last.timestamp.toISOString(),
+  ]);
 });
 
 it("shows the active assistant's avatar and live activity until a reply streams or input is required", () => {
@@ -145,6 +148,7 @@ it("shows the active assistant's avatar and live activity until a reply streams 
   const reply: RunEvent = { id: "reply", type: "artifact", content: "Here is the plan", timestamp: new Date(4000), metadata: { kind: "report", streaming: true } };
   view.rerender(<WorkspaceEvents {...assistantProps} currentEvents={[prompt, command, thought, reply]} />);
   expect(view.getByText("Here is the plan")).toBeTruthy();
+  expect(view.queryByRole("button", { name: "Copy response" })).toBeNull();
   expect(view.queryByRole("status", { name: "Gezici is responding" })).toBeNull();
   expect(view.queryByText("Comparing travel options")).toBeNull();
 });

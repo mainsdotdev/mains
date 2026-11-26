@@ -483,9 +483,9 @@ async function findSpaceForRun(spaceId: string | null | undefined) {
  * keep behaving under the mode the run started with. The caller validates
  * that the resolved Space exists and owns the selected account/provider.
  */
-async function buildAssistantInstructions(runId: string, assistantId: string | null | undefined, accountId: string, query: string): Promise<string | null> {
+async function buildAssistantInstructions(runId: string, assistantId: string | null | undefined, accountId: string, query: string, config: Record<string, unknown> | null): Promise<string | null> {
   if (!assistantId) return null;
-  const content = assistantsService.context(assistantId, accountId, query);
+  const content = await assistantsService.runInstructions(assistantId, accountId, query, config?.assistantSkillTool === true, config?.assistantSkillCreatorTool === true);
   await runsRepo.insertContext({ runId, kind: "note", content, contentHash: hashContent(content), metadata: { origin: "assistant-context", assistantId } });
   return content;
 }
@@ -742,7 +742,7 @@ export const runsService = {
     );
     const configSnapshot = normalizeAdditionalDirectories(
       composeConfigSnapshot(mode, space.providerId, {
-        ...(assistant ? { assistantId: assistant.id } : {}),
+        ...(assistant ? { assistantId: assistant.id, assistantSkillTool: true, assistantSkillCreatorTool: true } : {}),
         ...settings.config,
         conversationSettings: settings,
         ...(payload.additionalDirectories !== undefined
@@ -1194,6 +1194,7 @@ export const runsService = {
           configSnapshot,
           toolPolicy,
           voiceTools: coordinator.tools,
+          mateApprovalMode: assistant?.codexApprovalMode,
           voiceInstructions: `${VOICE_COORDINATOR_INSTRUCTIONS}\nPreviously linked working chats (use ListVoiceTasks for all): ${JSON.stringify(links.slice(-16).map(({ id, taskKey, title }) => ({ runId: id, taskKey, title })))}`,
           // Realtime initial items have a tighter startup limit than the backing thread.
           voiceInitialInstructions: assistant
@@ -1201,7 +1202,7 @@ export const runsService = {
             : undefined,
           extraInstructions: joinInstructions(
             composeExtraInstructions(run.mode, space?.systemPrompt),
-            assistant ? assistantsService.context(assistant.id, run.accountId, run.goal ?? "") : null,
+            assistant ? await assistantsService.runInstructions(assistant.id, run.accountId, run.goal ?? "", configSnapshot?.assistantSkillTool === true, configSnapshot?.assistantSkillCreatorTool === true) : null,
             projectInstructions,
             resolveAtlasPageContext(
               run.accountId,
@@ -2254,7 +2255,7 @@ export const runsService = {
       );
       const configSnapshot = normalizeAdditionalDirectories(
         composeConfigSnapshot(mode, payload.providerId, {
-          ...(assistant ? { assistantId: assistant.id } : {}),
+          ...(assistant ? { assistantId: assistant.id, assistantSkillTool: true, assistantSkillCreatorTool: true } : {}),
           ...providerOutputStyle,
           ...(payload.configSnapshot ?? {}),
           ...(atlasImage ? { atlasImage: true } : {}),
@@ -2311,7 +2312,7 @@ export const runsService = {
       });
       const extraInstructions = joinInstructions(
         baseInstructions,
-        await buildAssistantInstructions(runId, assistant?.id, payload.accountId, payload.goal),
+        await buildAssistantInstructions(runId, assistant?.id, payload.accountId, payload.goal, configSnapshot),
         projectInstructions,
         atlasPage?.instructions ?? null,
       );
@@ -2370,6 +2371,7 @@ export const runsService = {
           model: conversationSettings.model || undefined,
           systemPrompt: payload.systemPrompt,
           mode,
+          mateApprovalMode: assistant?.codexApprovalMode,
           extraInstructions,
           context: payload.initialContext as WorkRunContextItem[] | undefined,
           toolPolicy,
@@ -2641,12 +2643,13 @@ export const runsService = {
           -1,
         );
         const previousModel = latestKnownModel(existingTurns, run.model);
+        const assistant = run.assistantId ? assistantsService.require(run.assistantId, accountId) : null;
         const conversationSettings = resolveConversationSettings(
           run.providerId,
           provider.config,
           run.configSnapshot,
           payload.model ?? previousModel,
-          run.assistantId ? assistantsService.require(run.assistantId, accountId).conversationSettings : payload.conversationSettings ??
+          assistant?.conversationSettings ?? payload.conversationSettings ??
             (payload.model
               ? {
                   model: payload.model,
@@ -2776,9 +2779,10 @@ export const runsService = {
             model: conversationSettings.model || undefined,
             systemPrompt: run.systemPrompt,
             mode: run.mode,
+            mateApprovalMode: assistant?.codexApprovalMode,
             extraInstructions: joinInstructions(
               composeExtraInstructions(run.mode, space?.systemPrompt),
-              await buildAssistantInstructions(runId, run.assistantId, accountId, message),
+              await buildAssistantInstructions(runId, run.assistantId, accountId, message, configSnapshot),
               projectInstructions,
               atlasPage?.instructions ?? null,
             ),
@@ -3017,12 +3021,13 @@ export const runsService = {
       }
 
       const sourceTurns = await runsRepo.findTurnsByRun(sourceRunId);
+      const assistant = sourceRun.assistantId ? assistantsService.require(sourceRun.assistantId, accountId) : null;
       const conversationSettings = resolveConversationSettings(
         sourceRun.providerId,
         provider.config,
         sourceRun.configSnapshot,
         latestKnownModel(sourceTurns, sourceRun.model),
-        sourceRun.assistantId ? assistantsService.require(sourceRun.assistantId, accountId).conversationSettings : undefined,
+        assistant?.conversationSettings,
       );
       const sourceModel = conversationSettings.model || undefined;
 
@@ -3112,7 +3117,7 @@ export const runsService = {
 
       // The fork inherits the source run's harness wholesale — same mode
       // snapshot, same composed policy/config (the fork row copied them).
-      const sourceSpace = sourceRun.assistantId ? assistantsService.require(sourceRun.assistantId, sourceRun.accountId).spaceSnapshot : await findSpaceForRun(sourceRun.spaceId);
+      const sourceSpace = assistant?.spaceSnapshot ?? await findSpaceForRun(sourceRun.spaceId);
 
       const runPromise = adapter.forkRun(
         {
@@ -3125,9 +3130,10 @@ export const runsService = {
           // model the source happened to start with.
           model: sourceModel,
           mode: sourceRun.mode,
+          mateApprovalMode: assistant?.codexApprovalMode,
           extraInstructions: joinInstructions(
             composeExtraInstructions(sourceRun.mode, sourceSpace?.systemPrompt),
-            await buildAssistantInstructions(newRunId, sourceRun.assistantId, accountId, message),
+            await buildAssistantInstructions(newRunId, sourceRun.assistantId, accountId, message, configSnapshot),
             projectInstructions,
             atlasPage?.instructions ?? null,
           ),

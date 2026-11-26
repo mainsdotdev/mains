@@ -60,6 +60,35 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
 }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 
+it("gives each saved Mate setup message its own time and copy action", async () => {
+  const question = "Hi, I’m Travel. What would you like help with?";
+  const idleMessage = "Profile saved. What would you like me to do first?";
+  const questionAt = Date.parse("2026-11-26T17:05:00Z");
+  const recordedAt = new Date("2026-11-26T17:10:00Z");
+  const group = groupEvents([mapArtifactToEvent({ id: 180, runId: "run", kind: "report", content: idleMessage, createdAt: recordedAt,
+    metadata: { source: "assistant_welcome", question: { profileSetup: {
+      turns: [{ question, answer: "Plan a trip", questionAt }], saved: true,
+    } } },
+  })])[0];
+  const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  try {
+    const { container } = render(<InfoGroup group={group} bubble />);
+    expect([...container.querySelectorAll("time")].map(time => time.dateTime)).toEqual([
+      new Date(questionAt).toISOString(), recordedAt.toISOString(),
+    ]);
+    const copyButtons = screen.getAllByRole("button", { name: "Copy response" });
+    expect(copyButtons).toHaveLength(2);
+    fireEvent.click(copyButtons[0]);
+    fireEvent.click(copyButtons[1]);
+    await waitFor(() => expect(writeText.mock.calls).toEqual([[question], [idleMessage]]));
+  } finally {
+    if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+    else Reflect.deleteProperty(navigator, "clipboard");
+  }
+});
+
 describe("generated image previews", () => {
   function image(id: number, fileName: string, contentHash?: string) {
     return mapArtifactToEvent({ id, runId: "run", kind: "image", contentHash,

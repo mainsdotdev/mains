@@ -6,7 +6,8 @@ import { ASSISTANT_MENTION_MODES, normalizeAssistantAvatar } from "@mains/contra
 import { ownedHere } from "../bridge/bridge.ownership";
 function assistant(row: typeof assistants.$inferSelect): Assistant {
     const { settings, spaceSnapshot, mode: _mode, workspaceId: _workspace, avatar, ...rest } = row;
-    return { ...rest, avatar: normalizeAssistantAvatar(JSON.parse(avatar)), conversationSettings: JSON.parse(settings), spaceSnapshot: JSON.parse(spaceSnapshot) };
+    const { skills, codexApprovalMode, ...conversationSettings } = JSON.parse(settings);
+    return { ...rest, avatar: normalizeAssistantAvatar(JSON.parse(avatar)), conversationSettings, skills, codexApprovalMode, spaceSnapshot: JSON.parse(spaceSnapshot) };
 }
 const { context: _assignmentContext, ...assignmentFields } = getTableColumns(assistantAssignments);
 const assignmentProjection = { ...assignmentFields, review: sql<string | null>`json_extract(${assistantAssignments.context}, '$.pullRequestReview')` };
@@ -33,9 +34,10 @@ export const assistantsRepo = {
             ...(question ? { state: "ready", question } : {}) }).run();
     },
     saveProfile(id: string, accountId: string, profile: Partial<AssistantProfile>,
-                execution?: Pick<Assistant, "model" | "effort" | "conversationSettings">) {
+                execution?: Pick<Assistant, "model" | "effort" | "conversationSettings" | "skills" | "codexApprovalMode">) {
         const { avatar, ...fields } = profile;
-        const modelFields = execution && { model: execution.model, effort: execution.effort, settings: JSON.stringify(execution.conversationSettings) };
+        const modelFields = execution && { model: execution.model, effort: execution.effort,
+            settings: JSON.stringify({ ...execution.conversationSettings, skills: execution.skills, codexApprovalMode: execution.codexApprovalMode }) };
         getDb().update(assistants).set({ ...fields, ...(avatar && { avatar: JSON.stringify(avatar) }), ...modelFields, updatedAt: new Date() })
             .where(and(eq(assistants.id, id), eq(assistants.accountId, accountId))).run();
     },
