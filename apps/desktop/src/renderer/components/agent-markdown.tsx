@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -14,9 +14,26 @@ import { markdownFileUrlTransform } from "@/lib/file-path";
 
 import {
   agentMarkdownComponents,
+  MarkdownCodeBlock,
   MarkdownImagePreviewContext,
   type MarkdownImagePreview,
 } from "./markdown-components";
+import { MermaidDiagram } from "./mermaid-diagram";
+
+const settledMarkdownComponents: Components = {
+  ...agentMarkdownComponents,
+  pre: ({ node, children }) => {
+    const fallback = <MarkdownCodeBlock>{children}</MarkdownCodeBlock>;
+    const code = node?.children[0];
+    if (code?.type !== "element" || code.tagName !== "code") return fallback;
+    const { className } = code.properties;
+    if (!Array.isArray(className) || !className.includes("language-mermaid")) return fallback;
+    const source = code.children[0];
+    return source?.type === "text" && source.value.trim()
+      ? <MermaidDiagram source={source.value} fallback={fallback} />
+      : fallback;
+  },
+};
 
 /** The assistant renderer shared by settled and streaming report artifacts. */
 export function AgentMarkdown({
@@ -38,7 +55,7 @@ export function AgentMarkdown({
       <MarkdownImagePreviewContext.Provider value={onImagePreview}>
         <ReactMarkdown
           urlTransform={markdownFileUrlTransform}
-          components={agentMarkdownComponents}
+          components={isStreaming ? agentMarkdownComponents : settledMarkdownComponents}
           remarkPlugins={[
             remarkGfm,
             remarkMath,

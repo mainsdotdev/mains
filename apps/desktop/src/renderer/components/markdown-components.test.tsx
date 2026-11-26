@@ -17,6 +17,14 @@ const linkHarness = vi.hoisted(() => ({
   signImage: vi.fn(),
 }));
 
+const mermaid = vi.hoisted(() => ({
+  initialize: vi.fn(),
+  render: vi.fn(),
+  mermaidAPI: { defaultConfig: { secure: ["securityLevel"] } },
+}));
+
+vi.mock("mermaid", () => ({ default: mermaid }));
+
 vi.mock("@/features/workspace/hooks/use-open-file-in-editor", () => ({
   useOpenFileInEditor: () => linkHarness.openFile,
 }));
@@ -39,6 +47,46 @@ beforeEach(() => {
 function renderMarkdown(source: string, isStreaming = false) {
   return render(<AgentMarkdown isStreaming={isStreaming}>{source}</AgentMarkdown>);
 }
+
+describe("AgentMarkdown / Mermaid", () => {
+  const flowchart = "flowchart TD\n  A[Snapshot] --> B[Retention]";
+  const fence = (source: string) => `\`\`\`mermaid\n${source}\n\`\`\``;
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 160"><title>Backup timeline</title></svg>';
+
+  it("renders the saved Mermaid fence without changing surrounding prose", async () => {
+    mermaid.render.mockResolvedValueOnce({ svg });
+    const { container } = renderMarkdown(`### Backup\n\n${fence(flowchart)}\n\nAfter the diagram.`);
+
+    const image = await screen.findByRole("img", { name: "Backup timeline" });
+    expect(image.getAttribute("src")).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+    expect(image.getAttribute("width")).toBe("320");
+    expect(container.querySelector("pre, svg")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Backup" })).toBeTruthy();
+    expect(screen.getByText("After the diagram.")).toBeTruthy();
+    expect(mermaid.render).toHaveBeenCalledWith(expect.any(String), `${flowchart}\n`, expect.any(HTMLElement));
+  });
+
+  it("waits until the message settles before rendering", async () => {
+    mermaid.render.mockResolvedValueOnce({ svg });
+    const source = fence(flowchart);
+    const view = renderMarkdown(source, true);
+    expect(view.container.querySelector("pre code")?.textContent).toContain(flowchart);
+    expect(mermaid.render).not.toHaveBeenCalled();
+
+    view.rerender(<AgentMarkdown>{source}</AgentMarkdown>);
+    await screen.findByRole("img", { name: "Backup timeline" });
+    expect(mermaid.render).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps invalid Mermaid readable and continues drawing other blocks", async () => {
+    mermaid.render.mockRejectedValueOnce(new Error("Invalid Mermaid")).mockResolvedValueOnce({ svg });
+    const { container } = renderMarkdown(`${fence("invalid diagram")}\n\n${fence(flowchart)}`);
+
+    await screen.findByRole("img", { name: "Backup timeline" });
+    expect(container.querySelector("pre code")?.textContent).toContain("invalid diagram");
+    expect(mermaid.render).toHaveBeenCalledTimes(2);
+  });
+});
 
 // Only network URLs can act as exfiltration beacons — everything else
 // (app schemes, data URIs, workspace paths) must keep loading directly.

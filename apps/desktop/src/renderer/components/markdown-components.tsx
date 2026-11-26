@@ -168,6 +168,14 @@ function LinkFavicon({ href }: { href: string | undefined }) {
  */
 const InCodeBlock = createContext(false);
 
+export function MarkdownCodeBlock({ children }: { children?: ReactNode }) {
+  return (
+    <InCodeBlock.Provider value={true}>
+      <pre className="document-code-block overflow-x-auto">{children}</pre>
+    </InCodeBlock.Provider>
+  );
+}
+
 /** Network URLs — the only sources whose mere loading has a side effect. */
 export function isRemoteImageSrc(src: string | undefined | null): src is string {
   const decoded = src ? fileHrefPath(src) : "";
@@ -429,13 +437,7 @@ export const markdownComponents: Components = {
   code: MarkdownCode,
   // Owns the block's surface and its horizontal scroll — an ASCII diagram wider
   // than the column has to slide inside the box rather than out of it.
-  pre: ({ children }) => (
-    <InCodeBlock.Provider value={true}>
-      <pre className="document-code-block overflow-x-auto">
-        {children}
-      </pre>
-    </InCodeBlock.Provider>
-  ),
+  pre: MarkdownCodeBlock,
   a: ({ href, children }) => <MarkdownLink href={href}>{children}</MarkdownLink>,
   // The three inline marks size themselves from the sentence they sit in.
   blockquote: ({ children }) => (
