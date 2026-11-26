@@ -77,7 +77,7 @@ export default function PulsePage() {
     <PageShell bottomPadded>
       <header className="flex items-start justify-between mb-6">
         <div>
-          <Heading3>Pulse</Heading3>
+          <Heading3 className="font-sf-expanded">Pulse</Heading3>
           <Muted className="mt-1">
             Pulse keeps your work in motion with scheduled, automated runs.
           </Muted>

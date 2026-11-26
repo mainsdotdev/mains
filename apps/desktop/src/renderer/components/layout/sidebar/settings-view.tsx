@@ -99,7 +99,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
 
     >
       <div className="flex flex-col items-start pt-12 pb-1 px-5 md:pt-2">
-        <Text size="base" weight="medium" align="left">Settings</Text>
+        <Text size="base" weight="medium" align="left" className="font-sf-expanded">Settings</Text>
       </div>
 
       <div className="scroll-bounce flex-1 px-3 mb-1 mt-2 overflow-y-auto noscrollbar">

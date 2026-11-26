@@ -27,7 +27,7 @@ export default function Atlas({ imageCreation = false }: { imageCreation?: boole
   const { activeSpace } = useActiveSpace();
   const workSpace = useMemo(() => activeSpace ? { ...activeSpace, mode: "work" as const } : null, [activeSpace]);
   if (!provider.supportsAtlas && itemId && !imageCreation) return <PageShell>
-    <Heading3 className="mb-6">Atlas</Heading3>
+    <Heading3 className="mb-6 font-sf-expanded">Atlas</Heading3>
     <Muted>Atlas isn&apos;t available for this agent yet.</Muted>
   </PageShell>;
   return workSpace ? <ActiveSpaceOverrideProvider space={workSpace}>

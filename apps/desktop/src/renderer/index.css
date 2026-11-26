@@ -386,6 +386,13 @@ html {
   font-feature-settings: "cv05" 1, "cv08" 1;
 }
 
+.mains-macos .font-sf-expanded {
+  font-family: system-ui, sans-serif;
+  font-weight: 500;
+  /* Match the width axis of Apple's native Expanded face. */
+  font-stretch: 130%;
+}
+
 /* While a layout handle is being dragged, suspend pane transitions so the
    browser cover tracks the sidebar instead of exposing the chat tab below. */
 body[data-resizing] {

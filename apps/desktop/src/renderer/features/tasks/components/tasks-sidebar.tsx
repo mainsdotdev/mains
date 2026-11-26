@@ -116,7 +116,7 @@ export function TasksSidebar() {
     <div className="flex h-full flex-col">
       <SidebarTopRows header={
         <div className="flex w-full items-center justify-between gap-2 px-2">
-          <Text as="h2" size="base" weight="medium">Tasks</Text>
+          <Text as="h2" size="base" weight="medium" className="font-sf-expanded">Tasks</Text>
           {issuesTabConnected && (
             <Button
               variant="icon"

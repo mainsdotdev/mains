@@ -3,6 +3,7 @@ import { Body, Caption, Heading3, Muted } from "@/components/ui";
 
 export function SettingsPageShell({
   title,
+  titleClassName,
   isLoading,
   error,
   loadingMessage = "Loading...",
@@ -12,6 +13,7 @@ export function SettingsPageShell({
   children,
 }: {
   title: string;
+  titleClassName?: string;
   isLoading?: boolean;
   error?: unknown;
   loadingMessage?: string;
@@ -20,14 +22,15 @@ export function SettingsPageShell({
   className?: string;
   children?: ReactNode;
 }) {
+  const heading = <Heading3 className={titleClassName}>{title}</Heading3>;
   const header = headerActions ? (
     <div className="flex items-center justify-between mb-8">
-      <Heading3>{title}</Heading3>
+      {heading}
       {headerActions}
     </div>
   ) : (
     <div className="mb-4">
-      <Heading3>{title}</Heading3>
+      {heading}
     </div>
   );
 

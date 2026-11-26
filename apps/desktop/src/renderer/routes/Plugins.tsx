@@ -21,7 +21,7 @@ export default function PluginsPage() {
   return (
     <PageShell>
       <div className="flex items-center justify-between mb-6">
-        <Heading3>Plugins</Heading3>
+        <Heading3 className="font-sf-expanded">Plugins</Heading3>
       </div>
 
       {providerId ? (

@@ -81,7 +81,7 @@ export function AtlasSidebar() {
 
   return (
     <div className="flex h-full flex-col ">
-      <SidebarTopRows header={<Text as="h2" size="base" weight="medium" className="px-2">Atlas</Text>}>
+      <SidebarTopRows header={<Text as="h2" size="base" weight="medium" className="px-2 font-sf-expanded">Atlas</Text>}>
         <Button
           className={cn(itemClass(false), SIDEBAR_PRIMARY_ACTION_CLASS)}
           aria-label="New Atlas page"

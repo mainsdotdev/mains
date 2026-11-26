@@ -31,7 +31,7 @@ export function SidebarHeader({
   );
   return (
     <div className="flex w-full items-center gap-1">
-      <Text as="h2" size="base" weight="medium" className="shrink-0 px-2">
+      <Text as="h2" size="base" weight="medium" className="shrink-0 px-2 font-sf-expanded">
         Mains
       </Text>
       <div className="@container flex min-w-0 flex-1 items-center">

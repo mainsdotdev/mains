@@ -76,7 +76,7 @@ export function AssistantsSidebar() {
     onTogglePin={assistant.pinnedAt !== undefined ? () => void changePin(assistant) : undefined} changingPin={changingPin} />;
   return (
     <div className="flex h-full flex-col text-primary-900 dark:text-primary-100">
-      <SidebarTopRows header={<Text as="h2" size="base" weight="medium" className="px-2">Mates</Text>}>
+      <SidebarTopRows header={<Text as="h2" size="base" weight="medium" className="px-2 font-sf-expanded">Mates</Text>}>
         <div inert={searchExpanded} className={`pr-9 transition-opacity duration-150 motion-reduce:transition-none ${searchExpanded ? "opacity-0" : "opacity-100"}`}>
           <NewButton title="mate" icon={<AssistantSteps aria-hidden="true" className="size-3.5 shrink-0" />} onClick={() => { const next = new URLSearchParams(params); next.delete("tab"); next.delete("team"); next.set("new", "1"); open(`/assistants?${next}`); }} />
         </div>

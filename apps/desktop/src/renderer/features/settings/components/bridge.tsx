@@ -152,7 +152,7 @@ export default function BridgeSettings() {
     status?.state === "signed-out" ||
     (status?.state === "error" && !status.accountId);
   return (
-    <SettingsPageShell title="Bridge" isLoading={isLoading} error={loadError}>
+    <SettingsPageShell title="Bridge" titleClassName="font-sf-expanded" isLoading={isLoading} error={loadError}>
       {(error || status?.error) && (
         <Text role="alert" tone="danger" className="mb-4">
           {error ?? status?.error}

@@ -4,9 +4,15 @@
 import "./lib/platform/web-bootstrap";
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { getRuntimeOS } from "../shared/runtime-platform";
 import { markAppReady } from "./lib/app-ready";
 import { announceOnboardingStartup } from "./lib/onboarding-startup";
+import { isElectron } from "./lib/platform/platform";
 import "./index.css";
+
+if (isElectron && getRuntimeOS() === "darwin") {
+  document.documentElement.classList.add("mains-macos");
+}
 
 const root = ReactDOM.createRoot(
   document.getElementById("root") as HTMLElement

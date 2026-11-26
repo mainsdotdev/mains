@@ -113,7 +113,7 @@ export default function TasksPage() {
             <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 {/* Just the page name — the sidebar shows what is selected. */}
-                <Heading3 ref={headingRef} tabIndex={-1}>Tasks</Heading3>
+                <Heading3 className="font-sf-expanded" ref={headingRef} tabIndex={-1}>Tasks</Heading3>
                 <Muted className="mt-1">
                   Issues and pull requests across your connections.
                 </Muted>
