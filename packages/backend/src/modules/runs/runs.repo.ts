@@ -1,7 +1,7 @@
 import { getLocalBackendId } from "../../db/backend-identity";
 import { ownedHere, ownershipOf } from "../bridge";
 import { randomUUID } from "crypto";
-import { eq, desc, and, sql, asc, gt, gte, inArray, isNull, getTableColumns } from "drizzle-orm";
+import { eq, desc, and, sql, asc, gt, gte, inArray, isNull, isNotNull, getTableColumns } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { safeJsonParse } from "../../db/utils";
 import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload, RunHistoryContentPage, RunHistoryCursor } from "@mains/contracts/runs";
@@ -206,6 +206,17 @@ export const runsRepo = {
       .from(runs)
       .where(eq(runs.isArchived, true))
       .orderBy(desc(runs.updatedAt));
+    return rows.map(mapRunRowToResponse);
+  },
+
+  async findPinnedChats(accountId: string, limit: number): Promise<RunResponse[]> {
+    const rows = await getDb().select().from(runs).where(and(
+      eq(runs.accountId, accountId),
+      eq(runs.isArchived, false),
+      isNull(runs.assistantId),
+      inArray(runs.mode, ["work", "chat"]),
+      isNotNull(runs.pinnedAt),
+    )).orderBy(desc(runs.pinnedAt), desc(runs.updatedAt), desc(runs.id)).limit(limit);
     return rows.map(mapRunRowToResponse);
   },
 

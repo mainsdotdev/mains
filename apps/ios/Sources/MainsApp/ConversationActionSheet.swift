@@ -1,5 +1,162 @@
 import SwiftUI
 
+struct ConversationActionRequest: Identifiable {
+    enum Prompt { case rename, move, delete }
+    let runID: String
+    let title: String
+    let owner: Int
+    let prompt: Prompt
+    var id: String { runID }
+}
+
+struct ConversationMenuActions: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let run: Conversation
+    @Binding var request: ConversationActionRequest?
+
+    var body: some View {
+        if run.isReplica != true {
+            if session.supportsChatOrganization {
+                Button("Rename", systemImage: "pencil") { present(.rename) }
+                    .disabled(!session.canManageConversation(run.id, action: .rename(run.displayTitle)))
+                    .accessibilityIdentifier("renameConversation")
+                if run.isPinnableChat {
+                    let pinned = run.pinnedAt != nil
+                    Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") {
+                        perform(.setPinned(!pinned))
+                    }
+                    .disabled(!session.canManageConversation(run.id, action: .setPinned(!pinned)))
+                    .accessibilityIdentifier("pinConversation")
+                }
+            }
+            if run.mode == "work" || run.mode == "chat" {
+                Button("Move to project", systemImage: "folder") { present(.move) }
+                    .disabled(!session.canManageConversation(run.id, action: .moveToProject(nil)))
+                    .accessibilityIdentifier("moveConversationToProject")
+            }
+            Divider()
+            Button("Archive", systemImage: "archivebox") { perform(.archive) }
+                .disabled(!session.canManageConversation(run.id, action: .archive))
+                .accessibilityIdentifier("archiveConversation")
+            Button("Delete", systemImage: "trash", role: .destructive) { present(.delete) }
+                .disabled(!session.canManageConversation(run.id, action: .delete))
+                .accessibilityIdentifier("deleteConversation")
+        }
+    }
+
+    private func present(_ prompt: ConversationActionRequest.Prompt) {
+        request = .init(runID: run.id, title: run.displayTitle, owner: session.ownership, prompt: prompt)
+    }
+
+    private func perform(_ action: ConversationAction) {
+        let owner = session.ownership
+        Task { await performConversationAction(session, runID: run.id, owner: owner, action: action) }
+    }
+}
+
+struct ConversationActionPrompts: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    @Binding var request: ConversationActionRequest?
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(item: Binding(get: { request?.prompt == .delete ? nil : request },
+                                 set: { if request?.prompt != .delete { request = $0 } })) { request in
+                if request.prompt == .rename {
+                    RenameItemSheet(title: "Rename chat", field: "Chat title", initialValue: request.title) { name in
+                        guard request.owner == session.ownership else { throw MainsError.changedBackend }
+                        try await session.manageConversation(request.runID, action: .rename(name))
+                    }
+                } else {
+                    ConversationProjectSheet(session: session, runID: request.runID, owner: request.owner)
+                }
+            }
+            .confirmationDialog("Delete chat?", isPresented: Binding(get: { request?.prompt == .delete },
+                set: { if !$0 && request?.prompt == .delete { request = nil } }), titleVisibility: .visible, presenting: request) { target in
+                Button("Delete chat", role: .destructive) {
+                    Task { await performConversationAction(session, runID: target.runID, owner: target.owner, action: .delete) }
+                }
+            } message: { _ in
+                Text("This permanently deletes the chat and its chat files. This can’t be undone.")
+            }
+            .onChange(of: session.ownership) { _, _ in request = nil }
+    }
+}
+
+@MainActor private func performConversationAction(_ session: BackendSession, runID: String, owner: Int, action: ConversationAction) async {
+    guard owner == session.ownership else { return }
+    do { try await session.manageConversation(runID, action: action) }
+    catch {
+        guard owner == session.ownership, session.pendingConversationAction?.status != .uncertain else { return }
+        let message = error.localizedDescription
+        session.actionError = message.contains("not available to paired devices")
+            ? "Update Mains on your computer to manage chats from this iPhone." : message
+    }
+}
+
+struct RenameItemSheet: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let title: String
+    let field: String
+    let save: (String) async throws -> Void
+    @State private var value: String
+    @State private var saving = false
+    @State private var error: String?
+    @Environment(\.dismiss) private var dismiss
+
+    init(title: String, field: String, initialValue: String, save: @escaping (String) async throws -> Void) {
+        self.title = title
+        self.field = field
+        self.save = save
+        _value = State(initialValue: initialValue)
+    }
+
+    private var name: String { value.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var canSave: Bool { !saving && !name.isEmpty && name.utf16.count <= 240 }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField(field, text: $value).autocorrectionDisabled()
+                    .submitLabel(.done).onSubmit(submit)
+                    .accessibilityIdentifier("renameItemField")
+                if saving { ProgressView().accessibilityLabel("Saving") }
+                if let error { Text(error).foregroundStyle(.red) }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", action: submit).disabled(!canSave).accessibilityIdentifier("saveItemName")
+                }
+            }
+        }
+        .presentationDetents([.medium])
+        .interactiveDismissDisabled(saving)
+    }
+
+    private func submit() {
+        guard canSave else { return }
+        let submitted = name
+        saving = true
+        error = nil
+        Task {
+            defer { saving = false }
+            do { try await save(submitted); dismiss() }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
 struct ConversationProjectSheet: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -125,6 +282,28 @@ struct ConversationActionDeliveryNotice: View {
                         catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
                     }
                 }.disabled(!session.isConnected).accessibilityIdentifier("checkConversationAction")
+            }.padding(.vertical, 8).background(Color(.systemBackground))
+        }
+    }
+}
+
+struct WorkspaceActionDeliveryNotice: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    var body: some View {
+        if let pending = session.pendingWorkspaceAction, pending.status == .uncertain {
+            ChatNotice(title: "Workspace change unconfirmed", message: "Check whether your computer completed the change.",
+                       symbol: "exclamationmark.circle", warning: true, horizontalInset: 12) {
+                Button("Check change") {
+                    let owner = session.ownership
+                    Task {
+                        guard owner == session.ownership, session.pendingWorkspaceAction?.id == pending.id else { return }
+                        do { try await session.checkWorkspaceAction() }
+                        catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
+                    }
+                }.disabled(!session.isConnected).accessibilityIdentifier("checkWorkspaceAction")
             }.padding(.vertical, 8).background(Color(.systemBackground))
         }
     }

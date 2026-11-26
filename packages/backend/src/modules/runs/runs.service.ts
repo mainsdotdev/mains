@@ -7,6 +7,7 @@ import { retireAnswer } from "./async-answer-lifecycle";
 import { runGitOperation } from "../../runtime/git-operation-lifecycle";
 import { runTurnUndo } from "./run-turn-changes-lifecycle";
 import { assertOwnedRecord, bridgeService } from "../bridge";
+import { ACCOUNT_ID } from "../account/account.constants";
 import type { ResolveArtifactPathPayload } from "@mains/contracts/runs";
 import { CHANNELS } from "@mains/contracts/channels";
 import { RUN_INPUT_ERRORS } from "@mains/contracts/run-input";
@@ -1471,6 +1472,10 @@ export const runsService = {
     return runsRepo.findRecentRunsByExperience(options);
   },
 
+  async listPinnedChats(): Promise<RunResponse[]> {
+    return runsRepo.findPinnedChats(ACCOUNT_ID, 100);
+  },
+
   async getRunById(id: string): Promise<RunResponse | null> {
     return runsRepo.findRunById(id);
   },
@@ -1641,10 +1646,21 @@ export const runsService = {
     }
     const updated = await runsRepo.updateRun(id, patch);
     if (!updated) throw new Error("Run not found");
-    if (payload.conversationSettings !== undefined) {
+    if (payload.conversationSettings !== undefined || payload.title !== undefined) {
       emit(CHANNELS.runs.updated, { runId: id, ts: Date.now() });
     }
     return updated;
+  },
+
+  async renameMobileConversation(payload: { runId: string; title: string }): Promise<RunResponse> {
+    const title = typeof payload?.title === "string" ? payload.title.trim() : "";
+    if (!title || title.length > 240 || typeof payload?.runId !== "string") {
+      throw new Error("Enter a chat title up to 240 characters");
+    }
+    assertOwnedRecord("runs", payload.runId);
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run || run.accountId !== ACCOUNT_ID || run.isArchived) throw new Error("Chat is unavailable");
+    return this.updateRun(run.id, { title });
   },
 
   /** A narrow paired-device write; never changes the active turn or provider defaults. */
@@ -1694,7 +1710,11 @@ export const runsService = {
    * mode guards as filing a chat under a collection — a developer run lives in
    * the workspace list, which has no pinned group to be hoisted into.
    */
-  async setRunPinned(payload: SetRunPinnedPayload): Promise<RunResponse> {
+  async setRunPinned(payload: SetRunPinnedPayload, pairedDevice = false): Promise<RunResponse> {
+    if (typeof payload?.runId !== "string" || typeof payload.pinned !== "boolean" ||
+        typeof payload.accountId !== "string" || (pairedDevice && payload.accountId !== ACCOUNT_ID)) {
+      throw new Error("Invalid chat pin request");
+    }
     assertOwnedRecord("runs", payload.runId);
     const run = await runsRepo.findRunById(payload.runId);
     if (!run) throw new Error("Run not found");
@@ -1703,6 +1723,9 @@ export const runsService = {
     }
     if (run.mode === "developer") {
       throw new Error("Developer runs cannot be pinned");
+    }
+    if (pairedDevice && (run.isArchived || run.assistantId || (run.mode !== "work" && run.mode !== "chat"))) {
+      throw new Error("This chat cannot be pinned");
     }
     const updated = await runsRepo.setPinned(
       run.id,

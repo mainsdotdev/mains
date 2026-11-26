@@ -123,12 +123,12 @@ final class DemoBackend {
 #endif
 
     private let mutationChannels: Set<String> = ["assistants:create", "assistants:setupProfile", "assistants:send", "assistants:mobileManage",
-        "runs:execute", "runs:continue", "runs:fork", "runs:archive", "runs:delete", "runs:moveToCollection", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings", "providers:changeMobileGoal",
+        "runs:execute", "runs:continue", "runs:fork", "runs:archive", "runs:delete", "runs:moveToCollection", "runs:rename", "runs:setPinned", "workspace:mobileManage", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings", "providers:changeMobileGoal",
         "runs:toolApprovalResponse", "runs:decidePlan", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:editMobileBookmark", "atlas:setMobileTrash", "atlas:deleteMobileTrash", "atlas:setMobileTags"]
 
     var pairing: PairedBackend {
         PairedBackend(descriptor: BackendDescriptor(backendId: Self.backendID, name: "Demo Mac",
-                      appVersion: "Demo", protocolVersion: Wire.protocolVersion, capabilities: ["runs","workspace","providers","space","projects","collections","mobileGoalSummary","mobileGoalControls","workspaceFileSearch","mobilePlanDecision","assistants"],
+                      appVersion: "Demo", protocolVersion: Wire.protocolVersion, capabilities: ["runs","workspace","providers","space","projects","collections","mobileGoalSummary","mobileGoalControls","workspaceFileSearch","mobilePlanDecision","assistants","mobileChatOrganization","mobileWorkspaceManagement"],
                       serverTime: Date().ISO8601Format()),
                       endpoints: [Self.endpoint], deviceId: "native-demo-device", deviceToken: "on-device-demo", pairedAt: Date())
     }
@@ -234,6 +234,22 @@ final class DemoBackend {
         let first = args.first ?? .null
         let runID = first["runId"].string ?? first.string ?? ""
         switch channel {
+        case "runs:rename", "runs:setPinned":
+            guard let index = runs.firstIndex(where: { $0["id"]?.string == runID }),
+                  runs[index]["isReplica"] != .bool(true), runs[index]["isArchived"] != .bool(true) else {
+                throw MainsError.server("This demo chat is unavailable or read-only.")
+            }
+            if channel == "runs:rename" {
+                guard let title = first["title"].string, !title.isEmpty, title.utf16.count <= 240 else { throw MainsError.invalidReply }
+                runs[index]["title"] = .string(title)
+            } else {
+                guard ["work", "chat"].contains(runs[index]["mode"]?.string ?? ""),
+                      runs[index]["assistantId"]?.string == nil, first["accountId"] == seed["account"]["id"],
+                      case .bool(let pinned) = first["pinned"] else { throw MainsError.invalidReply }
+                runs[index]["pinnedAt"] = pinned ? .number(Date().timeIntervalSince1970 * 1000) : .null
+            }
+            push("runs:updated", ["runId": .string(runID)])
+            return .object(runs[index])
         case "runs:archive", "runs:delete", "runs:moveToCollection":
             guard let index = runs.firstIndex(where: { $0["id"]?.string == runID }), runs[index]["isReplica"] != .bool(true) else {
                 throw MainsError.server("This demo chat is unavailable or read-only.")
@@ -314,8 +330,10 @@ final class DemoBackend {
         case "assistants:mobileAssignments": return try readMateAssignments(args)
         case "assistants:mobileManage": return try manageMateAssignment(args)
         case "space:getAll": return .array(spaces.map(JSONValue.object))
-        case "workspace:list", "workspace:listGitStates", "collections:list", "projects:list":
-            let key = ["workspace:list":"workspaces", "workspace:listGitStates":"gitStates", "collections:list":"collections", "projects:list":"projects"][channel]!
+        case "workspace:mobileManage": return try manageDemoWorkspace(runID, change: args.dropFirst().first ?? .null)
+        case "workspace:list": return .array(seed["workspaces"].array.filter { !$0["isArchived"].bool })
+        case "workspace:listGitStates", "collections:list", "projects:list":
+            let key = ["workspace:listGitStates":"gitStates", "collections:list":"collections", "projects:list":"projects"][channel]!
             return seed[key]
         case "providers:getEnabled": return seed["providers"]
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
@@ -367,7 +385,11 @@ final class DemoBackend {
             return .object(["profilesSupported": .bool(false), "profiles": .array([]), "requiresNamedProfile": .bool(false),
                             "allowedSandboxModes": .array(["read-only","workspace-write","danger-full-access"].map(JSONValue.string))])
         case "runs:getAll":
-            return .array(runs.sorted { time($0, "updatedAt") > time($1, "updatedAt") }.prefix(100).map(JSONValue.object))
+            return .array(runs.filter { $0["isArchived"] != .bool(true) }
+                .sorted { time($0, "updatedAt") > time($1, "updatedAt") }.prefix(100).map(JSONValue.object))
+        case "runs:listPinned":
+            return .array(runs.filter { $0["pinnedAt"]?.number != nil && $0["isArchived"] != .bool(true) }
+                .sorted { time($0, "pinnedAt") > time($1, "pinnedAt") }.prefix(100).map(JSONValue.object))
         case "runs:listActive":
             return .array(runs.filter { ["running", "queued"].contains($0["status"]?.string ?? "") }.map(JSONValue.object))
         case "runs:getById": return runs.first { $0["id"]?.string == runID }.map(JSONValue.object) ?? .null
@@ -1102,6 +1124,50 @@ final class DemoBackend {
         guard let file = attachments[runID + ":" + id] else { throw MainsError.server("Demo attachment not found.") }
         return file
     }
+    private func manageDemoWorkspace(_ id: String, change: JSONValue) throws -> JSONValue {
+        var workspaces = seed["workspaces"].array.map(\.objectValue)
+        var states = seed["gitStates"].array.map(\.objectValue)
+        guard let index = workspaces.firstIndex(where: { $0["id"] == .string(id) }),
+              workspaces[index]["isArchived"] != .bool(true), workspaces[index]["isReplica"] != .bool(true),
+              let action = change["action"].string else { throw MainsError.server("This demo workspace is unavailable.") }
+        let project = seed["projects"].array.first { $0["id"].string == workspaces[index]["projectId"]?.string }
+        let now = JSONValue.number(Date().timeIntervalSince1970 * 1000)
+        switch action {
+        case "setPinned":
+            guard case .bool(let pinned) = change["pinned"] else { throw MainsError.invalidReply }
+            workspaces[index]["pinnedAt"] = pinned ? now : .null
+        case "archive", "delete":
+            guard !runs.contains(where: { $0["workspaceId"]?.string == id && ["running", "queued"].contains($0["status"]?.string ?? "") }) else {
+                throw MainsError.server("Stop active replies before changing this workspace.")
+            }
+            if action == "archive" { workspaces[index]["isArchived"] = .bool(true) }
+            else { workspaces.remove(at: index) }
+            states.removeAll { $0["workspaceId"]?.string == id }
+        case "renameBranch":
+            guard let stateIndex = states.firstIndex(where: { $0["workspaceId"]?.string == id }),
+                  let expected = change["expectedBranch"].string, states[stateIndex]["branch"]?.string == expected,
+                  let name = change["branch"].string, !name.isEmpty else {
+                throw MainsError.server("The checked-out branch changed.")
+            }
+            states[stateIndex]["branch"] = .string(name)
+        case "newWorktree":
+            guard let project, let projectID = project["id"].string else { throw MainsError.server("Project is unavailable.") }
+            let newID = UUID().uuidString
+            let branch = "worktree-" + newID.prefix(6).lowercased()
+            workspaces.append(["id": .string(newID), "projectId": .string(projectID), "name": project["name"],
+                "rootPath": .string("/demo/worktrees/" + newID), "baseBranch": .string(project["defaultBranch"].string ?? "main"),
+                "status": .string("todo"), "isArchived": .bool(false), "updatedAt": now])
+            states.append(["workspaceId": .string(newID), "branch": .string(branch), "pathExists": .bool(true)])
+        default: throw MainsError.invalidReply
+        }
+        var updated = seed.objectValue
+        updated["workspaces"] = .array(workspaces.map(JSONValue.object))
+        updated["gitStates"] = .array(states.map(JSONValue.object))
+        seed = .object(updated)
+        push("workspace:changed", ["workspaceId": .string(id)])
+        return .object(["workspaceId": .string(id), "action": .string(action)])
+    }
+
     private func requireRun(_ id: String) throws {
         guard runs.contains(where: { $0["id"]?.string == id }) else { throw MainsError.server("Demo conversation not found.") }
     }

@@ -26,6 +26,8 @@ public struct CodeProject: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let name: String
     public let icon: String?
+    public var defaultBranch: String? = nil
+    public var isArchived: Bool? = nil
 }
 
 public struct WorkspaceGitState: Codable, Equatable, Sendable {

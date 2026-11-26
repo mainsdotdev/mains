@@ -271,6 +271,7 @@ struct AppShell: View {
                 ForkDeliveryNotice(session: session, open: { open(.conversation($0)) })
                 AtlasSaveDeliveryNotice(session: session)
                 ConversationActionDeliveryNotice(session: session)
+                WorkspaceActionDeliveryNotice(session: session)
                 GoalChangeDeliveryNotice(session: session)
 #if MAINS_GPT_LIVE
                 VoiceCallDock(session: session, visibleRunID: visibleVoiceRunID,
@@ -305,6 +306,13 @@ struct AppShell: View {
                 case .conversation(let id, _), .searchMessage(let id, _): id == retired.runID
                 default: false
                 }
+            }
+        }
+        .onChange(of: session.retiredWorkspace) { _, retired in
+            guard let retired else { return }
+            path.removeAll { route in
+                if case .workspace(let id) = route { return id == retired.workspaceID }
+                return false
             }
         }
         .onChange(of: session.pairing?.deviceId) { _, _ in

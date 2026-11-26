@@ -24,6 +24,9 @@ struct SidebarView: View {
     let openAtlas: () -> Void
     let openMates: () -> Void
     @State private var pendingMode: String?
+    @State private var chatAction: ConversationActionRequest?
+    @State private var branchEdit: BranchEdit?
+    @State private var workspaceToDelete: WorkspaceDeletion?
     @State private var providersExpanded = false
     @State private var providerScrollPosition = ScrollPosition(edge: .leading)
     @Namespace private var modeSelection
@@ -48,9 +51,24 @@ struct SidebarView: View {
     private var chats: [Conversation] {
         session.conversations.filter { $0.assistantId == nil && $0.providerId == space?.providerId && $0.mode == space?.mode }
     }
+    private var unpinnedChats: [Conversation] { chats.filter { $0.pinnedAt == nil } }
+    private var pinnedChats: [Conversation] {
+        chats.filter { $0.pinnedAt != nil }.sorted {
+            ($0.pinnedAt ?? .distantPast, $0.updatedAt) > ($1.pinnedAt ?? .distantPast, $1.updatedAt)
+        }
+    }
     private var recents: [Conversation] {
         let collections = Set(session.collections.map(\.id))
-        return Array(chats.filter { $0.collectionId == nil || !collections.contains($0.collectionId!) }.prefix(20))
+        return Array(unpinnedChats.filter { $0.collectionId.map(collections.contains) != true }.prefix(20))
+    }
+    private struct BranchEdit: Identifiable {
+        let id: String
+        let branch: String
+        let owner: Int
+    }
+    private struct WorkspaceDeletion {
+        let workspace: Workspace
+        let owner: Int
     }
     var body: some View {
         let slides = overlayProgress != nil && !reduceMotion
@@ -76,9 +94,25 @@ struct SidebarView: View {
         }
         .frame(width: layoutWidth)
         .onChange(of: space?.id) { _, _ in providersExpanded = false }
-        .onChange(of: session.ownership) { _, _ in providersExpanded = false; pendingMode = nil }
+        .onChange(of: session.ownership) { _, _ in
+            providersExpanded = false; pendingMode = nil; branchEdit = nil; workspaceToDelete = nil
+        }
         .onChange(of: isVisible) { _, visible in
             if !visible { providersExpanded = false }
+        }
+        .modifier(ConversationActionPrompts(session: session, request: $chatAction))
+        .sheet(item: $branchEdit) { edit in
+            RenameItemSheet(title: "Rename branch", field: "Branch name", initialValue: edit.branch) { name in
+                guard edit.owner == session.ownership else { throw MainsError.changedBackend }
+                guard name != edit.branch else { return }
+                try await session.manageWorkspace(edit.id, action: .renameBranch(expected: edit.branch, name: name))
+            }
+        }
+        .confirmationDialog("Delete workspace?", isPresented: Binding(get: { workspaceToDelete != nil },
+            set: { if !$0 { workspaceToDelete = nil } }), titleVisibility: .visible, presenting: workspaceToDelete) { target in
+            Button("Delete workspace", role: .destructive) { manageWorkspace(target.workspace, .delete, owner: target.owner) }
+        } message: { target in
+            Text("This removes “\(target.workspace.name)” from Mains and keeps its checkout on your computer.")
         }
     }
     private var menu: some View {
@@ -92,34 +126,35 @@ struct SidebarView: View {
                         shortcuts.padding(.bottom, 34)
                     }
                     if space?.mode == "developer" {
-                        sectionTitle("Workspaces")
-                        if session.workspaces.isEmpty { empty("No workspaces yet.") }
-                        ForEach(session.workspaces) { workspace in
-                            Button {
-                                if let space, workspace.isReplica != true {
-                                    var target = session.homeTargets[space.id] ?? HomeTarget()
-                                    target.workspaceID = workspace.id; session.selectTarget(target, spaceID: space.id)
-                                }
-                                openWorkspace(workspace.id)
-                            } label: {
-                                WorkspaceLabel(session: session, workspace: workspace,
-                                               iconColumnWidth: menuIconWidth, iconSpacing: menuIconSpacing,
-                                               iconSize: menuIconSize, fallbackIconAsset: folderAsset,
-                                               nameFont: .body.width(.expanded))
-                            }
-                            .buttonStyle(.plain).padding(.vertical, 10)
-                            .accessibilityIdentifier("workspace-\(workspace.id)")
+                        let pinned = session.workspaces.filter { $0.pinnedAt != nil }
+                        let regular = session.workspaces.filter { $0.pinnedAt == nil }
+                        if !pinned.isEmpty {
+                            sectionTitle("Pinned")
+                            ForEach(pinned) { workspaceRow($0) }
+                        }
+                        if !regular.isEmpty || pinned.isEmpty {
+                            sectionTitle("Workspaces").padding(.top, pinned.isEmpty ? 0 : 22)
+                            if regular.isEmpty { empty("No workspaces yet.") }
+                            ForEach(regular) { workspaceRow($0) }
                         }
                     } else {
+                        let pinned = pinnedChats
+                        if !pinned.isEmpty {
+                            sectionTitle("Pinned")
+                            ForEach(pinned) { conversationRow($0) }
+                        }
                         if !session.collections.isEmpty {
-                            sectionTitle("Projects")
+                            sectionTitle("Projects").padding(.top, pinned.isEmpty ? 0 : 22)
                             ForEach(session.collections) { collection in
                                 collectionSection(collection)
                             }
                         }
-                        sectionTitle("Recents").padding(.top, session.collections.isEmpty ? 0 : 22)
-                        if recents.isEmpty { empty("No chats yet.") }
-                        ForEach(recents) { run in conversationRow(run) }
+                        let recent = recents
+                        if !recent.isEmpty || pinned.isEmpty {
+                            sectionTitle("Recents").padding(.top, session.collections.isEmpty && pinned.isEmpty ? 0 : 22)
+                            if recent.isEmpty { empty("No chats yet.") }
+                            ForEach(recent) { conversationRow($0) }
+                        }
                     }
                 }.padding(.leading, leadingInset + menuInset)
                     .padding(.trailing, Self.controlInset + menuInset).padding(.bottom, 24)
@@ -354,7 +389,7 @@ struct SidebarView: View {
     private func empty(_ title: String) -> some View { Text(title).font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 8) }
     private func collectionSection(_ collection: ProjectCollection) -> some View {
         let open = !collapsed.contains(collection.id)
-        let inside = chats.filter { $0.collectionId == collection.id }
+        let inside = unpinnedChats.filter { $0.collectionId == collection.id }
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Button { openProject(collection.id) } label: {
@@ -394,7 +429,69 @@ struct SidebarView: View {
                 if run.isReplica == true { BridgeIcon() }
             }.font(.body).frame(minHeight: 44).contentShape(.rect)
         }.buttonStyle(.plain).accessibilityIdentifier("conversation-\(run.id)")
-            .accessibilityValue(run.isReplica == true ? "Read-only, synced through Bridge" : "")
+            .accessibilityValue(run.isReplica == true ? "Read-only, synced through Bridge" : run.pinnedAt != nil ? "Pinned" : "")
+            .contextMenu { ConversationMenuActions(session: session, run: run, request: $chatAction) }
+    }
+
+    private func workspaceRow(_ workspace: Workspace) -> some View {
+        Button { openWorkspace(workspace.id) } label: {
+            HStack(spacing: 8) {
+                WorkspaceLabel(session: session, workspace: workspace,
+                               iconColumnWidth: menuIconWidth, iconSpacing: menuIconSpacing,
+                               iconSize: menuIconSize, fallbackIconAsset: folderAsset,
+                               nameFont: .body.width(.expanded))
+                if session.pendingWorkspaceAction?.workspaceID == workspace.id, session.pendingWorkspaceAction?.status == .sending {
+                    ProgressView().controlSize(.small).accessibilityLabel("Updating workspace")
+                }
+            }.padding(.vertical, 10).frame(minHeight: 44).contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("workspace-\(workspace.id)")
+        .accessibilityValue(workspace.pinnedAt != nil ? "Pinned" : "")
+        .contextMenu {
+            if workspace.isReplica != true && session.supportsWorkspaceManagement {
+                workspaceMenu(workspace)
+            }
+        }
+    }
+
+    @ViewBuilder private func workspaceMenu(_ workspace: Workspace) -> some View {
+        let pinned = workspace.pinnedAt != nil
+        Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") {
+            manageWorkspace(workspace, .setPinned(!pinned))
+        }.disabled(!session.canManageWorkspace(workspace.id, action: .setPinned(!pinned)))
+            .accessibilityIdentifier("pinWorkspace")
+        if let branch = session.gitStates.first(where: { $0.workspaceId == workspace.id })?.branch, branch != "HEAD" {
+            Button("Rename branch", systemImage: "pencil") {
+                branchEdit = BranchEdit(id: workspace.id, branch: branch, owner: session.ownership)
+            }.disabled(!session.canManageWorkspace(workspace.id, action: .renameBranch(expected: branch, name: branch)))
+                .accessibilityIdentifier("renameWorkspaceBranch")
+        }
+        Button("New worktree", systemImage: "plus") { manageWorkspace(workspace, .newWorktree) }
+            .disabled(!session.canManageWorkspace(workspace.id, action: .newWorktree))
+            .accessibilityIdentifier("newWorkspaceWorktree")
+        Divider()
+        Button("Archive", systemImage: "archivebox") { manageWorkspace(workspace, .archive) }
+            .disabled(!session.canManageWorkspace(workspace.id, action: .archive))
+            .accessibilityIdentifier("archiveWorkspace")
+        Button("Delete", systemImage: "trash", role: .destructive) {
+            workspaceToDelete = WorkspaceDeletion(workspace: workspace, owner: session.ownership)
+        }
+            .disabled(!session.canManageWorkspace(workspace.id, action: .delete))
+            .accessibilityIdentifier("deleteWorkspace")
+    }
+
+    private func manageWorkspace(_ workspace: Workspace, _ action: WorkspaceAction, owner: Int? = nil) {
+        let owner = owner ?? session.ownership
+        Task {
+            guard owner == session.ownership else { return }
+            do { try await session.manageWorkspace(workspace.id, action: action) }
+            catch {
+                if owner == session.ownership && session.pendingWorkspaceAction?.status != .uncertain {
+                    session.actionError = error.localizedDescription
+                }
+            }
+        }
     }
 }
 

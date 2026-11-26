@@ -117,6 +117,8 @@ public final class BackendSession {
     public private(set) var atlasRevision = 0
     public private(set) var pendingAtlasSave: PendingAtlasSave?
     public private(set) var pendingConversationAction: PendingConversationAction?
+    public private(set) var pendingWorkspaceAction: PendingWorkspaceAction?
+    public private(set) var retiredWorkspace: RetiredWorkspace?
     public private(set) var pendingPlanDecision: PendingPlanDecision?
     private var confirmedPlanDecision: (runID: String, planID: Int, status: PlanProposal.Status)?
     private struct GoalChangeAttempt {
@@ -129,6 +131,7 @@ public final class BackendSession {
     private var pendingGoalChange: GoalChangeAttempt?
     public private(set) var retiredConversation: RetiredConversation?
     @ObservationIgnored private var conversationActionRevision = 0
+    @ObservationIgnored private var workspaceActionRevision = 0
     #if MAINS_GPT_LIVE || SWIFT_PACKAGE
     public let voice = RealtimeVoiceController()
     public private(set) var pendingVoiceConversation: PendingVoiceConversation?
@@ -187,6 +190,8 @@ public final class BackendSession {
     public var supportsMobileGoalSummary: Bool { connectedDescriptor?.capabilities.contains("mobileGoalSummary") == true }
     public var supportsMobileGoalControls: Bool { connectedDescriptor?.capabilities.contains("mobileGoalControls") == true }
     public var supportsWorkspaceFileSearch: Bool { connectedDescriptor?.capabilities.contains("workspaceFileSearch") == true }
+    public var supportsChatOrganization: Bool { connectedDescriptor?.capabilities.contains("mobileChatOrganization") == true }
+    public var supportsWorkspaceManagement: Bool { connectedDescriptor?.capabilities.contains("mobileWorkspaceManagement") == true }
     public var supportsPlanDecisions: Bool { connectedDescriptor?.capabilities.contains("mobilePlanDecision") == true }
     public var supportsPluginIcons: Bool { connectedDescriptor?.capabilities.contains("mobilePluginIcons") == true }
     public var goalChangeNeedsCheck: Bool { pendingGoalChange?.uncertain == true }
@@ -1699,6 +1704,7 @@ public final class BackendSession {
 
     private func resetProjection() {
         pendingConversationAction = nil; retiredConversation = nil; conversationActionRevision = 0
+        pendingWorkspaceAction = nil; retiredWorkspace = nil; workspaceActionRevision = 0
         pendingPlanDecision = nil; confirmedPlanDecision = nil
         pendingGoalChange = nil
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
@@ -1803,6 +1809,10 @@ public final class BackendSession {
                 attemptTimer.cancel()
                 clearToolPluginIcons()
                 connection = .connected
+                if snapshotRefreshNeeded {
+                    snapshotRefreshNeeded = false
+                    scheduleListRefresh()
+                }
                 if workInboxVisible { startWorkInboxWatch() }
                 runQueues.kick()
                 if let runID = viewingRunID { startRemoteQueueWatch(runID) }
@@ -1929,19 +1939,22 @@ public final class BackendSession {
     private func syncSnapshot(_ candidate: any BackendTransport, generation current: Int) async throws {
         let settingsReadVersion = settingsRevision
         let actionRevision = conversationActionRevision
+        let workspaceRevision = workspaceActionRevision
         async let runResult = candidate.invoke("runs:getAll", args: [.number(100)])
+        async let pinnedResult = supportsChatOrganization ? candidate.invoke("runs:listPinned") : .array([])
         async let spaceResult = candidate.invoke("space:getAll")
         async let workspaceResult = candidate.invoke("workspace:list")
         async let accountResult = candidate.invoke("account:get")
-        let (runValue, spaceValue, workspaceValue, accountValue) = try await (runResult, spaceResult, workspaceResult, accountResult)
+        let (runValue, pinnedValue, spaceValue, workspaceValue, accountValue) = try await (runResult, pinnedResult, spaceResult, workspaceResult, accountResult)
         guard let id = accountValue["id"].string else { throw MainsError.invalidReply }
         async let collectionResult = candidate.invoke("collections:list", args: [.object(["accountId": .string(id)])])
         async let projectResult = candidate.invoke("projects:list")
         async let gitResult = candidate.invoke("workspace:listGitStates")
         async let providerResult = candidate.invoke("providers:getEnabled")
         let (collectionValue, projectValue, gitValue, providerValue) = try await (collectionResult, projectResult, gitResult, providerResult)
-        let (runs, newSpaces, newWorkspaces, newCollections, newProjects, newGitStates, providers) = try await Wire.decodeOffMain {
+        let (runs, pins, newSpaces, newWorkspaces, newCollections, newProjects, newGitStates, providers) = try await Wire.decodeOffMain {
             try (Self.list(runValue, key: "runs", as: Conversation.self).map(Self.safeConversation),
+                 Self.list(pinnedValue, key: "runs", as: Conversation.self).filter { $0.accountId == id && $0.isPinnableChat && $0.pinnedAt != nil }.map(Self.safeConversation),
                  Self.list(spaceValue, key: "spaces", as: Space.self),
                  Self.list(workspaceValue, key: "workspaces", as: Workspace.self),
                  Self.list(collectionValue, key: "collections", as: ProjectCollection.self),
@@ -1949,11 +1962,16 @@ public final class BackendSession {
                  Self.list(gitValue, key: "states", as: WorkspaceGitState.self),
                  Self.list(providerValue, key: "providers", as: ProviderSummary.self))
         }
-        guard generation == current, transport === candidate, actionRevision == conversationActionRevision else { return }
+        guard generation == current, transport === candidate else { return }
+        guard actionRevision == conversationActionRevision, workspaceRevision == workspaceActionRevision else {
+            snapshotRefreshNeeded = true
+            return
+        }
         accountID = id
         let viewed = conversations.first { $0.id == viewingRunID && !$0.isArchived }
-        conversations = runs.map { keepingSettings($0, readVersion: settingsReadVersion) }.filter { !$0.isArchived }.sorted { $0.updatedAt > $1.updatedAt }
-        if let viewed, !conversations.contains(where: { $0.id == viewed.id }) { conversations.append(viewed) }
+        let recentIDs = Set(runs.map(\.id))
+        storeConversationList((runs + pins.filter { !recentIDs.contains($0.id) })
+            .map { keepingSettings($0, readVersion: settingsReadVersion) }, keeping: viewed)
         spaces = newSpaces.filter { $0.isArchived != true }.sorted { ($0.sortOrder ?? 0) < ($1.sortOrder ?? 0) }
         workspaces = newWorkspaces.filter { !$0.isArchived }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
         collections = newCollections.filter { !$0.isArchived }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -2115,13 +2133,18 @@ public final class BackendSession {
     private func upsert(_ input: Conversation) {
         let run = Self.safeConversation(input)
         conversations.removeAll { $0.id == run.id }
-        if !run.isArchived { conversations.append(run) }
-        conversations.sort { $0.updatedAt > $1.updatedAt }
-        if conversations.count > 100 {
-            let viewed = conversations.first { $0.id == viewingRunID }
-            conversations = Array(conversations.prefix(100))
-            if let viewed, !conversations.contains(where: { $0.id == viewed.id }) { conversations.append(viewed) }
-        }
+        let updated = run.isArchived ? conversations : conversations + [run]
+        storeConversationList(updated, keeping: updated.first { $0.id == viewingRunID })
+    }
+
+    private func storeConversationList(_ rows: [Conversation], keeping viewed: Conversation?) {
+        let available = rows.filter { !$0.isArchived }.sorted { $0.updatedAt > $1.updatedAt }
+        let recent = Array(available.prefix(100))
+        let recentIDs = Set(recent.map(\.id))
+        let extraPins = available.filter { $0.isPinnableChat && $0.pinnedAt != nil && !recentIDs.contains($0.id) }
+            .sorted { ($0.pinnedAt ?? .distantPast) > ($1.pinnedAt ?? .distantPast) }
+        conversations = (recent + extraPins.prefix(100)).sorted { $0.updatedAt > $1.updatedAt }
+        if let viewed, !conversations.contains(where: { $0.id == viewed.id }) { conversations.append(viewed) }
     }
 
     private func event(_ channel: String, _ payload: JSONValue) {
@@ -2173,7 +2196,7 @@ public final class BackendSession {
             }
             if channel != "runs:eventPersisted" { scheduleListRefresh() }
         }
-        if ["space:changed", "workspace:created", "workspace:updated", "workspace:deleted", "workspace:gitStateChanged", "collections:changed", "projects:changed"].contains(channel) { scheduleListRefresh() }
+        if ["space:changed", "workspace:changed", "workspace:created", "workspace:updated", "workspace:deleted", "workspace:gitStateChanged", "collections:changed", "projects:changed"].contains(channel) { scheduleListRefresh() }
         if channel == "providers:skillsUpdated", let providerID = payload["providerId"].string {
             contextRevisions[providerID, default: 0] += 1
             if providerID == "codex" { clearToolPluginIcons() }
@@ -2439,8 +2462,12 @@ public final class BackendSession {
               !decisionDeliveries.contains(where: { $0.value.attempt?.runID == id && [.sending, .uncertain].contains($0.value.phase) }) else { return false }
         let queue = runQueues.existing(id)
         guard queue?.busy != true, queue?.hasUnknown != true, queue?.editingID == nil else { return false }
-        if action.retiresConversation { return !run.isActive }
-        return ["work", "chat"].contains(run.mode)
+        switch action {
+        case .archive, .delete: return !run.isActive
+        case .moveToProject: return ["work", "chat"].contains(run.mode)
+        case .rename: return supportsChatOrganization
+        case .setPinned: return supportsChatOrganization && run.isPinnableChat
+        }
     }
 
     public func manageConversation(_ id: String, action: ConversationAction) async throws {
@@ -2449,15 +2476,33 @@ public final class BackendSession {
             throw MainsError.server("This chat cannot be changed right now. Stop active replies and resolve pending changes first.")
         }
         let args: [JSONValue]
-        if case .moveToProject(let projectID) = action {
+        let requested: ConversationAction
+        switch action {
+        case .rename(let title):
+            let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty && name.utf16.count <= 240 else {
+                throw MainsError.server("Enter a chat title up to 240 characters.")
+            }
+            if run.title == name { return }
+            requested = .rename(name)
+            args = [.object(["runId": .string(id), "title": .string(name)])]
+        case .setPinned(let pinned):
+            if (run.pinnedAt != nil) == pinned { return }
+            requested = action
+            args = [.object(["runId": .string(id), "accountId": .string(accountID), "pinned": .bool(pinned)])]
+        case .moveToProject(let projectID):
             guard projectID == nil || collections.contains(where: { $0.id == projectID && !$0.isArchived }) else {
                 throw MainsError.server("This project is no longer available.")
             }
             if run.collectionId == projectID { return }
+            requested = action
             args = [.object(["runId": .string(id), "accountId": .string(accountID), "collectionId": projectID.map(JSONValue.string) ?? .null])]
-        } else { args = [.string(id)] }
+        case .archive, .delete:
+            requested = action
+            args = [.string(id)]
+        }
         if action.retiresConversation { runQueues.existing(id)?.pause("Chat change pending. Queued messages are paused.") }
-        let attempt = PendingConversationAction(runID: id, action: action, status: .sending, commandID: UUID().uuidString,
+        let attempt = PendingConversationAction(runID: id, action: requested, status: .sending, commandID: UUID().uuidString,
                                                 accountID: accountID, args: args, owner: pairingOwner)
         try await deliverConversationAction(attempt)
     }
@@ -2512,6 +2557,72 @@ public final class BackendSession {
                 else { refused = failure == .unauthorized || failure == .incompatible }
                 if refused { pendingConversationAction = nil; runQueues.kick() }
                 else { attempt.status = .uncertain; pendingConversationAction = attempt }
+            }
+            throw error
+        }
+    }
+
+    public func canManageWorkspace(_ id: String, action: WorkspaceAction) -> Bool {
+        guard isConnected, supportsWorkspaceManagement, pendingWorkspaceAction == nil,
+              let workspace = workspaces.first(where: { $0.id == id && $0.isReplica != true && !$0.isArchived }) else { return false }
+        switch action {
+        case .archive, .delete:
+            return !sending && !conversations.contains { $0.workspaceId == id && $0.isActive }
+        case .renameBranch(let expected, _):
+            guard let state = gitStates.first(where: { $0.workspaceId == id }), state.pathExists,
+                  state.branch == expected, expected != "HEAD", !expected.isEmpty else { return false }
+            return expected != workspace.baseBranch && expected != projects.first { $0.id == workspace.projectId }?.defaultBranch
+        case .newWorktree:
+            return projects.contains { $0.id == workspace.projectId && $0.isArchived != true }
+        case .setPinned: return true
+        }
+    }
+
+    public func manageWorkspace(_ id: String, action: WorkspaceAction) async throws {
+        guard canManageWorkspace(id, action: action) else {
+            throw MainsError.server("This workspace change is unavailable right now.")
+        }
+        try await deliverWorkspaceAction(.init(id: UUID().uuidString, workspaceID: id, action: action, status: .sending, owner: pairingOwner))
+    }
+
+    public func checkWorkspaceAction() async throws {
+        guard let attempt = pendingWorkspaceAction, attempt.status == .uncertain, isConnected else { throw MainsError.disconnected }
+        try await deliverWorkspaceAction(attempt)
+    }
+
+    private func deliverWorkspaceAction(_ original: PendingWorkspaceAction) async throws {
+        var attempt = original
+        attempt.status = .sending
+        pendingWorkspaceAction = attempt
+        do {
+            let response = try await command("workspace:mobileManage", args: [.string(attempt.workspaceID), attempt.action.wire],
+                                             commandID: attempt.id, owner: attempt.owner)
+            guard attempt.owner == pairingOwner else { throw MainsError.changedBackend }
+            guard response["workspaceId"].string == attempt.workspaceID,
+                  response["action"].string == attempt.action.wireName else { throw MainsError.invalidReply }
+            pendingWorkspaceAction = nil
+            workspaceActionRevision += 1
+            if attempt.action.retiresWorkspace {
+                workspaces.removeAll { $0.id == attempt.workspaceID }
+                gitStates.removeAll { $0.workspaceId == attempt.workspaceID }
+                for spaceID in Array(homeTargets.keys) where homeTargets[spaceID]?.workspaceID == attempt.workspaceID {
+                    homeTargets[spaceID]?.workspaceID = nil
+                }
+                retiredWorkspace = .init(id: attempt.id, workspaceID: attempt.workspaceID)
+                saveCache()
+            }
+            await refresh()
+        } catch {
+            if attempt.owner == pairingOwner {
+                let failure = error as? MainsError
+                if case .server = failure, failure?.isUnconfirmedCommand == false {
+                    pendingWorkspaceAction = nil
+                } else if failure == .unauthorized || failure == .incompatible {
+                    pendingWorkspaceAction = nil
+                } else {
+                    attempt.status = .uncertain
+                    pendingWorkspaceAction = attempt
+                }
             }
             throw error
         }

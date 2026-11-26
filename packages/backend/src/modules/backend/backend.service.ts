@@ -60,6 +60,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.runs.listActive,
   CHANNELS.runs.listRecent,
   CHANNELS.runs.listArchived,
+  CHANNELS.runs.listPinned,
   CHANNELS.runs.getById,
   CHANNELS.runs.getDetails,
   CHANNELS.runs.getHistory,
@@ -117,7 +118,8 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
  * run, start one, branch one, stop one — plus the picker writes the composer
  * needs, plus narrow saves of existing conversation files/bookmark URLs into
  * Atlas and organizing permanent Atlas favorites, projects, tags and Trash.
- * Arbitrary filesystem paths, git, terminal and general settings stay out.
+ * Workspace changes operate on existing workspace identities. Arbitrary
+ * filesystem paths, general Git commands, terminal and settings stay out.
  */
 export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   CHANNELS.assistants.create,
@@ -150,6 +152,9 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   CHANNELS.runs.archive,
   CHANNELS.runs.delete,
   CHANNELS.runs.moveToCollection,
+  CHANNELS.runs.rename,
+  CHANNELS.runs.setPinned,
+  CHANNELS.workspace.mobileManage,
   // Stopping a run you can already start and continue takes nothing further —
   // it only ends work the device itself asked for.
   CHANNELS.runs.abort,
@@ -197,6 +202,7 @@ export const PAIRED_DEVICE_EVENTS: ReadonlySet<string> = new Set([
   CHANNELS.providers.mobileGoalChanged,
   CHANNELS.providers.skillsUpdated,
   CHANNELS.workspace.gitStateChanged,
+  CHANNELS.workspace.changed,
 ]);
 
 /** Receipts older than this are forgotten; a device never retries that late. */
@@ -320,6 +326,10 @@ export const backendService = {
     if (reachable.includes(CHANNELS.search.workspaceFiles)) namespaces.push(WORKSPACE_FILE_SEARCH_CAPABILITY);
     if (reachable.includes(CHANNELS.runs.decidePlan)) namespaces.push(MOBILE_PLAN_DECISION_CAPABILITY);
     if (reachable.includes(CHANNELS.providers.getMobilePluginIcons)) namespaces.push(MOBILE_PLUGIN_ICONS_CAPABILITY);
+    if ([CHANNELS.runs.listPinned, CHANNELS.runs.rename, CHANNELS.runs.setPinned].every(channel => reachable.includes(channel))) {
+      namespaces.push("mobileChatOrganization");
+    }
+    if (reachable.includes(CHANNELS.workspace.mobileManage)) namespaces.push("mobileWorkspaceManagement");
     if (reachable.includes(CHANNELS.providers.getMobileGoalSummary) && reachable.includes(CHANNELS.providers.changeMobileGoal)) {
       namespaces.push(MOBILE_GOAL_CONTROLS_CAPABILITY);
     }

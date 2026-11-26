@@ -26,6 +26,8 @@ export function registerWorkspaceIpc(): void {
   openWorkspaceDiffs();
   openRecordLifecycles();
   openWorkspaceIntakes();
+  ipcMain.handle(CHANNELS.workspace.mobileManage,
+    handle((workspaceId: string, change: unknown) => workspaceService.manageMobileWorkspace(workspaceId, change)));
   // ── lifecycle ──
   ipcMain.handle(
     CHANNELS.workspace.list,
@@ -289,6 +291,7 @@ export function registerWorkspaceIpc(): void {
 export function unregisterWorkspaceIpc(): void {
   [
     // lifecycle
+    CHANNELS.workspace.mobileManage,
     CHANNELS.workspace.list,
     CHANNELS.workspace.listArchived,
     CHANNELS.workspace.get,

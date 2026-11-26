@@ -2,10 +2,12 @@ import { acceptWorkspaceDiffRead, captureWorkspaceDiff } from "./workspace-diff-
 import { assertCheckoutAvailable, runGitOperation } from "../../runtime/git-operation-lifecycle";
 import { assertRecordAvailable, finishRecordDeletion, recordKey, transitionRecord } from "../../runtime/record-lifecycle";
 import { assertOwnedRecord } from "../bridge";
+import { ACCOUNT_ID } from "../account/account.constants";
 import { randomUUID } from "crypto";
 import { execFile } from "child_process";
 import { existsSync, lstatSync, watch, type FSWatcher } from "fs";
 import path from "path";
+import { z } from "zod";
 import { CHANNELS } from "@mains/contracts/channels";
 import { emit } from "../../ipc-kit";
 import { workspaceRepo } from "./workspace.repo";
@@ -39,6 +41,17 @@ import type {
   CreateReviewFindingPayload,
   UpdateReviewFindingPayload,
 } from "./workspace.dto";
+
+const mobileWorkspaceAction = z.discriminatedUnion("action", [
+  z.strictObject({ action: z.literal("setPinned"), pinned: z.boolean() }),
+  z.strictObject({ action: z.literal("archive") }),
+  z.strictObject({ action: z.literal("delete") }),
+  z.strictObject({
+    action: z.literal("renameBranch"), expectedBranch: z.string().min(1).max(1024),
+    branch: z.string().trim().min(1).max(240).refine(name => !name.startsWith("-") && !name.includes("\0")),
+  }),
+  z.strictObject({ action: z.literal("newWorktree") }),
+]);
 
 // ─────────────────────────────────────────────────────────────
 // Workspace directory presence
@@ -554,7 +567,39 @@ export const workspaceService = {
       payload.pinned ? new Date() : null,
     );
     if (!updated) throw new Error("Workspace not found");
+    emit(CHANNELS.workspace.changed, { workspaceId: workspace.id });
     return updated;
+  },
+
+  async manageMobileWorkspace(workspaceId: string, input: unknown): Promise<{ workspaceId: string; action: string }> {
+    const parsed = mobileWorkspaceAction.safeParse(input);
+    if (typeof workspaceId !== "string" || !workspaceId || !parsed.success) throw new Error("Invalid workspace change");
+    assertOwnedRecord("workspaces", workspaceId);
+    const workspace = await workspaceRepo.findById(workspaceId);
+    if (!workspace || workspace.accountId !== ACCOUNT_ID || workspace.isArchived) throw new Error("Workspace is unavailable");
+    const change = parsed.data;
+    switch (change.action) {
+      case "setPinned":
+        await this.setPinned({ id: workspace.id, accountId: ACCOUNT_ID, pinned: change.pinned });
+        break;
+      case "archive":
+        await this.archive(workspace.id);
+        break;
+      case "delete":
+        await this.delete(workspace.id);
+        break;
+      case "renameBranch":
+        await this.renameBranch(workspace.id, change.branch, change.expectedBranch);
+        break;
+      case "newWorktree": {
+        assertOwnedRecord("projects", workspace.projectId);
+        const project = await projectsRepo.findById(workspace.projectId);
+        if (!project || project.accountId !== ACCOUNT_ID || project.isArchived) throw new Error("Project is unavailable");
+        await this.createFromSource({ accountId: ACCOUNT_ID, source: { kind: "worktree", projectId: project.id } });
+        break;
+      }
+    }
+    return { workspaceId, action: change.action };
   },
 
   async getByRootPath(
@@ -672,6 +717,7 @@ export const workspaceService = {
         .catch(() => {});
     }
 
+    emit(CHANNELS.workspace.changed, { workspaceId: id });
     return workspace;
   },
 
@@ -933,6 +979,7 @@ export const workspaceService = {
       try { await workspaceRepo.delete(id); }
       catch (error) { if (await workspaceRepo.findById(id)) throw error; }
       removeGitStateWatcher(id);
+      emit(CHANNELS.workspace.changed, { workspaceId: id });
       if (worktree) await finishRecordDeletion(recordKey("workspace", id), async () => {
         const current = identify();
         if (current && (!identity || current.dev !== identity.dev || current.ino !== identity.ino)) {
@@ -966,6 +1013,7 @@ export const workspaceService = {
       const archived = await workspaceRepo.archive(id);
       if (!archived) throw new Error("Failed to archive workspace");
       removeGitStateWatcher(id);
+      emit(CHANNELS.workspace.changed, { workspaceId: id });
       // Visibility returns promptly; restore/delete still wait for this script.
       hold((async () => {
         const project = await projectsRepo.findById(workspace.projectId);
@@ -1004,6 +1052,7 @@ export const workspaceService = {
 
       const unarchived = await workspaceRepo.unarchive(id);
       if (!unarchived) throw new Error("Failed to unarchive workspace");
+      emit(CHANNELS.workspace.changed, { workspaceId: id });
       return unarchived;
     });
   },
@@ -1097,6 +1146,7 @@ export const workspaceService = {
   async renameBranch(
     workspaceId: string,
     newBranchName: string,
+    expectedBranch?: string,
   ): Promise<WorkspaceResponse> {
     return runGitOperation({ workspaceId, newBranchName }, "rename-branch", async (scope) => {
       assertOwnedRecord("workspaces", workspaceId);
@@ -1110,6 +1160,9 @@ export const workspaceService = {
       const oldBranch = await gitService.getCurrentBranch(workspace.rootPath);
       if (!oldBranch || oldBranch === "HEAD") {
         throw new Error("Workspace has no named branch to rename");
+      }
+      if (expectedBranch !== undefined && oldBranch !== expectedBranch) {
+        throw new Error("The checked-out branch changed. Reopen Rename branch to try again.");
       }
       const project = workspace.projectId
         ? await projectsRepo.findById(workspace.projectId)

@@ -71,6 +71,7 @@ public struct Conversation: Codable, Equatable, Identifiable, Sendable {
     public var assistantId: String? = nil
     public var workspaceId: String? = nil
     public var collectionId: String? = nil
+    public var pinnedAt: Date? = nil
     public let title: String?
     public var status: String
     public let model: String?
@@ -85,6 +86,7 @@ public struct Conversation: Codable, Equatable, Identifiable, Sendable {
         return label.isEmpty ? "Untitled chat" : label
     }
     public var isActive: Bool { status == "queued" || status == "running" }
+    public var isPinnableChat: Bool { assistantId == nil && (mode == "work" || mode == "chat") }
     public var supportsSteering: Bool { ["codex", "claude_code"].contains(providerId) }
     public var canSteer: Bool { status == "running" && supportsSteering && isReplica != true }
     public var canFork: Bool { !isActive && isReplica != true && !isArchived && archivedReplyError == nil }
@@ -114,6 +116,8 @@ public struct Workspace: Codable, Equatable, Identifiable, Sendable {
     public let isArchived: Bool
     public let isReplica: Bool?
     public var projectId: String? = nil
+    public var baseBranch: String? = nil
+    public var pinnedAt: Date? = nil
     public var rootPath: String? = nil
     public var status: String? = nil
     public var updatedAt: Date? = nil

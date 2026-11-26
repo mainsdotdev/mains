@@ -13,6 +13,7 @@ import Testing
     var holdSnapshot = false
     var releaseSnapshot: CheckedContinuation<Void, Never>?
     var runOverrides: [String: [String: JSONValue]] = [:]
+    var omittedRecentRunID: String?
 }
 
 @MainActor private final class ChatActionTransport: BackendTransport {
@@ -24,7 +25,7 @@ import Testing
     func open(endpoint: URL, token: String) throws { try base.open(endpoint: endpoint, token: token) }
     func close() { base.close() }
     func perform(_ channel: String, args: [JSONValue], commandId: String?, timeout: TimeInterval) async throws -> JSONValue {
-        let action = ["runs:archive", "runs:delete", "runs:moveToCollection"].contains(channel)
+        let action = ["runs:archive", "runs:delete", "runs:moveToCollection", "runs:rename", "runs:setPinned", "workspace:mobileManage"].contains(channel)
         if action {
             probe.calls.append(.init(channel: channel, args: args, commandID: commandId))
             if let error = probe.failBefore { probe.failBefore = nil; throw error }
@@ -43,7 +44,9 @@ import Testing
             guard let id = row["id"].string, let overrides = probe.runOverrides[id] else { return row }
             var fields = row.objectValue; fields.merge(overrides) { _, new in new }; return .object(fields)
         }
-        if channel == "runs:getAll" { result = .array(result.array.map(patch)) }
+        if channel == "runs:getAll" {
+            result = .array(result.array.filter { $0["id"].string != probe.omittedRecentRunID }.map(patch))
+        }
         if channel == "runs:getById", result != .null { result = patch(result) }
         return result
     }
@@ -81,6 +84,42 @@ import Testing
         #expect(probe.calls[0].args == [.object(["runId": .string(id), "accountId": .string("demo-account"), "collectionId": .string(project.id)])])
         #expect(probe.calls[1].args[0]["collectionId"] == .null)
         #expect(probe.calls.allSatisfy { $0.commandID?.isEmpty == false })
+    }
+
+    @Test @MainActor func olderPinsStayReachableBeyondTheRecentWindow() async throws {
+        let (session, backend, probe, id) = try await setup()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await session.manageConversation(id, action: .rename("Release notes"))
+        try await eventually { session.conversations.first { $0.id == id }?.title == "Release notes" }
+        try await session.manageConversation(id, action: .setPinned(true))
+        try await eventually { session.conversations.first { $0.id == id }?.pinnedAt != nil }
+        session.leaveConversation(id)
+        probe.omittedRecentRunID = id
+        await session.refresh()
+        try await eventually { session.conversations.first { $0.id == id }?.pinnedAt != nil }
+        #expect(session.conversations.filter { $0.id == id }.count == 1)
+        try await session.manageConversation(id, action: .setPinned(false))
+        try await eventually { !session.conversations.contains { $0.id == id } }
+    }
+
+    @Test @MainActor func anUnconfirmedWorktreeReusesItsReceiptAndCreatesOneWorkspace() async throws {
+        let (session, backend, probe, _) = try await setup()
+        defer { session.exitDemo(); backend.shutdown() }
+        let source = try #require(session.workspaces.first { $0.id == backend.defaultWorkspaceID })
+        let originalIDs = Set(session.workspaces.map(\.id))
+        probe.failAfter = .timeout
+        await #expect(throws: MainsError.timeout) { try await session.manageWorkspace(source.id, action: .newWorktree) }
+        #expect(session.pendingWorkspaceAction?.status == .uncertain)
+        session.retry()
+        try await eventually { session.isConnected }
+        try await session.checkWorkspaceAction()
+        let created = session.workspaces.filter { !originalIDs.contains($0.id) }
+        let worktree = try #require(created.first)
+        #expect(created.count == 1 && worktree.projectId == source.projectId)
+        #expect(probe.calls.count == 2 && probe.calls[0].commandID == probe.calls[1].commandID)
+        let branch = try #require(session.gitStates.first { $0.workspaceId == worktree.id }?.branch)
+        try await session.manageWorkspace(worktree.id, action: .renameBranch(expected: branch, name: "feature/ios-sidebar"))
+        try await eventually { session.gitStates.first { $0.workspaceId == worktree.id }?.branch == "feature/ios-sidebar" }
     }
 
     @Test(arguments: ["developer", "work", "chat"], [false, true]) @MainActor func retirementWorksInEveryModeOnlyAfterAcknowledgement(mode: String, deleting: Bool) async throws {

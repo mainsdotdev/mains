@@ -115,6 +115,8 @@ export function registerRunsIpc(): void {
       runsService.listRecentRuns(options),
     ),
   );
+  ipcMain.handle(CHANNELS.runs.listPinned,
+    handle(async () => (await runsService.listPinnedChats()).map(runForPairedDevice)));
 
   const getById = handle((id: string) => runsService.getRunById(id));
   ipcMain.handle(CHANNELS.runs.getById, async (ctx: IpcInvokeContext, id: string) => {
@@ -162,10 +164,15 @@ export function registerRunsIpc(): void {
     return ctx?.deviceId && result.success ? ok(runForPairedDevice(result.data)) : result;
   });
 
-  ipcMain.handle(
-    CHANNELS.runs.setPinned,
-    handle((payload: SetRunPinnedPayload) => runsService.setRunPinned(payload)),
-  );
+  ipcMain.handle(CHANNELS.runs.rename,
+    handle(async (payload: { runId: string; title: string }) =>
+      runForPairedDevice(await runsService.renameMobileConversation(payload))));
+
+  ipcMain.handle(CHANNELS.runs.setPinned, (ctx: IpcInvokeContext, payload: SetRunPinnedPayload) =>
+    handle(async () => {
+      const run = await runsService.setRunPinned(payload, !!ctx?.deviceId);
+      return ctx?.deviceId ? runForPairedDevice(run) : run;
+    })(ctx));
 
   ipcMain.handle(
     CHANNELS.runs.start,
@@ -363,12 +370,14 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.readOutputFile,
     CHANNELS.runs.readTextFile,
     CHANNELS.runs.listRecent,
+    CHANNELS.runs.listPinned,
     CHANNELS.runs.getById,
     CHANNELS.runs.getByAccount,
     CHANNELS.runs.getByWorkspace,
     CHANNELS.runs.getByStatus,
     CHANNELS.runs.create,
     CHANNELS.runs.update,
+    CHANNELS.runs.rename,
     CHANNELS.runs.updateConversationSettings,
     CHANNELS.runs.moveToCollection,
     CHANNELS.runs.setPinned,

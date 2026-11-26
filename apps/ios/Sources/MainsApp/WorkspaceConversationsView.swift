@@ -13,6 +13,7 @@ struct TargetConversationsView: View {
     let openConversation: (String) -> Void
     let startConversation: () -> Void
     @State private var query = ""
+    @State private var chatAction: ConversationActionRequest?
     @FocusState private var searching: Bool
     private var workspace: Workspace? {
         guard case .workspace(let id) = target else { return nil }
@@ -80,6 +81,7 @@ struct TargetConversationsView: View {
         .toolbar(.visible, for: .navigationBar)
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         .pullToRefresh { await session.refresh() }
+        .modifier(ConversationActionPrompts(session: session, request: $chatAction))
     }
 
     private var targetHeader: some View {
@@ -113,6 +115,7 @@ struct TargetConversationsView: View {
                                                 detail: active ? (run.status == "queued" ? "Queued" : "Running") : compactRelativeAge(run.updatedAt, now: clock.date),
                                                 detailColor: active ? AppBrand.accent : Color(.tertiaryLabel))
                         }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("conversation-\(run.id)")
+                            .contextMenu { ConversationMenuActions(session: session, run: run, request: $chatAction) }
                     }
                 }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 24)
             }

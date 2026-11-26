@@ -487,6 +487,7 @@ export const CHANNELS = {
     fork: "runs:fork",
     getAll: "runs:getAll",
     listArchived: "runs:listArchived",
+    listPinned: "runs:listPinned",
     getByAccount: "runs:getByAccount",
     getById: "runs:getById",
     getByStatus: "runs:getByStatus",
@@ -504,6 +505,7 @@ export const CHANNELS = {
     listRecent: "runs:listRecent",
     moveToCollection: "runs:moveToCollection",
     setPinned: "runs:setPinned",
+    rename: "runs:rename",
     start: "runs:start",
     statusChanged: "runs:statusChanged",
     toolApprovalRequest: "runs:toolApprovalRequest",
@@ -587,6 +589,8 @@ export const CHANNELS = {
   },
   workspace: {
     // ── lifecycle ──
+    changed: "workspace:changed",
+    mobileManage: "workspace:mobileManage",
     archive: "workspace:archive",
     cancelClone: "workspace:cancelClone",
     create: "workspace:create",

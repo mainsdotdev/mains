@@ -4,7 +4,8 @@ import { invokeHandler } from "../../ipc-kit/handler-registry";
 import { registerRunsIpc, unregisterRunsIpc } from "./runs.ipc";
 
 const service = vi.hoisted(() => ({ archiveRun: vi.fn(), deleteRun: vi.fn(), moveRunToCollection: vi.fn(),
-  getAllRuns: vi.fn(), getRunById: vi.fn(), listActiveRuns: vi.fn() }));
+  getAllRuns: vi.fn(), getRunById: vi.fn(), listActiveRuns: vi.fn(), listPinnedChats: vi.fn(), setRunPinned: vi.fn(),
+  renameMobileConversation: vi.fn() }));
 vi.mock("./runs.service", () => ({ runsService: service }));
 vi.mock("./user-decision-runtime", () => ({ openUserDecisions: vi.fn() }));
 vi.mock("./user-input-broker", () => ({ handleToolApprovalResponse: vi.fn(), listPendingApprovals: vi.fn() }));
@@ -16,11 +17,17 @@ describe("paired chat metadata and actions at the real IPC seam", () => {
     goal: "private prompt", systemPrompt: "private policy", toolPolicySnapshot: { secret: "private" },
     configSnapshot: { credential: "private", effortLevel: "high" } };
 
-  it.each([CHANNELS.runs.getAll, CHANNELS.runs.getById, CHANNELS.runs.listActive])(
+  it.each([CHANNELS.runs.getAll, CHANNELS.runs.getById, CHANNELS.runs.listActive, CHANNELS.runs.listPinned])(
     "uses the desktop fallback label in phone metadata from %s", async (channel) => {
       const row = { ...run, title: null, goal: "\n Hey, naber \nprivate prompt body" };
       const single = channel === CHANNELS.runs.getById;
-      const read = single ? service.getRunById : channel === CHANNELS.runs.getAll ? service.getAllRuns : service.listActiveRuns;
+      const reads = {
+        [CHANNELS.runs.getById]: service.getRunById,
+        [CHANNELS.runs.getAll]: service.getAllRuns,
+        [CHANNELS.runs.listActive]: service.listActiveRuns,
+        [CHANNELS.runs.listPinned]: service.listPinnedChats,
+      };
+      const read = reads[channel];
       read.mockResolvedValue(single ? row : [row]);
       const args = single ? ["chat"] : channel === CHANNELS.runs.getAll ? [100] : [];
       const phone = await invokeHandler(channel, args, { deviceId: "phone" });
@@ -28,10 +35,25 @@ describe("paired chat metadata and actions at the real IPC seam", () => {
         configSnapshot: { effortLevel: "high" } };
       expect(phone).toEqual({ success: true, data: single ? expected : [expected] });
       const desktop = await invokeHandler(channel, args, {});
-      expect(desktop).toEqual({ success: true, data: single ? row : [row] });
+      expect(desktop).toEqual({ success: true, data: single ? row : [channel === CHANNELS.runs.listPinned ? expected : row] });
       expect(JSON.stringify(phone)).not.toContain("private");
     },
   );
+
+  it("renames and pins through receipt-enabled channels with a bounded phone projection", async () => {
+    const device = { deviceId: "phone" };
+    const title = { runId: "chat", title: "New name" };
+    const pin = { runId: "chat", accountId: "account", pinned: true };
+    const pinnedAt = new Date();
+    service.renameMobileConversation.mockResolvedValue({ ...run, title: title.title });
+    service.setRunPinned.mockResolvedValue({ ...run, pinnedAt });
+    const renamed = await invokeHandler(CHANNELS.runs.rename, [title], device);
+    const pinned = await invokeHandler(CHANNELS.runs.setPinned, [pin], device);
+    expect(service.renameMobileConversation).toHaveBeenCalledWith(title);
+    expect(service.setRunPinned).toHaveBeenCalledWith(pin, true);
+    expect(renamed).toMatchObject({ success: true, data: { title: "New name", goal: null } });
+    expect(pinned).toMatchObject({ success: true, data: { pinnedAt, goal: null } });
+  });
 
   it("moves through the existing payload and projects only phone metadata", async () => {
     service.moveRunToCollection.mockResolvedValue(run);

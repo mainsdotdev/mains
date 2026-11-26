@@ -171,6 +171,7 @@ describe("backendService", () => {
       expect(PAIRED_DEVICE_CHANNELS.has("search:conversations")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("search:query")).toBe(false);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:getAll")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("runs:listPinned")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("providers:getMobileGoalSummary")).toBe(true);
       for (const channel of ["providers:getGoal", "providers:setGoal", "providers:clearGoal"]) {
         expect(PAIRED_DEVICE_CHANNELS.has(channel) || PAIRED_DEVICE_COMMANDS.has(channel)).toBe(false);
@@ -215,17 +216,22 @@ describe("backendService", () => {
         "runs:fork",
         "runs:inputStatus",
         "runs:moveToCollection",
+        "runs:rename",
+        "runs:setPinned",
         "runs:startRealtime",
         "runs:steer",
         "runs:stopRealtime",
         "runs:toolApprovalResponse",
         "runs:updateConversationSettings",
         "space:update",
+        "workspace:mobileManage",
       ]);
       for (const channel of PAIRED_DEVICE_COMMANDS) {
         expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(false);
       }
       expect(PAIRED_DEVICE_COMMANDS.has("runs:update")).toBe(false);
+      expect(PAIRED_DEVICE_COMMANDS.has("workspace:createFromSource")).toBe(false);
+      expect(PAIRED_DEVICE_COMMANDS.has("workspace:renameBranch")).toBe(false);
       expect(PAIRED_DEVICE_COMMANDS.has("runs:publishQueue")).toBe(false);
       expect(PAIRED_DEVICE_COMMANDS.has("atlas:remove")).toBe(false);
     });
@@ -525,6 +531,7 @@ describe("PAIRED_DEVICE_EVENTS", () => {
       "runs:toolApprovalRequest",
       "runs:toolApprovalResolved",
       "runs:updated",
+      "workspace:changed",
       "workspace:gitStateChanged",
     ]);
   });

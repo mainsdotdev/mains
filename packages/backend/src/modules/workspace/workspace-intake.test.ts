@@ -58,6 +58,31 @@ describe("workspace intake registration", () => {
     expect(workspace.metadata?.worktree?.enabled).toBe(kind === "worktree");
   });
 
+  it("creates and renames a worktree from a phone without retargeting a stale branch", async () => {
+    createAccount(db, { id: "default" });
+    const source = await workspaceService.createFromSource({ accountId: "default", source: { kind: "folder", path: repo } });
+    await workspaceService.manageMobileWorkspace(source.id, { action: "newWorktree" });
+    const worktree = (await workspaceService.listByAccount("default")).find(row => row.id !== source.id);
+    expect(worktree?.projectId).toBe(source.projectId);
+    if (!worktree) throw new Error("Worktree was not registered");
+    const branch = await gitService.getCurrentBranch(worktree.rootPath);
+
+    await expect(workspaceService.manageMobileWorkspace(worktree.id, {
+      action: "renameBranch", expectedBranch: "other-branch", branch: "feature/mobile-sidebar",
+    })).rejects.toThrow("The checked-out branch changed");
+    expect(await gitService.getCurrentBranch(worktree.rootPath)).toBe(branch);
+
+    await workspaceService.manageMobileWorkspace(worktree.id, {
+      action: "renameBranch", expectedBranch: branch, branch: "feature/mobile-sidebar",
+    });
+    expect(await gitService.getCurrentBranch(worktree.rootPath)).toBe("feature/mobile-sidebar");
+    expect(await gitService.getCurrentBranch(source.rootPath)).toBe("main");
+
+    await workspaceService.manageMobileWorkspace(worktree.id, { action: "delete" });
+    expect(await workspaceService.get(worktree.id)).toBeNull();
+    expect(await fs.readFile(path.join(worktree.rootPath, "README.md"), "utf8")).toBe("keep me\n");
+  });
+
   it("holds a picked folder through database registration instead of creating duplicate records", async () => {
     let entered!: () => void, release!: () => void;
     const registering = new Promise<void>((resolve) => { entered = resolve; });

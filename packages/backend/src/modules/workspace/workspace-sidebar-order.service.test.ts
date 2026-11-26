@@ -54,6 +54,19 @@ describe("workspace sidebar organization", () => {
     expect(unpinned.sortOrder).toBe(1);
   });
 
+  it("shares desktop pins with the phone while rejecting filesystem and branch override fields", async () => {
+    await expect(workspaceService.manageMobileWorkspace("second", { action: "setPinned", pinned: true }))
+      .resolves.toEqual({ workspaceId: "second", action: "setPinned" });
+    expect((await workspaceService.get("second"))?.pinnedAt).toBeInstanceOf(Date);
+    await expect(workspaceService.manageMobileWorkspace("second", { action: "delete", removeWorktree: true }))
+      .rejects.toThrow("Invalid workspace change");
+    await expect(workspaceService.manageMobileWorkspace("second", { action: "newWorktree", rootPath: "/tmp" }))
+      .rejects.toThrow("Invalid workspace change");
+    await expect(workspaceService.manageMobileWorkspace("second", { action: "renameBranch", expectedBranch: "feature", branch: "-f" }))
+      .rejects.toThrow("Invalid workspace change");
+    expect(await workspaceService.get("second")).not.toBeNull();
+  });
+
   it("rejects incomplete, duplicate, and cross-account changes", async () => {
     createAccount(db, { id: "other" });
     createProject(db, { id: "other-project", accountId: "other" });

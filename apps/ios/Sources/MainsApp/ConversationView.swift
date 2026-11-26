@@ -54,8 +54,7 @@ struct ConversationView: View {
     @State private var acceptedCount = 0
     @State private var modelSheet = false
     @State private var optionsSheet = false
-    @State private var projectSheet = false
-    @State private var confirmDelete = false
+    @State private var conversationAction: ConversationActionRequest?
     @State private var companion = ConversationCompanionState()
     @State private var outputSelection: ConversationOutputSelection?
     @State private var outputsSheet = false
@@ -355,15 +354,7 @@ struct ConversationView: View {
         .sheet(item: $editingGoal) { request in
             GoalObjectiveEditor(session: session, runID: runID, request: request)
         }
-        .sheet(isPresented: $projectSheet) {
-            ConversationProjectSheet(session: session, runID: runID, owner: owner ?? -1)
-        }
-        .confirmationDialog("Delete chat?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete chat", role: .destructive) { manage(.delete) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This permanently deletes the chat and its chat files. This can’t be undone.")
-        }
+        .modifier(ConversationActionPrompts(session: session, request: $conversationAction))
         .onDisappear {
             if selectedFile == nil && presentedMateProfile == nil && presentedMateTask == nil { session.leaveConversation(runID) }
         }
@@ -541,24 +532,12 @@ struct ConversationView: View {
                                 Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
                             }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
                         }
-                        if run?.mode == "work" || run?.mode == "chat" {
-                            Button("Move to project", systemImage: "folder") { projectSheet = true }
-                                .disabled(!session.canManageConversation(runID, action: .moveToProject(nil)))
-                                .accessibilityIdentifier("moveConversationToProject")
+                        if let run {
+                            ConversationMenuActions(session: session, run: run, request: $conversationAction)
                         }
-                        Divider()
-                        Button("Archive", systemImage: "archivebox") { manage(.archive) }
-                            .disabled(!session.canManageConversation(runID, action: .archive)).accessibilityIdentifier("archiveConversation")
-                        Button(role: .destructive) { confirmDelete = true } label: {
-                            Label { Text("Delete") } icon: {
-                                Image(uiImage: (UIImage(systemName: "trash") ?? UIImage())
-                                    .withTintColor(.systemRed, renderingMode: .alwaysOriginal))
-                                    .renderingMode(.original)
-                            }
-                        }
-                            .disabled(!session.canManageConversation(runID, action: .delete)).accessibilityIdentifier("deleteConversation")
                     } label: { Image(systemName: "ellipsis") }
                     .accessibilityLabel("Conversation options").accessibilityIdentifier("conversationOptions")
+                    .accessibilityValue(run?.pinnedAt != nil ? "Pinned" : "")
                 }
             }
     }
@@ -770,22 +749,6 @@ struct ConversationView: View {
             consentQueuesMessage = queued; consentResumesQueue = false; consentForksConversation = false
             consent = ConsentContext(backendID: backendID, providerID: run.providerId, isDemo: session.isDemo)
         } else { Task { await send(queued: queued) } }
-    }
-
-    private func manage(_ action: ConversationAction) {
-        guard owner == session.ownership, session.canManageConversation(runID, action: action) else { return }
-        let currentOwner = session.ownership
-        Task {
-            guard currentOwner == session.ownership else { return }
-            do { try await session.manageConversation(runID, action: action) }
-            catch {
-                if currentOwner == session.ownership {
-                    let message = error.localizedDescription
-                    session.actionError = message.contains("not available to paired devices")
-                        ? "Update Mains on your computer to manage chats from this iPhone." : message
-                }
-            }
-        }
     }
 
     private func prepareQueueResume() {

@@ -3154,6 +3154,66 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["startDemo"].waitForExistence(timeout: 5))
     }
 
+    func testDemoSidebarPinsAndChatOptionsShareTheSameState() async {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        openSidebar(app)
+
+        let workspace = app.buttons["workspace-dc38c4f3-a2d7-429f-9b59-55c76fcd6f8c"]
+        let pinned = app.staticTexts["Pinned"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+        workspace.press(forDuration: 0.8)
+        XCTAssertTrue(app.buttons["newWorkspaceWorktree"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["renameWorkspaceBranch"].exists)
+        app.buttons["pinWorkspace"].tap()
+        XCTAssertTrue(pinned.waitForExistence(timeout: 5))
+        XCTAssertLessThan(workspace.frame.minY, app.staticTexts["Workspaces"].frame.minY)
+        XCTAssertEqual(app.buttons.matching(identifier: workspace.identifier).count, 1)
+        attachScreenshot(app, name: "Pinned workspace")
+        workspace.press(forDuration: 0.8)
+        app.buttons["pinWorkspace"].tap()
+        XCTAssertTrue(pinned.waitForNonExistence(timeout: 5))
+
+        await chooseSidebarMode("work", in: app)
+        let chat = app.buttons["conversation-demo-work-launch-brief"]
+        scrollTo(chat, in: app)
+        chat.press(forDuration: 0.8)
+        let pin = app.buttons["pinConversation"]
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["moveConversationToProject"].exists)
+        pin.tap()
+        XCTAssertTrue(pinned.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: chat.identifier).count, 1)
+        app.swipeDown()
+        XCTAssertGreaterThan(pinned.frame.minY, app.buttons["sidebarMode-work"].frame.maxY)
+        XCTAssertLessThan(pinned.frame.minY, chat.frame.minY)
+        XCTAssertLessThan(chat.frame.maxY, app.staticTexts["Projects"].frame.minY)
+        attachScreenshot(app, name: "Pinned Work chat")
+        chat.tap()
+
+        let options = app.buttons.matching(identifier: "conversationOptions").firstMatch
+        assertControl(options, value: "Pinned")
+        options.tap()
+        app.buttons["renameConversation"].tap()
+        let title = app.textFields["renameItemField"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        title.typeText(" update")
+        app.buttons["saveItemName"].tap()
+        XCTAssertTrue(app.staticTexts["iPhone launch brief update"].waitForExistence(timeout: 5))
+        options.tap()
+        XCTAssertEqual(pin.label, "Unpin")
+        pin.tap()
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in options.value as? String != "Pinned" }, object: nil
+        )], timeout: 5), .completed)
+        options.tap()
+        app.buttons["moveConversationToProject"].tap()
+        XCTAssertTrue(app.navigationBars["Move to project"].waitForExistence(timeout: 5))
+    }
+
     func testDemoActivityOpensPreparedApprovalAndQueuesAFollowUp() throws {
         continueAfterFailure = false
         let app = makeApplication()
