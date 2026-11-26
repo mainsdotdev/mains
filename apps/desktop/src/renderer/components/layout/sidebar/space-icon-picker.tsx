@@ -62,7 +62,7 @@ export default function SpaceIconPicker({
         onClick={onToggle}
         className={`
           w-full px-3 py-2
-          button-neutral
+          button-neutral border-0
           text-primary-800 dark:text-primary
           text-sm focus:outline-none cursor-pointer
           flex items-center justify-between

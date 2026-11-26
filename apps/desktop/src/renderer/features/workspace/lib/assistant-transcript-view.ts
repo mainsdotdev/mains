@@ -36,7 +36,7 @@ export function assistantTranscriptGroups(groups: EventGroup[]): EventGroup[] {
   }
 
   return groups.flatMap(group => {
-    if (group.type === "context_compaction") return [];
+    if (group.type === "context_compaction" || group.type === "browser_activity") return [];
     if (group.type === "tool_calls") return group.events.filter(isUserQuestionTool).map(event => ({
       id: `question-${event.id}`, type: "info" as const, events: [event], startTime: event.timestamp, endTime: event.timestamp,
     }));

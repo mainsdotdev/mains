@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeAuthStatus } from "@mains/contracts/bridge-auth";
 import type { BridgeStatus, BridgeProjectScope } from "@mains/contracts/bridge";
 import BridgeSettings from "./bridge";
+import { BridgeStorage } from "./bridge-storage";
 
 const fixture = vi.hoisted(() => ({ transportKind: "ws" as "ws" | "ipc", status: {} as BridgeAuthStatus, sync: undefined as BridgeStatus | undefined, projects: [] as BridgeProjectScope[], scope: vi.fn(), include: vi.fn(), approve: vi.fn(), confirmKey: vi.fn(), revoke: vi.fn(), recover: vi.fn(), take: vi.fn(), regenerate: vi.fn(), signIn: vi.fn(), signOut: vi.fn(), syncNow: vi.fn(), refetch: vi.fn(), storage: vi.fn(), deleteRun: vi.fn() }));
 vi.mock("@/lib/redux/api/bridgeApi", () => ({
@@ -31,6 +32,38 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("Bridge key management", () => {
+  it("keeps the storage list mounted while the Refresh button shows loading", async () => {
+    const item = { id: "run", kind: "run", title: "Synced chat", canDelete: true, recordBytes: 1024, blobBytes: 0, reclaimableBlobBytes: 0 };
+    const initial = { success: true, data: { hasMore: false, items: [item] } };
+    let finishRefresh!: (result: typeof initial) => void;
+    fixture.storage.mockResolvedValueOnce(initial).mockImplementationOnce(() => new Promise<typeof initial>((resolve) => {
+      finishRefresh = resolve;
+    }));
+
+    render(<BridgeStorage />);
+    fireEvent.click(screen.getByRole("button", { name: "Manage storage" }));
+    const checking = screen.getByRole<HTMLButtonElement>("button", { name: "Checking storage…" });
+    expect(checking.disabled).toBe(true);
+    const list = await screen.findByRole("region", { name: "Synced items" });
+    const refresh = screen.getByRole<HTMLButtonElement>("button", { name: "Refresh" });
+    fireEvent.click(refresh);
+
+    expect(screen.getByRole("button", { name: "Checking storage…" })).toBe(refresh);
+    expect(refresh.getAttribute("aria-busy")).toBe("true");
+    expect(refresh.disabled).toBe(true);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("region", { name: "Synced items" })).toBe(list);
+    expect(within(list).getByRole("row", { name: /Synced chat/ })).toBeTruthy();
+
+    await act(async () => {
+      finishRefresh({ ...initial, data: { ...initial.data, items: [{ ...item, recordBytes: 2048 }] } });
+    });
+    expect(screen.getByRole("button", { name: "Refresh" })).toBe(refresh);
+    expect(refresh.disabled).toBe(false);
+    expect(screen.getByRole("region", { name: "Synced items" })).toBe(list);
+    expect(within(list).getAllByText("2 KiB")).toHaveLength(2);
+  });
+
   it("shows estimated reclaimable storage and requires confirmation for a removed device's chat", async () => {
     fixture.sync = { enabled: true, state: "connected", backendId: "A", label: "A", lastSyncedAt: null, error: null, pendingRecords: 0, backends: [], runs: [],
       quota: { plan: "standard", usedBytes: 3072, limitBytes: 1024 ** 3, recordBytes: 1024, blobBytes: 2048, reservedBytes: 0, fileLimitBytes: 50 * 1024 ** 2, writesPerMinute: 600, storageManagement: true } };

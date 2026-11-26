@@ -1,7 +1,7 @@
 import { useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { PR_MEDIA_TYPES } from "@mains/contracts/pr-attachments";
 import { Button, Input, Text, Textarea } from "@/components/ui";
-import { Attach, Close, Link } from "@/components/ui/icons";
+import { Close, Link, Plus } from "@/components/ui/icons";
 import { cn } from "@/lib/cn";
 import { formatPrMarkdown, type PrMarkdownAction } from "../../../lib/pr-markdown";
 import type { PrMediaAsset } from "../../../hooks/use-pr-attachments";
@@ -109,7 +109,7 @@ export function PrDescriptionEditor({ value, onChange, expanded, disabled, gener
         <Input ref={picker} type="file" variant="bare" aria-label="Attach images or videos" className="hidden" multiple disabled={disabled}
           accept={Object.keys(PR_MEDIA_TYPES).map((ext) => `.${ext}`).join(",")}
           onChange={(event) => { add(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
-        <Button variant="icon" aria-label="Add images or videos" tooltip="Add images or videos" disabled={disabled} onClick={() => picker.current?.click()}><Attach /></Button>
+        <Button variant="icon" aria-label="Add images or videos" tooltip="Add images or videos" disabled={disabled} onClick={() => picker.current?.click()}><Plus aria-hidden="true" /></Button>
         <Text size="xs" tone="subtle" className="min-w-0 truncate">Paste or drop media</Text>
         <GenerateButton onClick={onGenerate} disabled={disabled} generating={generating} tooltip="Generate the title and description from the branch" />
       </div>

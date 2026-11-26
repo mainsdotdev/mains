@@ -206,7 +206,7 @@ export function InputToolbar({
     <FileUploadDropdown isOpen={showFileDropdown} onToggle={() => setShowFileDropdown(!showFileDropdown)}
       onImageUpload={handleImageUpload} onDocumentUpload={handleDocumentUpload} dropdownRef={fileDropdownRef}
       openUpward compact={layout === "floating" || assistantComposer}
-      triggerIcon={assistantComposer ? <Plus className="size-5" /> : undefined} />
+      triggerIcon={assistantComposer ? <Plus className="size-5" aria-hidden="true" /> : undefined} />
   );
   const uploadInput = <Input variant="bare" ref={fileInputRef} type="file" className="hidden"
     aria-label={attachmentMode === "images" ? "Upload images" : "Upload files"}
@@ -214,7 +214,9 @@ export function InputToolbar({
 
   const actionButtons = (
     <>
-      {voiceMute && <VoiceMuteButton {...voiceMute} />}
+      {voiceMute && <VoiceMuteButton {...voiceMute} className={assistantComposer
+        ? "text-[color:color-mix(in_srgb,var(--mate-color)_60%,var(--color-primary-950))] dark:text-[color:var(--mate-color)]"
+        : undefined} />}
       <SendButton
         loading={primaryAction.kind === "send" && isLoading}
         showStop={primaryAction.kind === "stop"}
@@ -227,6 +229,7 @@ export function InputToolbar({
         icon={<Microphone aria-hidden="true" />}
         showCustomIcon={primaryAction.kind === "voice"}
         compact={layout === "floating" || assistantComposer}
+        className={assistantComposer ? "bg-(--mate-color) text-action-foreground dark:bg-(--mate-color) dark:text-action-foreground" : undefined}
       />
     </>
   );

@@ -1,5 +1,5 @@
 import type { ReactNode, RefObject } from "react";
-import { Attach, Picture, Document } from "../icons";
+import { Plus, Picture, Document } from "../icons";
 import DropdownWrapper from "../dropdown-wrapper";
 import { Button } from "../button";
 
@@ -51,7 +51,7 @@ export function FileUploadDropdown({
         aria-haspopup="menu"
         aria-expanded={isOpen}
       >
-        {triggerIcon ?? <Attach className="text-primary-950 dark:text-primary size-4" />}
+        {triggerIcon ?? <Plus className="text-primary-950 dark:text-primary size-4" aria-hidden="true" />}
       </Button>
     
       <DropdownWrapper

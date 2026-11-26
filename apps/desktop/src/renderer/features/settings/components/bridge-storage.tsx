@@ -68,11 +68,18 @@ export function BridgeStorage({ retainedBytes = 0 }: { retainedBytes?: number })
             <div className="shrink-0 space-y-2">
               <div className="flex items-start justify-between gap-3 sm:items-center">
                 <Muted size="s">Largest synced items. Shared files count toward space freed when their last reference is removed.</Muted>
-                <Button variant="secondary" className="shrink-0" disabled={busy} onClick={() => void update()}>Refresh</Button>
+                <Button
+                  variant="secondary"
+                  className="shrink-0"
+                  isLoading={busy}
+                  aria-label={busy ? "Checking storage…" : undefined}
+                  onClick={() => void update()}
+                >
+                  Refresh
+                </Button>
               </div>
               {error && <Text role="alert" tone="danger" className="wrap-anywhere">{error}</Text>}
               {retainedBytes > 0 && <Muted size="s">{storageSize(retainedBytes)} awaiting physical cleanup</Muted>}
-              {busy && <Muted size="s" role="status">Checking storage…</Muted>}
               {overview?.items.length === 0 && <Muted>There are no synced conversations or large files yet.</Muted>}
             </div>
             {!!overview?.items.length && (

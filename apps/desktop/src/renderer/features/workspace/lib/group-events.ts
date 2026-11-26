@@ -7,11 +7,12 @@ import { eventsValueEqual } from "./run-event-mappers";
 
 export interface EventGroup {
   id: string;
-  type: "tool_calls" | "mcp_app" | "info" | "response" | "prompt_suggestion" | "context_compaction";
+  type: "tool_calls" | "mcp_app" | "info" | "response" | "prompt_suggestion" | "context_compaction" | "browser_activity";
   events: RunEvent[];
   startTime: Date;
   endTime: Date;
   isRunning?: boolean;
+  browserActivityTitle?: string;
   /** The Mate question already displays this reply. Retain its input boundary for turn matching. */
   representedByQuestion?: boolean;
 }
@@ -126,21 +127,35 @@ export function isPlanToolCallGroup(group: EventGroup): boolean {
   return group.events.some((ev) => isPlanToolEvent(ev));
 }
 
-export function groupEvents(events: RunEvent[]): EventGroup[] {
+const BROWSER_COMPLETE_PREFIX = '::browser-complete{title="';
+
+function readBrowserActivityTitle(content: string): string | undefined {
+  const title = /^::browser-complete\{title="((?:[^"\\\r\n]|\\["\\])+)"\}$/.exec(content)?.[1];
+  return title?.replace(/\\(["\\])/g, "$1").trim() || undefined;
+}
+
+function hasComputerUse(events: RunEvent[]): boolean {
+  return events.some((event) => toolEventPlanName(event)?.startsWith("mcp__cua_repl__"));
+}
+
+export function groupEvents(events: RunEvent[], providerId?: string): EventGroup[] {
   const groups: EventGroup[] = [];
   const compactionGroups = new Map<string, EventGroup>();
   const runtimeStatusGroups = new Map<string, EventGroup>();
   let currentToolGroup: RunEvent[] = [];
+  let lastBrowserToolGroup: EventGroup | undefined;
 
   const flushToolGroup = () => {
     if (currentToolGroup.length > 0) {
-      groups.push({
+      const group: EventGroup = {
         id: `tools-${currentToolGroup[0].id}`,
         type: "tool_calls",
         events: [...currentToolGroup],
         startTime: currentToolGroup[0].timestamp,
         endTime: currentToolGroup[currentToolGroup.length - 1].timestamp,
-      });
+      };
+      groups.push(group);
+      if (providerId === "codex" && hasComputerUse(group.events)) lastBrowserToolGroup = group;
       currentToolGroup = [];
     }
   };
@@ -199,8 +214,39 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
       if (event.metadata?.kind === "thinking" || event.metadata?.kind === "tool_progress") {
         continue;
       }
+      if (providerId === "codex" && event.metadata?.kind === "report") {
+        const { source, messagePhase } = event.metadata;
+        const content = event.content.trimEnd();
+        // Wait for the standalone commentary item before changing the tool heading.
+        if (source === "agent_message_streaming" && !/[\r\n]/.test(content) && (
+          content.startsWith(BROWSER_COMPLETE_PREFIX) ||
+          (content.startsWith(":") && BROWSER_COMPLETE_PREFIX.startsWith(content) &&
+            (lastBrowserToolGroup || hasComputerUse(currentToolGroup)))
+        )) continue;
+
+        const title = source === "agent_message" && messagePhase === "commentary"
+          ? readBrowserActivityTitle(content) : undefined;
+        if (title) {
+          flushToolGroup();
+          if (lastBrowserToolGroup) {
+            lastBrowserToolGroup.browserActivityTitle = title;
+            lastBrowserToolGroup = undefined;
+          } else {
+            groups.push({
+              id: `browser-activity-${event.id}`,
+              type: "browser_activity",
+              events: [event],
+              startTime: event.timestamp,
+              endTime: event.timestamp,
+              browserActivityTitle: title,
+            });
+          }
+          continue;
+        }
+      }
       flushToolGroup();
       const isUserPrompt = event.metadata?.kind === "user-prompt";
+      if (isUserPrompt) lastBrowserToolGroup = undefined;
       const isPromptSuggestion = event.metadata?.kind === "prompt_suggestion";
       const isImage = event.metadata?.kind === "image";
 
@@ -384,6 +430,7 @@ function eventGroupsEqual(a: EventGroup, b: EventGroup): boolean {
     a.id !== b.id ||
     a.type !== b.type ||
     a.isRunning !== b.isRunning ||
+    a.browserActivityTitle !== b.browserActivityTitle ||
     a.events.length !== b.events.length ||
     a.endTime.getTime() !== b.endTime.getTime()
   ) {

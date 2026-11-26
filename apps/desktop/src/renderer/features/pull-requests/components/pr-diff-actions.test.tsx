@@ -15,7 +15,6 @@ import { deferred, prFixture } from "./pull-request-test-fixtures";
 
 // Only the third-party diff DOM/highlighter is replaced. PR components,
 // permissions, Redux endpoints and transport envelopes are real.
-vi.mock("@/components/markdown-components", () => ({ markdownComponents: {} }));
 vi.mock("@/lib/diff-highlighter", () => ({ warmDiffHighlighter: vi.fn(), useDiffHighlighterReady: () => true }));
 vi.mock("@pierre/diffs/react", () => ({ PatchDiff: ({ lineAnnotations, renderAnnotation, renderGutterUtility }: any) => <div>
   {renderGutterUtility(() => ({ lineNumber: hoveredLine, side: "additions" }))}

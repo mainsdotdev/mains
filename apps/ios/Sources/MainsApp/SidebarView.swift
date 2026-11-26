@@ -19,6 +19,7 @@ struct SidebarView: View {
     let selectSpace: (String) -> Void
     let search: () -> Void
     let settings: () -> Void
+    let openHome: () -> Void
     let openWorkInbox: () -> Void
     let openAtlas: () -> Void
     let openMates: () -> Void
@@ -131,6 +132,11 @@ struct SidebarView: View {
     }
     private var shortcuts: some View {
         VStack(spacing: 0) {
+            Button(action: openHome) {
+                shortcutLabel("Home") {
+                    RegistryIcon(token: "icon:home", size: shortcutIconSize, tint: .primary)
+                }
+            }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openHome")
             TimelineView(.periodic(from: .now, by: 15)) { clock in
                 let live = session.workInboxIsCurrent && session.isConnected
                 let groups = session.displayedWorkInbox.groups(now: clock.date, live: live)

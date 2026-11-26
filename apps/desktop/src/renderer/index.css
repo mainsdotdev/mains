@@ -1179,8 +1179,14 @@ html.mains-web.dark #root {
 }
 
 @utility bg-mate-user-bubble {
-  background-color: var(--mate-color, var(--color-primary-200));
-  color: var(--color-white);
+  --mate-bubble-tint: var(--mate-color, var(--color-primary-200));
+  background-color: color-mix(in srgb, var(--mate-bubble-tint) 16%, var(--color-primary));
+  color: color-mix(in srgb, var(--mate-bubble-tint) 40%, var(--color-primary-950));
+
+  .dark & {
+    background-color: color-mix(in srgb, var(--mate-bubble-tint) 15%, var(--color-primary-950));
+    color: var(--mate-bubble-tint);
+  }
 
   & .prose :where(h1, h2, h3, h4, h5, h6, p, ul, ol, li, th, td, blockquote, strong, em, code, a, button) {
     color: inherit;

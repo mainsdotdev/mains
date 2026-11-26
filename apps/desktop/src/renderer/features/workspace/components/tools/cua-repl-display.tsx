@@ -64,34 +64,40 @@ export function CuaReplDisplay({
   params,
   output,
   isCompact = false,
+  activityTitle,
 }: {
   params: CuaReplParams;
   output?: unknown;
   isCompact?: boolean;
+  activityTitle?: string;
 }) {
   const [isExpanded, setIsExpanded] = useToolExpansion(false);
 
   const title = params.title?.trim() ?? "";
   const code = params.code?.trim() ?? "";
   const { text, screenshot } = parseCuaReplOutput(output);
-  const hasDetails = !!code || !!text || !!screenshot;
+  const hasDetails = !!code || !!text || !!screenshot || Boolean(activityTitle && title);
 
   return (
     <div>
       <ToolHeader
         icon={<BrowserCursor className="size-4" />}
         verb="Computer use"
+        ariaLabel={activityTitle ? `Computer use, ${activityTitle}` : undefined}
         hasDetails={hasDetails}
         isExpanded={isExpanded}
         onToggle={() => setIsExpanded((v) => !v)}
         isCompact={isCompact}
       >
-        <span className={`truncate ${TOOL_ROW_TEXT}`}>{title || code}</span>
+        <span className={`truncate ${TOOL_ROW_TEXT}`} title={activityTitle}>{activityTitle ?? (title || code)}</span>
       </ToolHeader>
 
       {hasDetails && (
         <ToolCollapse isExpanded={isExpanded}>
           <div className="flex flex-col gap-1.5">
+            {activityTitle && title && (
+              <div className="text-s text-primary-600">{title}</div>
+            )}
             {code && (
               <ToolOutputBody className="text-s font-mono whitespace-pre-wrap">
                 {code}

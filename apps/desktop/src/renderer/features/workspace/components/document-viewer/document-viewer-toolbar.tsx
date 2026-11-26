@@ -30,7 +30,7 @@ export function DocumentViewerToolbar({ doc, zoom, onZoomChange, isSaving, onSav
       {onToggleAnnotating && <Button onClick={onToggleAnnotating}
         tooltip={annotating ? "Exit edit request mode" : "Request edits"} tooltipPosition="bottom"
         aria-pressed={!!annotating}
-        className={`button-neutral inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-xs font-medium focus-visible:ring-2 focus-visible:ring-accent/40 ${annotating
+        className={`button-neutral border-0 inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-xs font-medium focus-visible:ring-2 focus-visible:ring-accent/40 ${annotating
           ? "text-accent"
           : "text-primary-900 dark:text-primary-100"}`}>
         <RequestEdits className="size-4 shrink-0" aria-hidden="true" />
@@ -39,7 +39,7 @@ export function DocumentViewerToolbar({ doc, zoom, onZoomChange, isSaving, onSav
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {/* Text uses the app's type scale; rendered pages have their own zoom. */}
         {doc && !isTextDocType(doc.docType) && !isOutputMediaType(doc.docType) && (
-          <Text as="div" size="inherit" tone="muted" className="button-neutral flex h-8 items-center gap-0.5 rounded-full px-0.5">
+          <Text as="div" size="inherit" tone="muted" className="button-neutral border-0 flex h-8 items-center gap-0.5 rounded-full px-0.5">
             <Button variant="icon" iconSize="sm" tooltip="Zoom out" tooltipPosition="bottom"
               onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out">
               <Text as="span" size="sm" tone="inherit" className="leading-none">−</Text>
@@ -59,7 +59,7 @@ export function DocumentViewerToolbar({ doc, zoom, onZoomChange, isSaving, onSav
         {!doc?.path.startsWith("blob:") && (
           <Button variant="icon" tooltip="Save a copy…" tooltipPosition="bottom-left"
             onClick={onSaveCopy} disabled={!doc || isSaving} aria-label="Save a copy of this document"
-            className="button-neutral rounded-full size-8">
+            className="button-neutral border-0 rounded-full size-8">
             <Download className="size-4" />
           </Button>
         )}

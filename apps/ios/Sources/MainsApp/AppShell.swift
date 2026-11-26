@@ -63,10 +63,13 @@ struct AppShell: View {
                 let sidebarLayoutWidth = sidebar.isInline ? width : geometry.size.width
                 let progress = sidebar.overlayProgress
                 let shellOrigin = geometry.frame(in: .global).origin
-                // Keep the toolbar offset local to the pane as the window folds or resizes.
                 let updateSidebarControlLayout: (CGRect) -> Void = { frame in
-                    sidebarControlOffset = CGPoint(x: max(0, frame.minX - shellOrigin.x - sidebar.contentOffset),
-                                                   y: max(0, frame.minY - shellOrigin.y))
+                    // Navigation can move the root toolbar offscreen while a destination is visible.
+                    guard path.isEmpty else { return }
+                    let leading = frame.minX - shellOrigin.x - sidebar.contentOffset
+                    let top = max(0, frame.minY - shellOrigin.y)
+                    let previousLeading = sidebarControlOffset?.x ?? SidebarView.controlInset
+                    sidebarControlOffset = CGPoint(x: leading >= SidebarView.controlInset ? leading : previousLeading, y: top)
                 }
                 let headerTopInset = sidebarControlOffset?.y ?? AppNavigationStyle.topInset
                 let leadingInset = (supportsInline ? nil : sidebarControlOffset?.x) ?? SidebarView.controlInset
@@ -193,7 +196,8 @@ struct AppShell: View {
                                     headerTopInset: headerTopInset, leadingInset: leadingInset,
                                     openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
                                     openProject: { open(.project($0)) },
-                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) }, openMates: { open(.mates) })
+                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings,
+                                    openHome: goHome, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) }, openMates: { open(.mates) })
                             .background(sidebar.isInline ? Color(.systemBackground) : .clear)
                             .opacity(sidebar.isInline ? 1 : progress)
                             .simultaneousGesture(drawerClosingGesture(width: width, edge: width - 24),

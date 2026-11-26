@@ -2,10 +2,10 @@ import { Children, Fragment, type CSSProperties, type ReactNode } from "react";
 import {
   ArrowUp,
   Asterisk,
-  Attach,
   BoltFill,
   Check,
   ChevronUp,
+  Plus,
   ProjectFolder,
   Sparkles,
 } from "@/components/ui/icons";
@@ -308,7 +308,7 @@ export function ComposerPreview({
       {/* Toolbar: attach · model + effort · fast · send — the order
           `input-toolbar.tsx` lays them out in. */}
       <div className="flex items-center gap-1.5 text-primary-700 dark:text-primary-300">
-        <Attach className="size-4 shrink-0" />
+        <Plus className="size-4 shrink-0" />
         <span className="flex items-center gap-1.5 px-1 text-xs text-primary-950 dark:text-primary">
           <Asterisk className="size-3.5 shrink-0 text-claude" />
           {model}
@@ -760,7 +760,7 @@ export function DevicesPreview({
 }) {
   return (
     <div aria-hidden className="flex items-center gap-3 select-none">
-      <Device className="h-44 w-24 rounded-[20px]" screenClassName="rounded-[17px]">
+      <Device className="h-44 w-24 rounded-transcript-bubble" screenClassName="rounded-[17px]">
         <span className="absolute top-1.5 left-1/2 h-1.5 w-7 -translate-x-1/2 rounded-full bg-primary-950 dark:bg-black" />
         <StatusBar time="9:41" className="px-2.5 pt-1.5 pb-1.5" />
         <SessionHeader title={title} />

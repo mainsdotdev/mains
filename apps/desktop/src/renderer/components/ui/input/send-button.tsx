@@ -15,6 +15,7 @@ interface SendButtonProps {
   showCustomIcon?: boolean;
   stopLabel?: string;
   stopDisabled?: boolean;
+  className?: string;
 }
 
 export function SendButton({
@@ -29,6 +30,7 @@ export function SendButton({
   showCustomIcon = !!icon,
   stopLabel = "Stop run",
   stopDisabled = false,
+  className = "",
 }: SendButtonProps) {
   const stopping = showStop && !!onStop;
   const submitting = loading && !stopping;
@@ -47,7 +49,7 @@ export function SendButton({
         if (stopping) onStop?.();
         else onSubmit();
       }}
-      className={`${sizing} relative inline-flex shrink-0 items-center justify-center rounded-full bg-primary-800 text-primary-200 dark:bg-primary-200 dark:text-primary-800 disabled:opacity-70 transition-[color,background-color,opacity] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:duration-75`}
+      className={`${sizing} relative inline-flex shrink-0 items-center justify-center rounded-full bg-primary-800 text-primary-200 dark:bg-primary-200 dark:text-primary-800 disabled:opacity-70 transition-[color,background-color,opacity] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:duration-75 ${className}`}
       aria-label={submitting ? "Submitting..." : actionLabel}
       aria-busy={submitting || undefined}
       disabled={isDisabled}

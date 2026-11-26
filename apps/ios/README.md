@@ -667,9 +667,13 @@ underlying tooling.
   automatically start a new command. Unconfirmed delivery retains the original
   identity for **Check delivery**; this is not permission to resend after the
   backend's seven-day receipt retention.
-- Up to 100 recent conversation descriptors, plus the currently viewed older
-  conversation, and four bounded history pages in a disposable cache. Live text is
-  memory-only. Losing the cache simply refetches.
+- The disposable SQLite cache restores up to 100 recent conversation descriptors
+  and the viewed older conversation on launch. It loads each of the four retained
+  history pages only when its conversation opens. Messages, tool calls, and turns
+  occupy separate tables. Each refresh replaces that conversation's rows and
+  paging boundaries in one transaction. Live text stays in memory.
+  Updating from the JSON cache starts with an empty conversation cache that
+  repopulates after connecting to the computer.
 - System typography, Dynamic Type, native navigation/sheets, selectable inline
   Markdown, headings, ordered/nested/task lists, quotes, horizontally scrollable GFM tables
   and fenced code, interactive keyboard dismissal

@@ -74,6 +74,27 @@ it("starts image-only groups closed too", () => {
   expect(view.getByText("second.png")).toBeTruthy();
 });
 
+it("shows the Codex browser headline in the existing activity disclosure", () => {
+  const browser: RunEvent = { id: "browser", type: "tool_call", content: "mcp__cua_repl__js: {}", timestamp: new Date(2500),
+    metadata: { status: "done", input: { title: "Inspect inbox", code: "inspectInbox()" } } };
+  const completion: RunEvent = { id: "complete", type: "artifact", content: '::browser-complete{title="Checked today’s iCloud mail"}',
+    timestamp: new Date(4000), metadata: { kind: "report", source: "agent_message", messagePhase: "commentary" } };
+  const view = render(<WorkspaceEvents {...props} currentEvents={[prompt, read, browser, completion]} />);
+  const group = view.getByRole("button", { name: "Computer use, Checked today’s iCloud mail" });
+
+  expect(group.getAttribute("aria-expanded")).toBe("false");
+  expect(view.queryByText(/::browser-complete/)).toBeNull();
+  fireEvent.click(group);
+  expect(view.getByText("Inspect inbox")).toBeTruthy();
+  expect(view.getByText("hero.tsx")).toBeTruthy();
+
+  view.rerender(<WorkspaceEvents {...props} currentEvents={[prompt, browser, completion]} />);
+  const singleCall = view.getByRole("button", { name: "Computer use, Checked today’s iCloud mail" });
+  fireEvent.click(singleCall);
+  expect(view.getByText("inspectInbox()")).toBeTruthy();
+  expect(view.getByText("Inspect inbox")).toBeTruthy();
+});
+
 it("handles a single visible tool and the tools-hidden setting", () => {
   const view = render(<WorkspaceEvents {...props} currentEvents={[prompt, command]} />);
   expect(view.getByText("npm test")).toBeTruthy();

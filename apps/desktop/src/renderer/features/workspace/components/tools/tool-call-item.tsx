@@ -53,6 +53,7 @@ interface ToolCallItemProps {
   event: RunEvent;
   isCompact?: boolean;
   presentation?: "tool" | "card";
+  browserActivityTitle?: string;
 }
 
 interface Ctx {
@@ -69,6 +70,7 @@ interface Ctx {
   event: RunEvent;
   isCompact: boolean;
   presentation: "tool" | "card";
+  browserActivityTitle?: string;
 }
 
 type Renderer = (ctx: Ctx) => ReactNode | null;
@@ -260,6 +262,7 @@ const DISPATCH: Renderer[] = [
         params={params}
         output={ctx.event.metadata?.output}
         isCompact={ctx.isCompact}
+        activityTitle={ctx.browserActivityTitle}
       />
     );
   },
@@ -359,7 +362,7 @@ function DeferredOutputRow({ event, deferred, isCompact = true, presentation = "
   </ToolStatusProvider>;
 }
 
-function ToolCallBody({ event, isCompact = true, presentation = "tool" }: ToolCallItemProps) {
+function ToolCallBody({ event, isCompact = true, presentation = "tool", browserActivityTitle }: ToolCallItemProps) {
   const replica = useReplicaView();
   const input = event.metadata?.input;
   const { toolName, params, summary } = typeof event.metadata?.toolName === "string"
@@ -423,7 +426,7 @@ function ToolCallBody({ event, isCompact = true, presentation = "tool" }: ToolCa
   );
 
   if (replica && presentation === "card") return wrap(<Text size="xs" tone="subtle">App available on {replica.label}</Text>);
-  if (replica && resolved.category !== "Assistants") return wrap(<GenericToolDisplay icon={toolIcon} displayName={resolved.displayName} params={metadataInput ?? params}
+  if (replica && resolved.category !== "Assistants") return wrap(<GenericToolDisplay icon={toolIcon} displayName={browserActivityTitle ?? resolved.displayName} params={metadataInput ?? params}
     output={event.metadata?.output} isCompact={isCompact} />);
   if (isEmptyTool && resolved.category !== "Assistants") {
     if (isCompact) {
@@ -460,6 +463,7 @@ function ToolCallBody({ event, isCompact = true, presentation = "tool" }: ToolCa
     event,
     isCompact,
     presentation,
+    browserActivityTitle,
   };
 
   for (const renderer of DISPATCH) {

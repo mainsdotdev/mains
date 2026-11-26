@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TOOL_ROW_TEXT } from "./_shared";
-import { ArrowUp } from "@/components/ui/icons";
+import { ArrowUp, BrowserCursor } from "@/components/ui/icons";
 import { prepareToolCalls } from "../../lib/group-tool-calls";
 import { resolveTool } from "../../lib/resolve-tool";
 import { summarizeToolCalls } from "../../lib/tool-group-summary";
@@ -72,12 +72,12 @@ function ToolCallGroupImpl({ group }: { group: EventGroup }) {
   if (toolCount === 1) {
     return (
       <div>
-        <ToolCallItem event={toolEvents[0]} isCompact={false} />
+        <ToolCallItem event={toolEvents[0]} isCompact={false} browserActivityTitle={group.browserActivityTitle} />
       </div>
     );
   }
 
-  const toolSummary = summarizeToolCalls(toolEvents);
+  const toolSummary = group.browserActivityTitle ?? summarizeToolCalls(toolEvents);
   const toolIcons = new Map<string, React.ReactNode>();
 
   for (const event of toolEvents) {
@@ -100,6 +100,7 @@ function ToolCallGroupImpl({ group }: { group: EventGroup }) {
   return (
     <div className="mb-2">
       <Button
+        aria-label={group.browserActivityTitle ? `Computer use, ${group.browserActivityTitle}` : undefined}
         aria-expanded={isExpanded}
         onClick={() => setIsExpanded((expanded) => !expanded)}
         className="group w-full flex items-center gap-0.5 mb-1 text-s font-sans cursor-pointer"
@@ -120,7 +121,7 @@ function ToolCallGroupImpl({ group }: { group: EventGroup }) {
             className={`grid shrink-0 overflow-hidden transition-[grid-template-columns,opacity,margin] duration-200 ease-out ${ isExpanded ? "mr-0 grid-cols-[0fr] opacity-0" : "mr-1 grid-cols-[1fr] opacity-100" } ${TOOL_ROW_TEXT}`}
           >
             <span className="flex min-w-0 items-center gap-1 overflow-hidden">
-              {Array.from(toolIcons.entries()).slice(0, 3).map(([key, icon]) => (
+              {group.browserActivityTitle ? <BrowserCursor className="size-4" /> : Array.from(toolIcons.entries()).slice(0, 3).map(([key, icon]) => (
                 <span
                   key={key}
                   className="flex size-4 items-center justify-center [&>svg]:size-4"
@@ -130,7 +131,7 @@ function ToolCallGroupImpl({ group }: { group: EventGroup }) {
               ))}
             </span>
           </span>
-          <span className={`truncate ${TOOL_GROUP_LABEL_TEXT}`}>{toolSummary}</span>
+          <span className={`truncate ${TOOL_GROUP_LABEL_TEXT}`} title={group.browserActivityTitle}>{toolSummary}</span>
         </div>
         <ArrowUp
           className={`size-4 shrink-0 opacity-100 transition-all duration-200 group-hover:opacity-100 ${isExpanded ? "rotate-180" : "rotate-90"} ${TOOL_GROUP_LABEL_TEXT}`}

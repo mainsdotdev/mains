@@ -100,7 +100,7 @@ function AppContent() {
         if (panel.runId && !panel.scope?.assistantId) dispatch(setPendingRunId(panel.runId));
         if (panel.scope) navigate(mcpAppConversationPath(panel.scope, panel.runId));
       }}>Open app conversation</Button>}
-      <Button variant="icon" className="button-neutral" onClick={reload} tooltip="Reload app" aria-label="Reload app">
+      <Button variant="icon" className="button-neutral border-0" onClick={reload} tooltip="Reload app" aria-label="Reload app">
         <Refresh className="size-4" />
       </Button>
     </PreviewToolbar>

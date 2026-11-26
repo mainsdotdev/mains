@@ -21,6 +21,34 @@ function baseEvents(): RunEvent[] {
 }
 
 describe("groupEvents", () => {
+  const browserCall = ev({ id: "browser", type: "tool_call", content: "mcp__cua_repl__js: {}" });
+  const browserComplete = ev({ id: "browser-complete", content: '::browser-complete{title="Paused for a sign-in code"}',
+    metadata: { kind: "report", source: "agent_message", messagePhase: "commentary" } });
+
+  it("folds a completed browser marker into its tool group without showing its live prefix", () => {
+    const shell = ev({ id: "shell", type: "tool_call", content: "Bash: {}" });
+    const preview = ev({ id: "preview", content: "::brow", metadata: { kind: "report", source: "agent_message_streaming", streaming: true } });
+    const live = groupEvents([browserCall, shell, preview], "codex");
+    const complete = reconcileEventGroups(live, groupEvents([browserCall, shell, browserComplete], "codex"));
+
+    expect(live).toHaveLength(1);
+    expect(live[0].browserActivityTitle).toBeUndefined();
+    expect(complete).toHaveLength(1);
+    expect(complete[0]).toMatchObject({ id: live[0].id, events: [browserCall, shell], browserActivityTitle: "Paused for a sign-in code" });
+  });
+
+  it("keeps unpaired titles at their own turn and preserves marker examples and other providers' prose", () => {
+    const prompt = ev({ id: "prompt", metadata: { kind: "user-prompt" } });
+    const example = { ...browserComplete, id: "example", content: `\`\`\`md\n${browserComplete.content}\n\`\`\`` };
+    const final = { ...browserComplete, id: "final", metadata: { ...browserComplete.metadata, messagePhase: "final_answer" } };
+    const groups = groupEvents([browserCall, prompt, browserComplete, example, final], "codex");
+
+    expect(groups[0].browserActivityTitle).toBeUndefined();
+    expect(groups[2]).toMatchObject({ type: "browser_activity", browserActivityTitle: "Paused for a sign-in code" });
+    expect(groups.slice(3).map((group) => group.events[0].content)).toEqual([example.content, final.content]);
+    expect(groupEvents([browserComplete], "claude_code")[0]).toMatchObject({ type: "response", events: [browserComplete] });
+  });
+
   it("keeps one stable status row when a native review completes or replays", () => {
     const start = ev({ id: "review-start", type: "log", content: "Codex is reviewing the action", metadata: {
       source: "codex_runtime_status", statusId: "review:1", kind: "review", phase: "start", level: "info",

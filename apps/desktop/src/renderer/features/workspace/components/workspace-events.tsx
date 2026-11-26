@@ -53,7 +53,7 @@ import { selectActiveTool } from "../lib/select-active-tool";
 import { selectActiveCompaction } from "../lib/select-active-compaction";
 import { ProviderAuthNotice } from "./provider-auth-notice";
 import { classifyRunErrorKind } from "../../../../shared/run-errors";
-import { ArrowUp, Brain, ChevronDown, Fork } from "@/components/ui/icons";
+import { ArrowUp, Brain, BrowserCursor, ChevronDown, Fork } from "@/components/ui/icons";
 import {
   useGetAppSettingsQuery,
   useGetProviderAccountInfoQuery,
@@ -313,16 +313,16 @@ function SessionTimeBar({
  * reads in render, hence the scoped disable.
  */
 /* eslint-disable react-hooks/refs */
-function useReconciledGroups(displayEvents: RunEvent[]): EventGroup[] {
+function useReconciledGroups(displayEvents: RunEvent[], providerId: Run["providerId"]): EventGroup[] {
   const prevGroupsRef = useRef<EventGroup[] | null>(null);
   return useMemo(() => {
     const reconciled = reconcileEventGroups(
       prevGroupsRef.current,
-      groupEvents(displayEvents),
+      groupEvents(displayEvents, providerId),
     );
     prevGroupsRef.current = reconciled;
     return reconciled;
-  }, [displayEvents]);
+  }, [displayEvents, providerId]);
 }
 /* eslint-enable react-hooks/refs */
 
@@ -578,14 +578,14 @@ export function WorkspaceEvents({
   // their object identity across streamed tokens — that's what lets the memoized
   // InfoGroup / ToolCallGroup rows skip re-rendering while only the live
   // (changing) group updates.
-  const allEventGroups = useReconciledGroups(displayEvents);
+  const allEventGroups = useReconciledGroups(displayEvents, activeRun?.providerId ?? getProviderVariant(variant).providerId);
 
   // Filter out tool_calls groups when setting is off — except plan groups, which stay visible
   // so Apply / Dismiss remain accessible regardless of the toggle.
   const eventGroups = useMemo(
     () => appearance === "assistant" ? assistantTranscriptGroups(allEventGroups) : showToolCalls
       ? allEventGroups
-      : allEventGroups.filter((g) => g.type !== "tool_calls" || isPlanToolCallGroup(g)),
+      : allEventGroups.filter((g) => (g.type !== "tool_calls" && g.type !== "browser_activity") || isPlanToolCallGroup(g)),
     [allEventGroups, showToolCalls, appearance],
   );
 
@@ -729,6 +729,11 @@ export function WorkspaceEvents({
             ) : <ContextCompactionSeparator />
           ) : group.type === "mcp_app" ? (
             <ToolCallItem event={group.events[0]} isCompact={false} presentation={appearance === "assistant" ? "card" : "tool"} />
+          ) : group.type === "browser_activity" ? (
+            <Text as="div" size="s" tone="subtle" className="flex min-w-0 items-center gap-1.5 py-1">
+              <BrowserCursor aria-hidden="true" className="size-4 shrink-0" />
+              <span className="truncate" title={group.browserActivityTitle}>{group.browserActivityTitle}</span>
+            </Text>
           ) : group.type === "tool_calls" ? (
             planToolName === "plan" ||
             planToolName === "create plan" ||
