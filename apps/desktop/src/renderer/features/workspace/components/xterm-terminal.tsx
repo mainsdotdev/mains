@@ -163,7 +163,7 @@ export function XtermTerminal({
     commandOwner.current = temporary?.command ?? command;
 
     const term = new Terminal({
-      cursorBlink: true,
+      cursorBlink: !persistent,
       fontSize: 12,
       fontFamily,
       theme,

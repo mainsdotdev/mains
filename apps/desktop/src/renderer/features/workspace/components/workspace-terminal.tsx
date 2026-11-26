@@ -1,4 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { TerminalSession } from "@mains/contracts/terminal";
 import {
   Button,
   getSegmentedTabId,
@@ -19,13 +20,16 @@ import {
   selectTerminal,
   terminalWorkspaceKey,
 } from "@/lib/redux/slices/terminalSlice";
-import { BOTTOM_TERMINAL_CONTENT_HEIGHT, BOTTOM_TERMINAL_HEIGHT } from "@/lib/layout";
+import { useOverlayAnimation } from "@/hooks/use-overlay-lifecycle";
+import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
+import {
+  BOTTOM_TERMINAL_ANIM_MS,
+  BOTTOM_TERMINAL_CONTENT_HEIGHT,
+  BOTTOM_TERMINAL_EASE,
+  BOTTOM_TERMINAL_HEIGHT,
+} from "@/lib/layout";
 
-const XtermTerminal = lazy(() =>
-  import("./xterm-terminal").then((module) => ({
-    default: module.XtermTerminal,
-  })),
-);
+type TerminalViewLoad = { module: typeof import("./xterm-terminal") } | { error: unknown };
 
 export function WorkspaceTerminal({
   workspaceId,
@@ -52,20 +56,76 @@ export function WorkspaceTerminal({
   const [create, creation] = useCreateTerminalMutation();
   const [stop, stopping] = useStopTerminalMutation();
   const attempted = useRef<string | null>(null);
-  const [lastActive, setLastActive] = useState<{ key: string; id?: string }>({ key });
+  const reducedMotion = usePrefersReducedMotion();
+  const { isVisible } = useOverlayAnimation(isOpen, {
+    exitMs: reducedMotion ? 0 : BOTTOM_TERMINAL_ANIM_MS,
+    immediate: true,
+  });
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const [canMountTerminal, setCanMountTerminal] = useState(isOpen);
+  const [terminalView, setTerminalView] = useState<TerminalViewLoad | null>(null);
+  const [lastVisible, setLastVisible] = useState<{
+    key: string;
+    sessions: TerminalSession[];
+    active?: TerminalSession;
+  } | null>(null);
   const tabsId = useId();
   const panelId = `${tabsId}-panel`;
-  const sessions = (query.currentData ?? []).filter(
-    (session) => session.workspaceId === workspaceId,
+  const sessions = useMemo(
+    () => (query.currentData ?? []).filter((session) => session.workspaceId === workspaceId),
+    [query.currentData, workspaceId],
   );
+  const previous = lastVisible?.key === key ? lastVisible : null;
   const active =
     sessions.find((session) => session.id === selectedId) ??
-    sessions.find((session) => lastActive.key === key && session.id === lastActive.id) ?? sessions[0];
-  // A create reply can select the new id before the catalog includes it.
-  // Retain the visible tab until then, rather than mounting the first tab in between.
-  if (lastActive.key !== key || lastActive.id !== active?.id) {
-    setLastActive({ key, id: active?.id });
+    sessions.find((session) => session.id === previous?.active?.id) ??
+    sessions[0];
+  // Keep the painted tab through catalog lag on create and idle cleanup on exit.
+  if (isOpen && (previous?.sessions !== sessions || previous.active !== active)) {
+    setLastVisible({ key, sessions, active });
+  } else if (!isOpen && !isVisible && lastVisible) {
+    setLastVisible(null);
   }
+  if (!isOpen && !isVisible && canMountTerminal) {
+    setCanMountTerminal(false);
+  } else if (isOpen && reducedMotion && !canMountTerminal) {
+    setCanMountTerminal(true);
+  }
+  const displayed = isOpen ? { sessions, active } : isVisible ? previous : null;
+  const displayedActive = displayed?.active;
+  const needsTerminalView = isOpen && canMountTerminal && !!displayedActive;
+
+  useEffect(() => {
+    if (!isOpen || canMountTerminal) return;
+
+    // Let the drawer paint at its final size before xterm opens, fits its
+    // grid and replays output. A reversal keeps any view already mounted.
+    let cancelled = false;
+    const reveal = () => {
+      if (!cancelled) frame = requestAnimationFrame(() => setCanMountTerminal(true));
+    };
+    let frame = requestAnimationFrame(() => {
+      const slide = drawerRef.current?.getAnimations?.().find(
+        (animation) => "transitionProperty" in animation && animation.transitionProperty === "height",
+      );
+      if (slide) void slide.finished.then(reveal, reveal);
+      else reveal();
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [canMountTerminal, isOpen]);
+
+  useEffect(() => {
+    if (!needsTerminalView || terminalView) return;
+    let cancelled = false;
+    void import("./xterm-terminal").then(
+      (module) => { if (!cancelled) setTerminalView({ module }); },
+      (error: unknown) => { if (!cancelled) setTerminalView({ error }); },
+    );
+    return () => { cancelled = true; };
+  }, [needsTerminalView, terminalView]);
 
   const addTerminal = useCallback(
     async (initial = false) => {
@@ -96,11 +156,10 @@ export function WorkspaceTerminal({
       attempted.current = null;
       return;
     }
-    if (!query.currentData || query.isFetching || attempted.current === key)
+    if (!query.currentData || query.isFetching || sessions.length > 0 || attempted.current === key)
       return;
     attempted.current = key;
-    if (sessions.length === 0) void addTerminal(true);
-    // A workspace gets one initial terminal. Stopping the last one must not respawn it.
+    void addTerminal(true);
   }, [
     isOpen,
     key,
@@ -112,6 +171,9 @@ export function WorkspaceTerminal({
 
   const stopActive = async () => {
     if (!active) return;
+    // An explicit stop of the last tab should close the drawer. Idle cleanup
+    // from an earlier hide can also empty the catalog after the drawer reopens.
+    if (sessions.length === 1) attempted.current = key;
     try {
       await stop(active.id).unwrap();
       dispatch(forgetTerminal({ key, id: active.id }));
@@ -123,18 +185,23 @@ export function WorkspaceTerminal({
     }
   };
 
+  if (terminalView && "error" in terminalView) throw terminalView.error;
+  const XtermTerminal = terminalView?.module.XtermTerminal;
+
   return (
     <div
-      className="w-full min-w-0 shrink-0 overflow-hidden transition-[height,padding-top] duration-300 ease-out"
+      ref={drawerRef}
+      className="relative w-full min-w-0 shrink-0 overflow-clip"
       style={{
         height: isOpen ? BOTTOM_TERMINAL_HEIGHT : "0px",
-        paddingTop: isOpen ? "0.3125rem" : "0px",
+        transition: reducedMotion ? undefined : `height ${BOTTOM_TERMINAL_ANIM_MS}ms ${BOTTOM_TERMINAL_EASE}`,
       }}
     >
-      {isOpen && (
+      {displayed && (
         <section
           aria-label="Workspace terminals"
-          className="flex flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950"
+          inert={!isOpen}
+          className="absolute inset-x-0 top-1.25 flex flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950"
           style={{ height: BOTTOM_TERMINAL_CONTENT_HEIGHT }}
         >
           <div className="flex min-w-0 items-center gap-2 px-3 pt-2 pb-1">
@@ -142,12 +209,12 @@ export function WorkspaceTerminal({
               className="min-w-0 flex-1"
               contentClassName="w-max"
             >
-              {active ? (
+              {displayedActive ? (
                 <SegmentedTabs
                 className="rounded-[!"
                   id={tabsId}
-                  value={active.id}
-                  options={sessions.map((session) => ({
+                  value={displayedActive.id}
+                  options={displayed.sessions.map((session) => ({
                     value: session.id,
                     label: (
                       <span className="flex items-center gap-1.5">
@@ -180,12 +247,12 @@ export function WorkspaceTerminal({
             >
               <Plus className="size-4" />
             </Button>
-            {active && (
+            {displayedActive && (
               <Button
                 variant="icon"
                 disabled={stopping.isLoading}
                 onClick={() => void stopActive()}
-                aria-label={`Stop ${active.title}`}
+                aria-label={`Stop ${displayedActive.title}`}
                 tooltip="Stop terminal and its processes"
               >
                 <Trash className="size-3.5" />
@@ -214,20 +281,20 @@ export function WorkspaceTerminal({
               </Button>
             </div>
           )}
-          {active && (
+          {displayedActive && (
             <div
               id={panelId}
               role="tabpanel"
-              aria-labelledby={getSegmentedTabId(tabsId, active.id)}
-              className="min-h-0 flex-1 px-3"
+              aria-labelledby={getSegmentedTabId(tabsId, displayedActive.id)}
+              className="min-h-0 flex-1 px-3 [contain:layout_paint]"
             >
-              <Suspense fallback={null}>
+              {canMountTerminal && XtermTerminal && (
                 <XtermTerminal
-                  key={`${backendId}-${active.id}`}
-                  id={active.id}
+                  key={`${backendId}-${displayedActive.id}-${displayedActive.instanceId ?? ""}`}
+                  id={displayedActive.id}
                   persistent
                 />
-              </Suspense>
+              )}
             </div>
           )}
         </section>

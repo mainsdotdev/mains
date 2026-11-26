@@ -53,11 +53,21 @@ export function terminalListeners(roots: ReadonlyMap<string, number>, owners: Re
   return result;
 }
 
-export async function scanTerminalServers(roots: ReadonlyMap<string, number>): Promise<Map<string, TerminalServer[]>> {
-  if (roots.size === 0) return new Map();
+export interface TerminalServerScan {
+  servers: Map<string, TerminalServer[]>;
+  withChildren: Set<string>;
+}
+
+export async function scanTerminalServers(roots: ReadonlyMap<string, number>): Promise<TerminalServerScan> {
+  if (roots.size === 0) return { servers: new Map(), withChildren: new Set() };
   const { stdout: processes } = await execFileAsync(process.platform === "darwin" ? "/bin/ps" : "ps", ["-axo", "pid=,ppid="], COMMAND_OPTIONS);
   const owners = terminalProcessOwners(roots, processes);
-  return scanListeners(roots, owners);
+  const withChildren = new Set<string>();
+  for (const [pid, id] of owners) {
+    if (pid !== roots.get(id)) withChildren.add(id);
+  }
+  const servers = await scanListeners(roots, owners);
+  return { servers, withChildren };
 }
 
 async function scanListeners(roots: ReadonlyMap<string, number>, owners: ReadonlyMap<number, string>): Promise<Map<string, TerminalServer[]>> {

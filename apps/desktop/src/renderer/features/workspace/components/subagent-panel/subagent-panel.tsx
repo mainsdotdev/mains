@@ -4,6 +4,8 @@ import { setSubagentPanelCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { useIsMobile } from "@/lib/platform";
 import {
+  BOTTOM_TERMINAL_ANIM_MS,
+  BOTTOM_TERMINAL_EASE,
   BOTTOM_TERMINAL_HEIGHT,
   LAYOUT_PANEL_ANIM_MS,
   SESSION_PANEL_GUTTER,
@@ -180,8 +182,7 @@ export function SubagentPanel({
         expanded || collapsed ? "shadow-2xl" : ""
       }`}
       style={{
-        // Hops above the bottom terminal when it opens, tracking the drawer's
-        // own 300ms ease-out height animation.
+        // Hops above the bottom terminal when it opens.
         bottom: terminalOpen
           ? `calc(0.8125rem + env(safe-area-inset-bottom) + ${BOTTOM_TERMINAL_HEIGHT})`
           : "calc(1.375rem + env(safe-area-inset-bottom))",
@@ -200,7 +201,7 @@ export function SubagentPanel({
           `height ${RESIZE_MS}ms ${RESIZE_EASE}`,
           `right ${LAYOUT_PANEL_ANIM_MS}ms ease-out`,
           // Matches the terminal drawer's transition so the hop rides with it.
-          "bottom 300ms ease-out",
+          `bottom ${BOTTOM_TERMINAL_ANIM_MS}ms ${BOTTOM_TERMINAL_EASE}`,
         ].join(", "),
       }}
       role="complementary"

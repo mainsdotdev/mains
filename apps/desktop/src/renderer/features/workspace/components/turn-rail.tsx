@@ -77,30 +77,31 @@ export function TurnRail({
     const transcript = transcriptRef.current;
     if (!transcript || markers.length < TURN_RAIL_MIN_MARKERS) return;
 
+    const content = transcript.firstElementChild;
+    const markersByIndex = new Map(markers.map((marker) => [String(marker.index), marker.groupId]));
     let frame: number | null = null;
+    let positions: TurnMarkerPosition[] | null = null;
+    const measureTurns = (scrollTop: number) => {
+      const origin = transcript.getBoundingClientRect().top - scrollTop;
+      const measured: TurnMarkerPosition[] = [];
+      const seen = new Set<string>();
+      for (const row of transcript.querySelectorAll<HTMLElement>("[data-group-index]")) {
+        const groupId = markersByIndex.get(row.dataset.groupIndex ?? "");
+        if (groupId === undefined || seen.has(groupId)) continue;
+        seen.add(groupId);
+        measured.push({ groupId, top: row.getBoundingClientRect().top - origin });
+      }
+      return measured;
+    };
     const updateVisibleTurns = () => {
       frame = null;
-      const transcriptBounds = transcript.getBoundingClientRect();
-      const positions = markers.flatMap<TurnMarkerPosition>((marker) => {
-        const target = transcript.querySelector<HTMLElement>(
-          `[data-group-index="${marker.index}"]`,
-        );
-        if (!target) return [];
-        return [
-          {
-            groupId: marker.groupId,
-            top:
-              target.getBoundingClientRect().top -
-              transcriptBounds.top +
-              transcript.scrollTop,
-          },
-        ];
-      });
+      const { scrollTop, clientHeight, scrollHeight } = transcript;
+      positions ??= measureTurns(scrollTop);
       const next = visibleTurnMarkerGroupIds(
         positions,
-        transcript.scrollTop,
-        transcript.scrollTop + transcript.clientHeight,
-        transcript.scrollHeight,
+        scrollTop,
+        scrollTop + clientHeight,
+        scrollHeight,
       );
       setVisibleGroupIds((current) =>
         sameIds(current, next) ? current : next,
@@ -110,22 +111,29 @@ export function TurnRail({
       if (frame !== null) return;
       frame = requestAnimationFrame(updateVisibleTurns);
     };
+    const contentChanged = () => {
+      positions = null;
+      scheduleUpdate();
+    };
 
     transcript.addEventListener("scroll", scheduleUpdate, { passive: true });
-    window.addEventListener("resize", scheduleUpdate);
+    window.addEventListener("resize", contentChanged);
     const resizeObserver =
       typeof ResizeObserver === "undefined"
         ? null
-        : new ResizeObserver(scheduleUpdate);
+        : new ResizeObserver((entries) => {
+          // The drawer resizes the viewport throughout the slide. Turn offsets
+          // only need to be measured again when the transcript itself reflows.
+          if (entries.some(({ target }) => target === content)) contentChanged();
+          else scheduleUpdate();
+        });
     resizeObserver?.observe(transcript);
-    if (transcript.firstElementChild) {
-      resizeObserver?.observe(transcript.firstElementChild);
-    }
+    if (content) resizeObserver?.observe(content);
     scheduleUpdate();
 
     return () => {
       transcript.removeEventListener("scroll", scheduleUpdate);
-      window.removeEventListener("resize", scheduleUpdate);
+      window.removeEventListener("resize", contentChanged);
       resizeObserver?.disconnect();
       if (frame !== null) cancelAnimationFrame(frame);
     };

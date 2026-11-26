@@ -56,25 +56,31 @@ export function createTerminalLifecycle() {
  * may finish after retirement; they cannot publish or clear a newer query. */
 export function createTerminalMonitor<T>(effects: {
   enabled(): boolean;
-  hasTargets(): boolean;
+  nextDelay(): number | null;
   read(): Promise<T>;
   apply(result: T): boolean;
 }) {
   let observer: (() => void) | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let scheduledAt = 0;
   let active: { promise: Promise<void> } | null = null;
   let generation = 0;
   const clearTimer = () => { if (timer) clearTimeout(timer); timer = null; };
   function schedule() {
-    if (!effects.hasTargets()) { clearTimer(); return; }
-    if (!effects.enabled() || !observer || timer || active) return;
-    timer = setTimeout(() => { timer = null; void refresh().catch(() => {}); }, 2500);
+    if (!effects.enabled() || !observer || active) return;
+    const delay = effects.nextDelay();
+    if (delay === null) { clearTimer(); return; }
+    const next = Date.now() + delay;
+    if (timer && scheduledAt <= next) return;
+    clearTimer();
+    scheduledAt = next;
+    timer = setTimeout(() => { timer = null; void refresh().catch(() => {}); }, delay);
     timer.unref();
   }
   function stop() { generation++; observer = null; active = null; clearTimer(); }
   function refresh(): Promise<void> {
     if (active) return active.promise;
-    if (!effects.enabled() || !effects.hasTargets()) return Promise.resolve();
+    if (!effects.enabled() || effects.nextDelay() === null) return Promise.resolve();
     clearTimer();
     const revision = generation, job = { promise: Promise.resolve() };
     active = job;

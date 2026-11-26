@@ -115,6 +115,14 @@ export function WorkspaceProviderPage(props: WorkspaceProviderPageProps) {
   return <InteractiveWorkspaceProviderPage {...props} />;
 }
 
+function WorkspaceTerminalDock({ workspace }: {
+  workspace: { id: string; name: string; rootPath: string };
+}) {
+  const { isOpen, close } = useBottomTerminal();
+  return <WorkspaceTerminal workspaceId={workspace.id} workspaceName={workspace.name}
+    rootPath={workspace.rootPath} isOpen={isOpen} onHide={close} />;
+}
+
 function InteractiveWorkspaceProviderPage({
   providerId,
   variant,
@@ -168,7 +176,6 @@ function InteractiveWorkspaceProviderPage({
       void window.api.browserChat.postAction({ type: "providerChanged", providerId });
     }
   }, [browserChatOnly, providerData, providerId]);
-  const bottomTerminal = useBottomTerminal();
   const browserPanel = useBrowserPanel();
   const reviewActive = ws.activeTab === "review" && !!ws.currentWorkspace && modeConfig.showChangesTab;
   const reviewVisible = reviewActive && !browserPanel.isExpanded && !mcpPanel?.isExpanded;
@@ -1046,9 +1053,7 @@ function InteractiveWorkspaceProviderPage({
           onPendingCommandSent={authTerminal.markCommandSent}
           onClose={authTerminal.close}
         />
-      ) : showWorkspaceTerminal && <WorkspaceTerminal workspaceId={ws.currentWorkspace!.id}
-        workspaceName={ws.currentWorkspace!.name} rootPath={ws.currentWorkspace!.rootPath}
-        isOpen={bottomTerminal.isOpen} onHide={bottomTerminal.close} />}
+      ) : showWorkspaceTerminal && <WorkspaceTerminalDock workspace={ws.currentWorkspace!} />}
     </div>
     </AsyncQuestionDialogProvider>
     </PluginLogoProvider>

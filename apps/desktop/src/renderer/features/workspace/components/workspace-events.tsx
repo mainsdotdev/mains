@@ -631,7 +631,7 @@ export function WorkspaceEvents({
   // the transcript renders, so it can address a turn by group index.
   const turnMarkers = useMemo(() => buildTurnMarkers(eventGroups), [eventGroups]);
   const { container: transcriptRef, onScroll: onTranscriptScroll, page: pageHistory, onResize: onTranscriptResize } = useTranscriptScroll(
-    activeTab, currentEvents, isRunTabActive, history, transcriptView,
+    activeTab, currentEvents, hasRunContent, history, transcriptView,
   );
   const scrollToTurn = useCallback((marker: TurnMarker) => {
     transcriptRef.current

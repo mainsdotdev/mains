@@ -141,6 +141,7 @@ describe("terminal view lifecycle", () => {
       data: channel === CHANNELS.terminal.attach ? { ...snapshot, session: { ...snapshot.session, instanceId: "native-t" } } : undefined }));
     render(<XtermTerminal id="t" persistent />);
     await waitFor(() => expect(mocks.terms[0].write).toHaveBeenCalledOnce());
+    expect(mocks.terms[0].options.cursorBlink).toBe(false);
     act(() => mocks.terms[0].input("pwd\r"));
     expect(mocks.invoke).toHaveBeenCalledWith(CHANNELS.terminal.write, ["t", "pwd\r", { instanceId: "native-t" }]);
     expect(mocks.invoke).toHaveBeenCalledWith(CHANNELS.terminal.resize, ["t", 120, 12, "native-t"]);

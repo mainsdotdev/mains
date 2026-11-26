@@ -102,6 +102,8 @@ export const SESSION_PANEL_GUTTER = "0.4375rem";
  * opens — one constant so the two can't drift apart.
  */
 export const BOTTOM_TERMINAL_HEIGHT = "15.5rem";
+export const BOTTOM_TERMINAL_ANIM_MS = 300;
+export const BOTTOM_TERMINAL_EASE = "cubic-bezier(0.33, 0, 0.67, 1)";
 /** Keep xterm's grid stable while the drawer's outer height animates. */
 export const BOTTOM_TERMINAL_CONTENT_HEIGHT = `calc(${BOTTOM_TERMINAL_HEIGHT} - 0.3125rem)`;
 

@@ -5,7 +5,10 @@ import { Provider } from "react-redux";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { TerminalCreateOptions, TerminalSession } from "@mains/contracts/terminal";
+import { BOTTOM_TERMINAL_ANIM_MS } from "@/lib/layout";
+import { installOverlayFrameClock } from "@/lib/overlay-test-fixtures";
 import { baseApi } from "@/lib/redux/api/baseApi";
+import { terminalApi } from "@/lib/redux/api/terminalApi";
 import terminalReducer, { selectTerminal, terminalWorkspaceKey } from "@/lib/redux/slices/terminalSlice";
 import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
 import { resetTransport, setTransport, type Transport } from "@/lib/transport";
@@ -65,6 +68,9 @@ beforeEach(() => {
     return { success: true, data: undefined };
   });
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.stubGlobal("matchMedia", vi.fn(() => ({
+    matches: false, addEventListener() {}, removeEventListener() {},
+  })));
   setTransport(transport);
   testStore = makeStore();
 });
@@ -73,6 +79,7 @@ afterEach(async () => {
   testStore.dispatch(baseApi.util.resetApiState());
   await Promise.resolve();
   resetTransport();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -112,7 +119,7 @@ describe("workspace terminal tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Hide terminal" }));
     expect(hide).toHaveBeenCalledOnce();
     view.rerender(workspace("a", false));
-    expect(screen.queryByTestId("terminal-view")).toBeNull();
+    expect(screen.getByTestId("terminal-view").closest("section")?.hasAttribute("inert")).toBe(true);
     view.rerender(workspace("b"));
     await waitFor(() => expect(sessions.filter((entry) => entry.workspaceId === "b")).toHaveLength(1));
     view.rerender(workspace("a"));
@@ -123,7 +130,105 @@ describe("workspace terminal tabs", () => {
     expect(invoke.mock.calls.some(([channel]) => channel === CHANNELS.terminal.destroy)).toBe(false);
   });
 
+  it("mounts xterm on the frame after the current opening transition finishes", async () => {
+    sessions = [session("existing")];
+    const frames = installOverlayFrameClock();
+    const view = render(workspace("a", false));
+    const drawer = view.container.firstElementChild!;
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    Object.defineProperty(drawer, "getAnimations", {
+      value: () => [{ transitionProperty: "height", finished }],
+    });
+
+    view.rerender(workspace());
+    await screen.findByRole("tab", { name: "Terminal 1" });
+    act(() => frames.flush());
+    expect(screen.queryByTestId("terminal-view")).toBeNull();
+    await act(async () => finish());
+    expect(screen.queryByTestId("terminal-view")).toBeNull();
+    act(() => frames.flush());
+    expect(await screen.findByTestId("terminal-view")).toBeTruthy();
+  });
+
+  it("ignores an opening transition that reports completion while the drawer is closing", async () => {
+    sessions = [session("existing")];
+    const frames = installOverlayFrameClock();
+    const view = render(workspace("a", false));
+    const drawer = view.container.firstElementChild!;
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    Object.defineProperty(drawer, "getAnimations", {
+      value: () => [{ transitionProperty: "height", finished }],
+    });
+
+    view.rerender(workspace());
+    await screen.findByRole("tab", { name: "Terminal 1" });
+    act(() => frames.flush());
+    view.rerender(workspace("a", false));
+    await act(async () => finish());
+    act(() => frames.flush());
+    expect(screen.queryByTestId("terminal-view")).toBeNull();
+  });
+
+  it("keeps the same terminal view through a reversed close and detaches it after a full exit", async () => {
+    sessions = [session("existing")];
+    const view = render(workspace());
+    const terminal = await screen.findByTestId("terminal-view");
+    vi.useFakeTimers();
+    view.rerender(workspace("a", false));
+    act(() => vi.advanceTimersByTime(BOTTOM_TERMINAL_ANIM_MS / 2));
+    expect(screen.getByTestId("terminal-view")).toBe(terminal);
+    view.rerender(workspace());
+    act(() => vi.advanceTimersByTime(BOTTOM_TERMINAL_ANIM_MS));
+    expect(screen.getByTestId("terminal-view")).toBe(terminal);
+    expect(terminal.closest("section")?.hasAttribute("inert")).toBe(false);
+
+    view.rerender(workspace("a", false));
+    act(() => vi.advanceTimersByTime(BOTTOM_TERMINAL_ANIM_MS));
+    expect(screen.queryByTestId("terminal-view")).toBeNull();
+  });
+
+  it("retains the closing tab when idle cleanup removes it", async () => {
+    sessions = [session("idle")];
+    const view = render(workspace());
+    const terminal = await screen.findByTestId("terminal-view");
+    vi.useFakeTimers();
+    view.rerender(workspace("a", false));
+    sessions = [];
+    changed();
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(terminalApi.endpoints.getTerminalSessions.select()(testStore.getState()).data).toEqual([]);
+    expect(screen.getByTestId("terminal-view")).toBe(terminal);
+  });
+
+  it("restores a shell when idle cleanup finishes after the drawer has reopened", async () => {
+    sessions = [session("idle")];
+    const view = render(workspace());
+    const terminal = await screen.findByTestId("terminal-view");
+    vi.useFakeTimers();
+    view.rerender(workspace("a", false));
+    view.rerender(workspace());
+    expect(screen.getByTestId("terminal-view")).toBe(terminal);
+    sessions = [];
+    changed();
+    await act(() => vi.advanceTimersByTimeAsync(BOTTOM_TERMINAL_ANIM_MS));
+    expect(screen.getByTestId("terminal-view").getAttribute("data-session")).toBe("terminal-a");
+  });
+
+  it("detaches immediately when reduced motion is enabled", async () => {
+    vi.mocked(window.matchMedia).mockReturnValue({
+      matches: true, addEventListener() {}, removeEventListener() {},
+    } as unknown as MediaQueryList);
+    sessions = [session("existing")];
+    const view = render(workspace());
+    await screen.findByTestId("terminal-view");
+    view.rerender(workspace("a", false));
+    expect(screen.queryByTestId("terminal-view")).toBeNull();
+  });
+
   it("stops only the selected terminal and does not respawn the last stopped tab", async () => {
+    sessions = [session("existing")];
     render(workspace());
     await screen.findByRole("tab", { name: "Terminal 1" });
     const id = sessions[0].id;
@@ -132,7 +237,7 @@ describe("workspace terminal tabs", () => {
     await screen.findByText("No open terminals");
     expect(invoke).toHaveBeenCalledWith(CHANNELS.terminal.destroy, [id]);
     expect(sessions).toHaveLength(0);
-    expect(invoke.mock.calls.filter(([channel]) => channel === CHANNELS.terminal.create)).toHaveLength(1);
+    expect(invoke.mock.calls.filter(([channel]) => channel === CHANNELS.terminal.create)).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
     await screen.findByRole("tab", { name: "Terminal 1" });
     expect(sessions).toHaveLength(1);

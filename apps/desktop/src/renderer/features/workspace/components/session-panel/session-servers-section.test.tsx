@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { TerminalSession } from "@mains/contracts/terminal";
 import { baseApi } from "@/lib/redux/api/baseApi";
+import { terminalApi } from "@/lib/redux/api/terminalApi";
 import terminalReducer, { selectTerminal, terminalWorkspaceKey } from "@/lib/redux/slices/terminalSlice";
 import appSettingsReducer, { setBottomTerminalOpen, setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
 import { resetTransport, setTransport, type Transport } from "@/lib/transport";
@@ -130,6 +131,27 @@ afterEach(async () => {
 });
 
 describe("session panel running servers", () => {
+  it("keeps the shell subscriber stable when the catalog adds an idle terminal", async () => {
+    sessions = [session("website")];
+    const renderServerCount = vi.fn();
+    function ServerCount() {
+      const servers = useRunningServerSessions(true, "a");
+      renderServerCount();
+      return <span>Server terminals {servers.length}</span>;
+    }
+    render(<Provider store={testStore}><ServerCount /></Provider>);
+    await screen.findByText("Server terminals 1");
+    const renderCount = renderServerCount.mock.calls.length;
+
+    sessions.push(session("idle", "a", []));
+    changed();
+    await waitFor(() => {
+      const catalog = terminalApi.endpoints.getTerminalSessions.select()(testStore.getState());
+      expect(catalog.data?.map((item) => item.id)).toEqual(["website", "idle"]);
+    });
+    expect(renderServerCount).toHaveBeenCalledTimes(renderCount);
+  });
+
   it("lists each open port before Sources, with current-workspace servers first", async () => {
     sessions = [session("api", "b", [8080]), session("website", "a", [3000, 3001])];
     render(panel());

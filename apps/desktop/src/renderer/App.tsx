@@ -27,7 +27,6 @@ import {
   isTasksRoute,
   NAV_RAIL_WIDTH,
 } from "./lib/layout";
-import { useBottomTerminal } from "./hooks/use-bottom-terminal";
 import { useBrowserPanel, BrowserPanelProvider } from "./hooks/use-browser-panel";
 import { McpAppPanelProvider, useMcpAppPanel } from "./hooks/use-mcp-app-panel";
 import { PreviewPanel } from "./features/workspace/components/preview-panel";
@@ -143,7 +142,6 @@ function AppContent() {
   const variant = useWorkspaceVariant();
   const activeProviderId =
     variant === "default" ? undefined : getProviderVariant(variant).providerId;
-  const bottomTerminal = useBottomTerminal();
   const browserPanel = useBrowserPanel();
   const mcpAppPanel = useMcpAppPanel();
   const preview = usePreviewPanel();
@@ -260,11 +258,6 @@ function AppContent() {
   useKeyboardShortcut("app.toggleSidebar", () => {
     dispatch(setSidebarCollapsed(!sidebarCollapsed));
   }, { enabled: isMobile || workspaceRoute || atlasRoute || assistantsRoute || tasksRoute, allowInEditable: true });
-  useKeyboardShortcut("app.toggleTerminal", bottomTerminal.toggle, {
-    enabled:
-      showTerminalToggle && (!!activeWorkspaceId || bottomTerminal.isOpen),
-    allowInEditable: true,
-  });
   useKeyboardShortcut("app.toggleBrowser", browserPanel.toggle, {
     enabled: showBrowserToggle && !hideRightPanel,
     allowInEditable: true,
@@ -377,16 +370,16 @@ function AppContent() {
           marginRight={contentRight}
           transparentSurface={workspaceRoute || assistantsRoute}
           contentInsetRight={contentInsetRight}
-          headerActions={(showSessionTrigger || showTerminalToggle) && !preview.isExpanded && (
+          headerActions={(showTerminalToggle || (showSessionTrigger && !preview.isExpanded)) && (
             <div className="flex items-center gap-0.5 empty:hidden">
-              {showSessionTrigger && (
+              {showSessionTrigger && !preview.isExpanded && (
                 <SessionPanelTrigger
                   showSessionDetails={hasSessionDetails}
                   hasRunningServers={hasRunningServers}
                   diffWorkspaceId={diffWorkspaceId}
                 />
               )}
-              {showTerminalToggle && <TerminalPanelTrigger isOpen={bottomTerminal.isOpen} onToggle={bottomTerminal.toggle} />}
+              {showTerminalToggle && <TerminalPanelTrigger />}
             </div>
           )}
           reserveWindowControls={showLayoutControls && rightLaneWidth === EDGE_GUTTER}

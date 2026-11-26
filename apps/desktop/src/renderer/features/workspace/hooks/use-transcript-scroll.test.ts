@@ -30,6 +30,44 @@ const controls = (): TranscriptHistory => ({ hasOlder: true, hasNewer: false, fo
 });
 
 describe("transcript scroll", () => {
+  it("follows the tail when the viewport shrinks and preserves a paused reading position", () => {
+    const initial = events(20, 30), history = controls();
+    const element = viewport(initial.map((event) => event.id)).element;
+    let height = 500, top = 0;
+    let resize!: ResizeObserverCallback;
+    Object.defineProperty(element, "scrollTop", {
+      get: () => top,
+      set: (value: number) => { top = Math.min(value, element.scrollHeight - height); },
+    });
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: ResizeObserverCallback) { resize = callback; }
+      observe = observe;
+      disconnect = disconnect;
+    });
+    try {
+      const view = renderHook(({ visible }) => useTranscriptScroll("r", initial, visible, history),
+        { initialProps: { visible: false } });
+      act(() => { view.result.current.container.current = element; });
+      view.rerender({ visible: true });
+      expect(observe).toHaveBeenCalledWith(element);
+      expect(element.scrollTop).toBe(2500);
+
+      height = 300;
+      act(() => resize([], {} as ResizeObserver));
+      expect(element.scrollTop).toBe(2700);
+
+      element.scrollTop = 400;
+      act(() => view.result.current.onScroll());
+      height = 500;
+      act(() => resize([], {} as ResizeObserver));
+      expect(element.scrollTop).toBe(400);
+      view.unmount();
+      expect(disconnect).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it("opening a paused historical window preserves its position instead of landing at its local tail", () => {
     const initial = events(20, 30), history = { ...controls(), following: false, historical: true, hasNewer: true };
     const { element } = viewport(initial.map((event) => event.id));

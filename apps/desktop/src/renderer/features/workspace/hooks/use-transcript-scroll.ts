@@ -84,17 +84,31 @@ export function useTranscriptScroll(
     }
   }, [container, runId, eventRevision, visible, history?.error, history?.latestRevision, history?.historical, history?.following, view, intent, paging]);
 
+  const pinToTail = useCallback(() => {
+    const element = container.current;
+    if (scope.current !== runId || !intent.pinned || !element) return;
+    element.scrollTop = element.scrollHeight;
+    offset.current = element.scrollTop;
+  }, [intent, runId]);
+
+  // The terminal changes the viewport height even when every row stays the
+  // same size. Keep the tail in view before the resized viewport is painted.
+  useLayoutEffect(() => {
+    const element = container.current;
+    if (!visible || !element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(pinToTail);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [pinToTail, visible]);
+
   const onResize = useCallback(() => {
     if (scope.current !== runId) return;
     if (resizeFrame.current !== null) cancelAnimationFrame(resizeFrame.current);
     resizeFrame.current = requestAnimationFrame(() => {
       resizeFrame.current = null;
-      if (scope.current === runId && intent.pinned && container.current) {
-        container.current.scrollTop = container.current.scrollHeight;
-        offset.current = container.current.scrollTop;
-      }
+      pinToTail();
     });
-  }, [intent, runId]);
+  }, [pinToTail, runId]);
 
   const onScroll = useCallback(() => {
     const element = container.current;

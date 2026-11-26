@@ -1,13 +1,19 @@
 import { Button, toast } from "@/components/ui";
 import { Terminal, TerminalOpen } from "@/components/ui/icons";
+import { useBottomTerminal } from "@/hooks/use-bottom-terminal";
 import { useAppSelector } from "@/lib/redux/hooks";
-import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
+import { useKeyboardShortcut, useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 /** Lives beside session details so both controls follow the workspace header. */
-export function TerminalPanelTrigger({ isOpen, onToggle }: { isOpen: boolean; onToggle: () => void }) {
+export function TerminalPanelTrigger() {
+  const { isOpen, toggle } = useBottomTerminal();
   const workspaceId = useAppSelector((state) => state.workspace.activeWorkspaceId);
   const shortcut = keyboardShortcutLabel(useKeyboardShortcutBinding("app.toggleTerminal"));
+  useKeyboardShortcut("app.toggleTerminal", toggle, {
+    enabled: !!workspaceId || isOpen,
+    allowInEditable: true,
+  });
   const label = isOpen ? "Hide terminal" : "Open terminal";
   return (
     <Button variant="icon" aria-label={label} tooltip={label} tooltipShortcut={shortcut}
@@ -18,7 +24,7 @@ export function TerminalPanelTrigger({ isOpen, onToggle }: { isOpen: boolean; on
           toast.error("Select a workspace first to use the terminal");
           return;
         }
-        onToggle();
+        toggle();
       }}>
       {isOpen ? <TerminalOpen className="size-4" /> : <Terminal className="size-4" />}
     </Button>

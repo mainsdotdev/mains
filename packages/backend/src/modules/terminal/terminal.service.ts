@@ -24,37 +24,52 @@ interface PtyInstance {
   shellSignals?: ReturnType<typeof workspaceShellEnvironment>["signals"];
   lifecycle: ReturnType<typeof createTerminalLifecycle>;
   lastInputAt: number;
+  idleForServerScan: boolean;
 }
 
 const instances = new Map<string, PtyInstance>();
 const MAX_OUTPUT_CHARS = 128 * 1024;
 const MAX_TERMINALS = 64;
+const SERVER_SCAN_ACTIVE_MS = 2500;
+const SERVER_SCAN_IDLE_MS = 15000;
 
 function cloneSession(session: TerminalSession): TerminalSession {
   return { ...session, servers: session.servers?.map((server) => ({ ...server })) ?? null };
 }
 
-function hasManagedShells(): boolean {
-  return [...instances.values()].some((entry) => entry.session.workspaceId !== null &&
-    entry.lifecycle.running && Number.isSafeInteger(entry.process.pid) && entry.process.pid > 0);
+function isManagedShell(entry: PtyInstance): boolean {
+  return entry.session.workspaceId !== null && entry.lifecycle.running &&
+    Number.isSafeInteger(entry.process.pid) && entry.process.pid > 0;
 }
 
 const monitor = createTerminalMonitor({
   enabled: () => process.platform !== "win32",
-  hasTargets: hasManagedShells,
+  nextDelay() {
+    let delay: number | null = null;
+    for (const entry of instances.values()) {
+      if (!isManagedShell(entry)) continue;
+      if (!entry.idleForServerScan) return SERVER_SCAN_ACTIVE_MS;
+      delay = SERVER_SCAN_IDLE_MS;
+    }
+    return delay;
+  },
   async read() {
-    const targets = [...instances.values()].filter((entry) => entry.session.workspaceId !== null &&
-      entry.lifecycle.running && Number.isSafeInteger(entry.process.pid) && entry.process.pid > 0);
-    const roots = new Map(targets.map((entry) => [entry.session.id, entry.process.pid]));
+    const targets = [...instances.values()].filter(isManagedShell)
+      .map((entry) => ({ entry, revision: entry.lifecycle.revision }));
+    const roots = new Map(targets.map(({ entry }) => [entry.session.id, entry.process.pid]));
     let result: Awaited<ReturnType<typeof scanTerminalServers>> | null;
     try { result = await scanTerminalServers(roots); } catch { result = null; }
     return { targets, result };
   },
   apply({ targets, result }) {
     let changed = false;
-    for (const entry of targets) {
+    for (const { entry, revision } of targets) {
       if (instances.get(entry.session.id) !== entry || !entry.lifecycle.running) continue;
-      const servers = result?.get(entry.session.id) ?? null;
+      const servers = result?.servers.get(entry.session.id) ?? null;
+      // A prompt may have background children or listeners opened by a shell
+      // builtin. Back off only after a successful probe rules both out.
+      entry.idleForServerScan = entry.shellSignals?.atPrompt === true && servers?.length === 0 &&
+        !result?.withChildren.has(entry.session.id) && entry.lifecycle.revision === revision;
       if (JSON.stringify(entry.session.servers) === JSON.stringify(servers)) continue;
       entry.session.servers = servers; changed = true;
     }
@@ -137,7 +152,7 @@ export const terminalService = {
     const nextNumber = Math.max(0, ...siblings.map((entry) => Number(entry.session.title.slice(9)) || 0)) + 1;
     const instance: PtyInstance = {
       process: proc, onData, onExit, data: "", sequence: 0,
-      shellSignals: integration?.signals, lifecycle: createTerminalLifecycle(), lastInputAt: 0,
+      shellSignals: integration?.signals, lifecycle: createTerminalLifecycle(), lastInputAt: 0, idleForServerScan: false,
       onDataDispose: { dispose() {} }, onExitDispose: { dispose() {} },
       session: { id, instanceId: randomUUID(), cwd: resolved, workspaceId, workspaceName: options.workspaceName ?? null,
         title: `Terminal ${nextNumber}`, status: "running", exitCode: null, createdAt: Date.now(), servers: null },
@@ -148,6 +163,10 @@ export const terminalService = {
         if (instances.get(id) !== instance || !instance.lifecycle.running) return;
         instance.lifecycle.touch();
         data = instance.shellSignals?.consume(data) ?? data;
+        if (instance.idleForServerScan && instance.shellSignals?.atPrompt === false) {
+          instance.idleForServerScan = false;
+          monitor.targetsChanged();
+        }
         if (!data) return;
         instance.data = (instance.data + data).slice(-MAX_OUTPUT_CHARS);
         instance.sequence += 1;
@@ -206,7 +225,13 @@ export const terminalService = {
     if (!instance && options?.commandId) throw new Error("Terminal no longer accepts commands");
     instance?.lifecycle.input(data, () => {
       instance.lastInputAt = Date.now();
-      if (/[\r\n]/.test(data)) instance.shellSignals?.commandSent();
+      if (/[\r\n]/.test(data)) {
+        instance.shellSignals?.commandSent();
+        if (instance.idleForServerScan) {
+          instance.idleForServerScan = false;
+          monitor.targetsChanged();
+        }
+      }
       instance.process.write(data);
     }, options?.commandId);
   },
