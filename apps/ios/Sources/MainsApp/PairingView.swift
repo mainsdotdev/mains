@@ -9,9 +9,11 @@ struct PairingView: View {
     private enum EntryMode { case camera, manual }
     let session: BackendSession
     let initialLink: String
+    let showsCompletion: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var entryMode: EntryMode
     @State private var text: String
     @State private var error: String?
@@ -20,10 +22,13 @@ struct PairingView: View {
     @State private var cameraIssue: String?
     @State private var demoError: String?
     @State private var pairingTask: Task<Void, Never>?
+    @State private var pairedComputerName: String?
     @FocusState private var editingLink: Bool
+    private var wantsCamera: Bool { entryMode == .camera && scenePhase == .active && pairedComputerName == nil }
 
-    init(session: BackendSession, initialLink: String = "") {
+    init(session: BackendSession, initialLink: String = "", showsCompletion: Bool = false) {
         self.session = session; self.initialLink = initialLink
+        self.showsCompletion = showsCompletion
         _text = State(initialValue: initialLink)
         _entryMode = State(initialValue: initialLink.isEmpty && DataScannerViewController.isSupported ? .camera : .manual)
     }
@@ -42,37 +47,8 @@ struct PairingView: View {
             }
             .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 24)
 
-            ScrollView {
-                VStack(spacing: 16) {
-                    if entryMode == .camera { camera }
-                    else { manualEntry }
-                    status
-                    if !session.pairingInProgress && (review == nil || entryMode == .manual) {
-                        Button(entryMode == .camera ? "No camera? Paste a link" : "Use the camera instead") {
-                            switchTo(entryMode == .camera ? .manual : .camera)
-                        }
-                        .font(.body.weight(.semibold)).foregroundStyle(AppBrand.accent)
-                        .frame(minHeight: 44).padding(.top, 8)
-                        .accessibilityIdentifier("switchPairingEntry")
-                    }
-                    if session.pairing == nil {
-                        VStack(spacing: 12) {
-                            Text("No computer to pair? Explore Mains with sample data.")
-                                .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                            Button("Try Demo Mode") {
-                                do { try session.startDemo(); dismiss() }
-                                catch { demoError = error.localizedDescription }
-                            }
-                            .font(.body.weight(.semibold)).foregroundStyle(AppBrand.accent).frame(minHeight: 44)
-                            .disabled(session.pairingInProgress).accessibilityIdentifier("startDemoFromPairing")
-                            if let demoError { Text(demoError).font(.footnote).foregroundStyle(.red) }
-                        }.padding(.top, 28)
-                    }
-                }
-                .padding(.horizontal, 16).padding(.bottom, 32)
-                .frame(maxWidth: 600).frame(maxWidth: .infinity)
-            }
-            .scrollDismissesKeyboard(.interactively)
+            if let pairedComputerName { completion(for: pairedComputerName) }
+            else { pairingEntry }
         }
         .background(Color(.secondarySystemBackground))
         .toolbar(.hidden, for: .navigationBar)
@@ -84,14 +60,72 @@ struct PairingView: View {
         .interactiveDismissDisabled(session.pairingInProgress)
         .onAppear { if !initialLink.isEmpty { reviewLink(initialLink) } }
         .onChange(of: initialLink) { _, value in
-            guard !session.pairingInProgress else { return }
+            guard !session.pairingInProgress, pairedComputerName == nil else { return }
             switchTo(.manual); text = value; reviewLink(value)
         }
-        .task(id: entryMode == .camera && scenePhase == .active) {
-            if entryMode == .camera && scenePhase == .active { await prepareCamera() }
+        .task(id: wantsCamera) {
+            if wantsCamera { await prepareCamera() }
             else { cameraReady = false }
         }
         .onDisappear { pairingTask?.cancel() }
+    }
+
+    private var pairingEntry: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                if entryMode == .camera { camera }
+                else { manualEntry }
+                status
+                if !session.pairingInProgress && (review == nil || entryMode == .manual) {
+                    Button(entryMode == .camera ? "No camera? Paste a link" : "Use the camera instead") {
+                        switchTo(entryMode == .camera ? .manual : .camera)
+                    }
+                    .font(.body.weight(.semibold)).foregroundStyle(AppBrand.accent)
+                    .frame(minHeight: 44).padding(.top, 8)
+                    .accessibilityIdentifier("switchPairingEntry")
+                }
+                if session.pairing == nil {
+                    VStack(spacing: 12) {
+                        Text("No computer to pair? Explore Mains with sample data.")
+                            .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        Button("Try Demo Mode") {
+                            do { try session.startDemo(); dismiss() }
+                            catch { demoError = error.localizedDescription }
+                        }
+                        .font(.body.weight(.semibold)).foregroundStyle(AppBrand.accent).frame(minHeight: 44)
+                        .disabled(session.pairingInProgress).accessibilityIdentifier("startDemoFromPairing")
+                        if let demoError { Text(demoError).font(.footnote).foregroundStyle(.red) }
+                    }.padding(.top, 28)
+                }
+            }
+            .padding(.horizontal, 16).padding(.bottom, 32)
+            .frame(maxWidth: 600).frame(maxWidth: .infinity)
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private func completion(for name: String) -> some View {
+        VStack(spacing: 20) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 24).fill(.green.opacity(0.1))
+                PairingReticle().stroke(.green, style: .init(lineWidth: 2.5, lineCap: .round)).padding(12)
+                Image(systemName: "checkmark").font(.system(size: 36, weight: .medium)).foregroundStyle(.green)
+            }
+            .frame(width: 144, height: 144)
+            .accessibilityHidden(true)
+            Text("\(name) paired")
+                .font(.title2.weight(.semibold).width(.expanded))
+                .multilineTextAlignment(.center)
+                .accessibilityAddTraits(.isHeader)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transition(.opacity)
+        .task {
+            AccessibilityNotification.Announcement(String(localized: "\(name) paired")).post()
+            try? await Task.sleep(for: .seconds(1.2))
+            if !Task.isCancelled { dismiss() }
+        }
     }
 
     private var camera: some View {
@@ -120,10 +154,12 @@ struct PairingView: View {
         .background(Color(.tertiarySystemBackground))
         .clipShape(.rect(cornerRadius: 24))
         .overlay {
-            if cameraReady {
+            if cameraIssue == nil {
                 GeometryReader { geometry in
-                    RoundedRectangle(cornerRadius: 18).strokeBorder(AppBrand.accent.opacity(0.9), lineWidth: 2)
+                    PairingReticle().stroke(cameraReady ? Color.white : AppBrand.accent,
+                                            style: .init(lineWidth: 3, lineCap: .round))
                         .frame(width: geometry.size.width * 0.72, height: geometry.size.height * 0.72)
+                        .shadow(color: .black.opacity(0.75), radius: 2)
                         .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                 }.allowsHitTesting(false).accessibilityHidden(true)
             }
@@ -228,7 +264,13 @@ struct PairingView: View {
             defer { pairingTask = nil }
             do {
                 try await session.pair(review, deviceName: UIDevice.current.name)
-                dismiss()
+                if showsCompletion {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                        pairedComputerName = session.pairing?.descriptor.name ?? review.name
+                    }
+                } else {
+                    dismiss()
+                }
             } catch is CancellationError { }
             catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
@@ -247,6 +289,25 @@ struct PairingView: View {
     private static func address(_ endpoint: URL) -> String {
         guard let host = endpoint.host() else { return "Computer" }
         return host + (endpoint.port.map { ":\($0)" } ?? "")
+    }
+}
+
+struct PairingReticle: Shape {
+    func path(in rect: CGRect) -> Path {
+        let length = min(rect.width, rect.height) * 0.22
+        let radius = length * 0.5
+        let corners: [(x: CGFloat, y: CGFloat, dx: CGFloat, dy: CGFloat)] = [
+            (rect.minX, rect.minY, 1, 1), (rect.maxX, rect.minY, -1, 1),
+            (rect.minX, rect.maxY, 1, -1), (rect.maxX, rect.maxY, -1, -1),
+        ]
+        var path = Path()
+        for (x, y, dx, dy) in corners {
+            path.move(to: CGPoint(x: x, y: y + dy * length))
+            path.addLine(to: CGPoint(x: x, y: y + dy * radius))
+            path.addQuadCurve(to: CGPoint(x: x + dx * radius, y: y), control: CGPoint(x: x, y: y))
+            path.addLine(to: CGPoint(x: x + dx * length, y: y))
+        }
+        return path
     }
 }
 

@@ -75,7 +75,7 @@ struct EmptyStateIllustration: View {
 
     enum Artwork: String {
         case library, pages, documents, images, bookmarks
-        case search, offline, activity, trash, chats, spaces, mates
+        case search, offline, activity, trash, chats, spaces, mates, pairing
     }
 
     let artwork: Artwork

@@ -403,11 +403,11 @@ underlying tooling.
   expired requests cannot return from stale responses. Offline/error views label
   last-known work, hide decisions and disable Stop. The inbox never changes the
   selected transcript or persists decision evidence. Demo uses the same reader.
-- The unpaired home keeps its sidebar and composer, with a connection card above
-  the composer. Scan opens a dismissible pairing sheet with a square QR preview
-  or manual/paste entry. Detected computer details, retry and explicit pairing
-  confirmation stay inline. Credentials remain in Keychain; Forget uses a centered
-  Cancel/Forget alert.
+- The unpaired home keeps its sidebar and shows a centered QR scanning control.
+  Tapping it opens a dismissible scanner with manual link entry available.
+  Review the detected computer and confirm pairing in the sheet. The app shows
+  the paired computer’s name before returning to the home composer. Credentials
+  remain in Keychain. Forget uses a centered Cancel/Forget alert.
 - Offline Demo Mode is available on the unpaired home and pairing screen. A Swift
   backend supplies the same session channels, seeded conversations, five providers,
   mutable mode/model/permission choices, replayed streaming messages and tool calls,

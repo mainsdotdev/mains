@@ -31,6 +31,7 @@ struct AppShell: View {
 
     let session: BackendSession
     let openPairing: () -> Void
+    let pairingTransition: Namespace.ID
     @State private var path: [AppRoute] = []
     @State private var showingArchivedMates = false
     @State private var newMateDraft = NewMateDraft()
@@ -101,7 +102,7 @@ struct AppShell: View {
                                         if canPin { toggleWideSidebar(visible: pinned || drawerOpen) }
                                         else { toggleDrawer(overlay: !supportsInline) }
                                     }, onLayout: updateSidebarControlLayout),
-                                             openComputer: showSettings, openPairing: openPairing,
+                                             openComputer: showSettings, openPairing: openPairing, pairingTransition: pairingTransition,
                                              onCreated: { id in
                                                  var transaction = Transaction(animation: nil)
                                                  transaction.disablesAnimations = true

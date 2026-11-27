@@ -2,7 +2,7 @@ Mains is a companion and remote controller for the user's own Mains installation
 
 REVIEW WITHOUT A COMPUTER OR AI ACCOUNT
 1. Launch the app without pairing a computer.
-2. On the "No computer paired" card, tap "Try Demo Mode on this phone".
+2. Tap "Try Demo Mode" at the bottom of the first screen.
 3. Open the sidebar and Search, search for "Explore Mains", and open that sample conversation.
 4. Tap the sample PDF or image to preview it. The share button can save a copy to Files.
 5. In the conversation, send "Show sample file changes and diffs" to explore numbered file diffs, or "Walk me through approvals and questions" to explore approvals and agent questions. If a disclosure appears, tap "Continue Demo". It applies only to the demo and does not grant permission for real provider use.

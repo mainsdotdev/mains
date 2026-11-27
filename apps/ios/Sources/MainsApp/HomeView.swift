@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     static let composerBottomInset: CGFloat = 8
+    static let pairingButtonID = "homePairingButton"
 
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -10,6 +11,7 @@ struct HomeView: View {
     let sidebarControl: SidebarControl
     let openComputer: () -> Void
     let openPairing: () -> Void
+    let pairingTransition: Namespace.ID
     let onCreated: (String) -> Void
     @State private var targetPicker = false
     @State private var modelSheet = false
@@ -60,10 +62,10 @@ struct HomeView: View {
                 HomeComposerArea(session: session, space: space, targetPicker: $targetPicker, modelSheet: $modelSheet,
                                  optionsSheet: $optionsSheet, consent: $consent, editorExpanded: editorExpanded, onCreated: onCreated)
                     .id(space.id)
-            } else if session.pairing == nil {
-                UnpairedHomeArea(session: session, pair: openPairing)
+                    .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: space != nil)
         .composerPickers(model: $modelSheet, options: $optionsSheet, target: $targetPicker, session: session,
                          context: space.map { ComposerContext(space: $0) })
         .onChange(of: session.ownership) { _, _ in targetPicker = false }
@@ -75,8 +77,17 @@ struct HomeView: View {
     }
 
     @ViewBuilder private var homeContent: some View {
-        Spacer(minLength: 20)
-        if session.pairing != nil && space == nil && !session.connection.isBusy {
+        if session.pairing == nil {
+            UnpairedHomeArea(session: session, pair: openPairing, pairingTransition: pairingTransition)
+        } else {
+            Spacer(minLength: 20)
+            pairedHomeContent
+            Spacer(minLength: 20)
+        }
+    }
+
+    @ViewBuilder private var pairedHomeContent: some View {
+        if space == nil && !session.connection.isBusy {
             EmptyStateView(artwork: .spaces, title: "Choose a space",
                            description: Text("Open the sidebar to choose where to start."))
         } else if let space, session.isConnected, !session.homeDraft(for: space.id).hasContent {
@@ -96,7 +107,6 @@ struct HomeView: View {
             }
             .padding(.horizontal, 24)
         }
-        Spacer(minLength: 20)
     }
 
     private func welcomeHeading(for mode: String) -> some View {
@@ -132,43 +142,52 @@ private struct UnpairedHomeArea: View {
     #endif
     let session: BackendSession
     let pair: () -> Void
-    var body: some View {
-        VStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("No computer paired").font(.headline.width(.expanded))
-                Text("Start Mains on your computer with LAN or Tailscale access, then scan its pairing code.")
-                    .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Button("Scan pairing code", action: pair)
-                    .buttonStyle(PairingActionStyle()).accessibilityIdentifier("scanPairingCode")
-                Button("Try Demo Mode on this phone") {
-                    do { try session.startDemo() } catch { session.actionError = error.localizedDescription }
-                }
-                .buttonStyle(PairingActionStyle(prominent: false)).accessibilityIdentifier("startDemo")
-            }
-            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .modifier(GlassSurface(radius: 18, interactive: false))
-            .padding(.horizontal, 12)
+    let pairingTransition: Namespace.ID
+    @State private var showsPairingHelp = false
 
-            VStack(alignment: .leading, spacing: 4) {
-                Button(action: pair) {
-                    Text("Start a run").font(.body).foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10).padding(.top, 7).padding(.bottom, 3)
-                }.accessibilityLabel("Pair a computer to start a run")
-                HStack {
-                    Button(action: pair) {
-                        Image(systemName: "plus").font(.system(size: 24, weight: .light)).frame(width: 44, height: 44)
-                    }.accessibilityLabel("Pair a computer to add attachments")
-                    Spacer()
-                    Button(action: pair) {
-                        Image(systemName: "arrow.up").font(.system(size: 22, weight: .medium))
-                            .frame(width: 40, height: 40).foregroundStyle(.white)
-                            .background(AppBrand.accent, in: .circle).padding(2)
-                    }.accessibilityLabel("Pair a computer to send a message")
+    var body: some View {
+        GeometryReader { viewport in
+            ScrollView {
+                VStack(spacing: 0) {
+                    Spacer(minLength: 24)
+                    EmptyStateView(artwork: .pairing, title: "Connect your computer",
+                                   description: Text("Open Mains on your computer and scan its pairing code.")) {
+                        VStack(spacing: 4) {
+                            Button("Scan pairing code", action: pair)
+                                .buttonStyle(PairingActionStyle())
+                                .matchedTransitionSource(id: HomeView.pairingButtonID, in: pairingTransition) {
+                                    $0.clipShape(RoundedRectangle(cornerRadius: 12))
+                                }
+                                .accessibilityIdentifier("scanPairingCode")
+                            Button("Where’s the code?") { showsPairingHelp = true }
+                                .font(.subheadline).foregroundStyle(.secondary)
+                                .padding(.horizontal, 12).frame(minHeight: 44).contentShape(.rect)
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("pairingHelp")
+                        }
+                    }
+                    Spacer(minLength: 24)
+                    Button {
+                        do { try session.startDemo() } catch { session.actionError = error.localizedDescription }
+                    } label: {
+                        Text("Try Demo Mode")
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 16).frame(minHeight: 44).contentShape(.rect)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("startDemo")
                 }
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24).padding(.bottom, HomeView.composerBottomInset)
+                .frame(maxWidth: .infinity, minHeight: viewport.size.height)
             }
-            .buttonStyle(.plain).padding(8).modifier(GlassSurface(radius: 34, interactive: false)).padding(.horizontal, 12)
-        }.padding(.bottom, HomeView.composerBottomInset)
+            .scrollBounceBehavior(.basedOnSize)
+        }
+        .alert("Find your pairing code", isPresented: $showsPairingHelp) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("In Mains on your computer, open Settings → Connect. Turn on Allow remote access, then enable Network access (LAN) or Tailscale HTTPS. Under Devices, select Show pairing code.")
+        }
     }
 }
 

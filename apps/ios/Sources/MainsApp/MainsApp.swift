@@ -66,14 +66,20 @@ struct RootView: View {
     @Bindable var session: BackendSession
     @Binding var showsLaunchIntro: Bool
     @AppStorage("appearancePreference") private var appearance = AppAppearance.system
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var pairingTransition
     @State private var incomingLink = ""
     @State private var showPairing = false
+    @State private var pairingFromHome = false
+    @State private var zoomPairing = false
 
     var body: some View {
         AppShell(session: session, openPairing: {
             incomingLink = ""
+            pairingFromHome = true
+            zoomPairing = !reduceMotion
             showPairing = true
-        }).id(session.pairing?.deviceId)
+        }, pairingTransition: pairingTransition).id(session.pairing?.deviceId)
         .allowsHitTesting(!showsLaunchIntro)
         .accessibilityHidden(showsLaunchIntro)
         .overlay {
@@ -84,11 +90,22 @@ struct RootView: View {
         }
         .onOpenURL { url in
             finishLaunchIntro(false)
+            if !showPairing {
+                pairingFromHome = false
+                zoomPairing = false
+            }
             incomingLink = url.absoluteString
             showPairing = true
         }
         .sheet(isPresented: $showPairing) {
-            NavigationStack { PairingView(session: session, initialLink: incomingLink) }
+            let pairing = NavigationStack {
+                PairingView(session: session, initialLink: incomingLink, showsCompletion: pairingFromHome)
+            }
+            if zoomPairing {
+                pairing.navigationTransition(.zoom(sourceID: HomeView.pairingButtonID, in: pairingTransition))
+            } else {
+                pairing
+            }
         }
         .alert("Mains", isPresented: Binding(get: { session.actionError != nil }, set: { if !$0 { session.actionError = nil } })) {
             Button("OK", role: .cancel) { session.actionError = nil }

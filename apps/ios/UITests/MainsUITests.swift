@@ -3554,8 +3554,15 @@ final class MainsUITests: XCTestCase {
         continueAfterFailure = false
         let app = makeApplication()
         prepareUnpaired(app)
-        XCTAssertTrue(app.staticTexts["No computer paired"].exists)
+        let heading = app.staticTexts["Connect your computer"]
+        XCTAssertTrue(heading.exists)
+        XCTAssertTrue(app.buttons["startDemo"].isHittable)
+        XCTAssertFalse(app.textViews["homeMessageInput"].exists)
         XCTAssertFalse(app.buttons["connectionPill"].exists)
+        app.buttons["pairingHelp"].tap()
+        let help = app.alerts["Find your pairing code"]
+        XCTAssertTrue(help.waitForExistence(timeout: 5))
+        help.buttons["OK"].tap()
         openSidebar(app)
         app.buttons["closeSidebar"].tap()
         XCTAssertTrue(app.buttons["closeSidebar"].waitForNonExistence(timeout: 5))
@@ -3588,8 +3595,8 @@ final class MainsUITests: XCTestCase {
         XCTAssertFalse(confirm.exists)
         app.buttons["reviewConnection"].tap()
         XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
-        XCTAssertTrue(app.buttons["openSidebar"].waitForExistence(timeout: 15))
-        XCTAssertFalse(app.staticTexts["No computer paired"].exists)
+        XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 15))
+        XCTAssertFalse(heading.exists)
         forgetFixture(app)
     }
 
