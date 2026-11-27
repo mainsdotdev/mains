@@ -93,6 +93,108 @@ private struct VoiceOrbPalette {
     }
 }
 
+struct VoiceStartButton: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let context: ComposerContext
+    var workspaceRequired: () -> Void = {}
+    var onCreated: ((String) -> Void)? = nil
+    @State private var consent: ConsentRequest?
+    @State private var approved: Destination?
+    @State private var starting: Destination?
+    @Environment(\.mainPaneCovered) private var mainPaneCovered
+
+    private struct Destination: Equatable {
+        let owner: Int
+        let runID: String?
+        let spaceID: String?
+        let workspaceID: String?
+        let mateID: String?
+    }
+
+    private struct ConsentRequest: Identifiable {
+        let context: ConsentContext
+        let destination: Destination
+        var id: String { context.id }
+    }
+
+    private var destination: Destination {
+        Destination(owner: session.ownership, runID: context.runID, spaceID: context.spaceID,
+                    workspaceID: context.workspaceID, mateID: context.mate?.id)
+    }
+    private var availability: BackendSession.VoiceStartAvailability {
+        guard !mainPaneCovered, ComposerDictation.shared.owner == nil, !context.saving(session) else { return .unavailable }
+        return session.voiceStartAvailability(runID: context.runID, spaceID: context.spaceID,
+                                              mate: context.mate, workspaceID: context.workspaceID)
+    }
+
+    var body: some View {
+        Group {
+            if AppFeatures.gptLiveEnabled, context.providerId == "codex", !session.isDemo, !session.voice.ownsCall {
+                Button(action: prepare) {
+                    Image(systemName: "waveform")
+                }
+                .disabled(availability == .unavailable)
+                .accessibilityLabel("Start GPT Live")
+                .accessibilityIdentifier("startVoice")
+            }
+        }
+        .onChange(of: destination) { _, _ in consent = nil; approved = nil; starting = nil }
+        .onChange(of: session.voice.runID) { _, id in
+            guard let id, let starting, starting == destination, starting.runID == nil else { return }
+            if let mateID = starting.mateID {
+                guard session.voiceMate?.id == mateID else { return }
+            } else {
+                guard session.voiceMate == nil, session.voiceSpaceID == starting.spaceID else { return }
+            }
+            self.starting = nil
+            onCreated?(id)
+        }
+        .sheet(item: $consent, onDismiss: resumeAfterConsent) { request in
+            ConsentView(context: request.context) {
+                guard request.destination == destination, request.context.backendID == session.pairing?.descriptor.backendId else { return }
+                session.grantConsent(providerID: "codex", backendID: request.context.backendID)
+                approved = request.destination
+            }
+        }
+    }
+
+    private func prepare() {
+        switch availability {
+        case .unavailable: return
+        case .workspaceRequired: workspaceRequired()
+        case .mateHostUpdateRequired:
+            session.actionError = "Update Mains on your computer to start a new Mate voice chat. You can also start voice from an existing chat."
+        case .ready:
+            guard let backendID = session.pairing?.descriptor.backendId else { return }
+            if session.hasConsent(providerID: "codex") { begin() }
+            else {
+                consent = ConsentRequest(context: ConsentContext(backendID: backendID, providerID: "codex", isVoice: true),
+                                         destination: destination)
+            }
+        }
+    }
+
+    private func resumeAfterConsent() {
+        let approved = self.approved
+        self.approved = nil
+        if approved == destination { begin() }
+    }
+
+    private func begin() {
+        let destination = destination
+        Task {
+            guard destination == self.destination, availability == .ready else { return }
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            starting = destination
+            await session.startVoice(runID: destination.runID, spaceID: destination.spaceID,
+                                     mate: context.mate, workspaceID: destination.workspaceID)
+        }
+    }
+}
+
 struct VoicePresentationMenu: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload

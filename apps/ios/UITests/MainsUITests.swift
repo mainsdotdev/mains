@@ -1289,11 +1289,8 @@ final class MainsUITests: XCTestCase {
         let firstTask = app.textViews["homeMessageInput"]
         XCTAssertTrue(firstTask.exists)
         let startTask = app.buttons["startConversation"]
-        #if MAINS_GPT_LIVE
-        let idleAction = app.buttons["startVoice"]
-        #else
-        let idleAction = startTask
-        #endif
+        let idleAction = app.buttons["startDictation"]
+        XCTAssertFalse(startTask.exists)
         XCTAssertEqual(firstTask.frame.midY, idleAction.frame.midY, accuracy: 3)
         firstTask.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
@@ -1569,11 +1566,8 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(addAttachment.frame.midX, compactListAttachment.midX, accuracy: 1)
         XCTAssertEqual(addAttachment.frame.midY, compactListAttachment.midY, accuracy: 1)
         XCTAssertEqual(input.frame.midY, addAttachment.frame.midY, accuracy: 3)
-        #if MAINS_GPT_LIVE
-        XCTAssertEqual(input.frame.midY, app.buttons["startVoice"].frame.midY, accuracy: 3)
-        #else
+        XCTAssertEqual(input.frame.midY, app.buttons["startDictation"].frame.midY, accuracy: 3)
         XCTAssertFalse(send.exists)
-        #endif
         let compactWidth = input.frame.width
         input.tap()
         let keyboard = app.keyboards.firstMatch
@@ -2622,24 +2616,26 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
-    func testCodexEmptyComposerOffersVoiceAndDisclosesMicrophoneSharing() throws {
+    func testCodexChatOffersVoiceInTheToolbarAndKeepsTheDraft() {
         continueAfterFailure = false
         let app = makeApplication()
-        _ = pairFixture(app, code: "ios-test")
-        app.buttons["closeSidebar"].tap()
-        let mic = app.buttons["startVoice"]
-        XCTAssertTrue(mic.waitForExistence(timeout: 10)); XCTAssertTrue(mic.isEnabled)
-        let input = app.textViews["homeMessageInput"]
-        input.tap(); input.typeText("Keep this written draft")
-        XCTAssertTrue(app.buttons["startConversation"].exists)
-        XCTAssertFalse(mic.exists)
-        // Clear with keyboard input so the same editor remains mounted.
-        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Keep this written draft".count))
-        XCTAssertTrue(mic.waitForExistence(timeout: 5)); mic.tap()
+        pairFixture(app, code: "ios-test").tap()
+        let voice = app.navigationBars.buttons["startVoice"]
+        let dictation = app.buttons["startDictation"]
+        XCTAssertTrue(voice.waitForExistence(timeout: 10))
+        XCTAssertTrue(dictation.waitForExistence(timeout: 5))
+        XCTAssertLessThan(voice.frame.midY, dictation.frame.midY)
+        let input = app.textViews["messageInput"]
+        input.tap()
+        input.typeText("Keep this written draft")
+        XCTAssertTrue(app.buttons["sendMessage"].exists)
+        XCTAssertTrue(voice.isEnabled)
+        voice.tap()
         XCTAssertTrue(app.staticTexts["Your microphone audio during the call"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["allowDataSharing"].label.contains("Allow & Start"))
         app.buttons["declineDataSharing"].tap()
-        XCTAssertTrue(mic.waitForExistence(timeout: 5))
+        XCTAssertTrue(voice.waitForExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, "Keep this written draft")
         XCTAssertFalse(app.buttons["endVoice"].exists)
         forgetFixture(app)
     }
@@ -2815,6 +2811,58 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(tools.value as? String, "Collapsed")
         forgetFixture(app)
     }
+
+    #if targetEnvironment(simulator)
+    func testDictationPreviewsCancelsAndKeepsStoppedSpeechAsDraft() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["--dictation-preview", "-appearancePreference", "dark"]
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+
+        let input = app.textViews["homeMessageInput"]
+        let mic = app.buttons["startDictation"]
+        let cancel = app.buttons["cancelDictation"]
+        let stop = app.buttons["stopDictation"]
+        let send = app.buttons["startConversation"]
+        XCTAssertTrue(mic.waitForExistence(timeout: 10))
+        XCTAssertFalse(send.exists)
+        attachScreenshot(app, name: "Dictation – empty composer")
+
+        input.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        input.typeText("Existing draft.")
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        let keyboardWasVisible = keyboard.frame.intersection(app.frame).height > 80
+        mic.tap()
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        XCTAssertTrue(stop.exists)
+        let preview = "Existing draft. This is a dictated message."
+        func waitForText(_ text: String) {
+            let value = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", text), object: input)
+            XCTAssertEqual(XCTWaiter.wait(for: [value], timeout: 5), .completed)
+        }
+        waitForText(preview)
+        XCTAssertTrue(keyboard.exists)
+        XCTAssertEqual(keyboard.frame.intersection(app.frame).height > 80, keyboardWasVisible)
+        let screen = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screen.name = "Dictation – live transcript"
+        screen.lifetime = .keepAlways
+        add(screen)
+        cancel.tap()
+        waitForText("Existing draft.")
+
+        mic.tap()
+        waitForText(preview)
+        stop.tap()
+        XCTAssertTrue(mic.waitForExistence(timeout: 5))
+        waitForText(preview)
+        XCTAssertTrue(send.isEnabled)
+        XCTAssertFalse(app.staticTexts[preview].exists)
+        attachScreenshot(app, name: "Dictation – committed draft")
+    }
+    #endif
 
     func testDemoLiveActivityTransitionsFromThinkingThroughToolsToFinished() throws {
         continueAfterFailure = false
@@ -3073,8 +3121,8 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(writing.waitForExistence(timeout: 10)); writing.tap()
         app.buttons["sendMessage"].tap()
         XCTAssertEqual(message.value as? String, "")
-        XCTAssertTrue(app.buttons["sendMessage"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["stopReply"].waitForNonExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["sendMessage"].exists)
         message.tap(); message.typeText("Show Markdown formatting")
         app.buttons["sendMessage"].tap()
         XCTAssertTrue(app.staticTexts["Markdown formatting"].waitForExistence(timeout: 15))

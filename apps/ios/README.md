@@ -3,9 +3,9 @@
 An independent SwiftUI client for the existing Mains backend. Requires iOS 26+
 and Xcode 26+ with Swift 6. Controls and the composer use native Liquid Glass;
 the system Reduce Transparency preference retains an opaque accessible surface.
-The default v1 project has no WebRTC dependency, voice sources, voice resources,
-or microphone/background-audio capabilities. The opt-in v2 development profile
-pins WebRTC 157.0.0 and keeps its resolved revision and bundled license.
+The default v1 project supports on-device microphone dictation. The opt-in v2
+development profile pins WebRTC 157.0.0 and keeps its resolved revision and
+bundled license.
 The portable MainsCore package remains dependency-free. Math messages use the bundled KaTeX
 0.18.7 assets already used by the Expo app, inside an offline WebKit surface.
 `apps/mobile` remains the separate Expo/React Native app for iOS and Android.
@@ -92,7 +92,7 @@ GPT Live stays in the repository for v2 but is **compiled out** of the default
 v1 app, including the call controller, signaling/settings methods and voice UI.
 Historical voice-originated messages and delegated-chat links remain readable.
 The v1 target has no WebRTC package/product, Metal voice shader, voice samples,
-voice license resource, microphone purpose string or background-audio mode.
+voice license resource or background-audio mode. It declares microphone access for on-device dictation.
 
 From `apps/ios`, select the project profile explicitly:
 
@@ -109,7 +109,7 @@ Portable Swift-package tests retain the v2 core through `SWIFT_PACKAGE`.
 Regenerate the default profile before archiving a v1 submission. Do not ship the
 bundled voice recordings until their redistribution rights have been verified.
 
-When enabled, an empty Codex composer offers the SF Symbols waveform voice button. Start it to speak in the current
+When enabled, the top-right toolbar offers the waveform button in eligible Codex chats. Start it to speak in the current
 conversation, or create an idle conversation from Home without a synthetic text
 prompt. The paired computer must run the updated backend and have working native
 Codex voice access through its existing account. Provider consent and the iPhone
@@ -524,6 +524,9 @@ underlying tooling.
   keeps focus, and either result opens in the main navigation after search closes.
 - An in-place new conversation composer, remembered per-space workspace/project
   targets, and drafts scoped to the paired computer and selected space.
+- The composer microphone uses Apple’s on-device dictation for every provider.
+  Stop to add the live transcript to the current draft, or cancel to restore the
+  original text. Send appears when the composer has text or an attachment.
 - Shared two-row glass composer for home and conversations, with provider-coloured
   prompt bubbles, a native title/Outputs/New/More toolbar and a circular Latest control.
 - Live model catalogues, model-specific effort and provider-specific permissions.

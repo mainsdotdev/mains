@@ -516,6 +516,9 @@ struct ConversationView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 #if MAINS_GPT_LIVE
                 if ownsVoice { VoicePresentationMenu() }
+                if let context = composerContext, !waitsForMateConversation {
+                    VoiceStartButton(session: session, context: context)
+                }
                 #endif
                 if hasOutputAction && !outputsInMenu {
                     outputsButton(outputsAction)

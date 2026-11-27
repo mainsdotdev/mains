@@ -60,7 +60,7 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Talk with Codex using GPT Live. Your microphone audio is sent to OpenAI during the call.</string>
+	<string>Dictate messages on this iPhone, or talk with Codex using GPT Live. During a GPT Live call, your audio is sent to OpenAI.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

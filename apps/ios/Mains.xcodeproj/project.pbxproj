@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A24DCEB14A134A9D840D781C /* ComposerDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A24DCEB14A134A9D840D781D /* ComposerDictation.swift */; };
 		0143E24CAFC123FD1BDA0512AB6622FA /* RobotAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24EF2C930C59977553FF5609CE6B468E /* RobotAvatarView.swift */; };
 		0366010DBC30478AC4B936EB7F591912 /* TurnChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 527C92D5F635574F19DE350AF70976FA /* TurnChangesView.swift */; };
 		03E3985CEE82FC74851E3CB71BA90E02 /* EffortControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8632222B34F76049ADFF0059C81C3CF6 /* EffortControl.swift */; };
@@ -147,6 +148,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A24DCEB14A134A9D840D781D /* ComposerDictation.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ComposerDictation.swift; sourceTree = "<group>"; };
 		0364C6761D90C3DFC1C1AE26A7F2DECD /* InlineContextText.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InlineContextText.swift; sourceTree = "<group>"; };
 		0744E33FC98D3D6B6D6388649D675E28 /* RunDecisions.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RunDecisions.swift; sourceTree = "<group>"; };
 		08190524ECBA201AD2BB2C02899326D1 /* ConversationTranscript.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationTranscript.swift; sourceTree = "<group>"; };
@@ -348,6 +350,7 @@
 				A996B69F75B8CD0D7AB8C043D401D76B /* MateSkillsEditor.swift */,
 				7E01FAD53C91FDBF5D8C91B2A077F726 /* MatesView.swift */,
 				AEE43A78B667585EF29CB3F6714AF86D /* MathMarkdownView.swift */,
+				A24DCEB14A134A9D840D781D /* ComposerDictation.swift */,
 				71CA7D3D156CDE0E5C069315F3F22333 /* MessageComposer.swift */,
 				7538FA30735F5D83A1AE5A97F3217BB7 /* NativeRealtimeVoiceMedia.swift */,
 				5255C504205B7B68CB852940480968B0 /* NativeStorage.swift */,
@@ -719,6 +722,7 @@
 				45EFE4DD07A756231F04AF77464CF9EF /* MateSkillsEditor.swift in Sources */,
 				679743F2686E4D933C4D670D8F9E5C6D /* MatesView.swift in Sources */,
 				0AC503AF1D8CFD8FF0232F98C88205BA /* MathMarkdownView.swift in Sources */,
+				A24DCEB14A134A9D840D781C /* ComposerDictation.swift in Sources */,
 				B95F8249E5F3CE2F1DCE895A8FCB32B4 /* MessageComposer.swift in Sources */,
 				13883CCC3843F04081547B4C40E037A4 /* NativeRealtimeVoiceMedia.swift in Sources */,
 				A29D5CFC67ACD0F07DE0D4FC56CEC83D /* NativeStorage.swift in Sources */,

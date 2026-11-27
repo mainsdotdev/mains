@@ -195,6 +195,24 @@ private final class ContextAttachment: NSTextAttachment {
     required init?(coder: NSCoder) { nil }
 }
 
+@MainActor final class ComposerEditorSelection {
+    fileprivate weak var view: ComposerTextView?
+
+    var language: String? {
+        guard let language = view?.textInputMode?.primaryLanguage, language != "emoji" else { return nil }
+        return language
+    }
+
+    func insertionRange(in text: ContextText) -> NSRange {
+        guard let view, view.isFirstResponder, view.attributedText.string == text.display,
+              view.selectedRange.location <= text.display.utf16.count,
+              view.selectedRange.length <= text.display.utf16.count - view.selectedRange.location else {
+            return NSRange(location: text.display.utf16.count, length: 0)
+        }
+        return view.selectedRange
+    }
+}
+
 struct ContextTextEditor: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -210,13 +228,17 @@ struct ContextTextEditor: View {
     var compactRowHeight: CGFloat? = nil
     var showsSingleLine = false
     var onOverflowChange: ((Bool) -> Void)? = nil
+    var selection: ComposerEditorSelection? = nil
+    var stagesDictation = false
     @State private var artwork = ContextArtwork()
     @State private var measuredWidth: CGFloat = 320
     var body: some View {
+        let hasSkills = !skills.isEmpty
         ContextTextInput(text: $text, skills: $skills, scope: scope, focused: $focused, placeholder: placeholder, identifier: identifier,
                          images: artwork.images, artworkRevision: artwork.revision, measuredWidth: measuredWidth,
                          fillsHeight: fillsHeight, reservedTrailingWidth: reservedTrailingWidth,
-                         compactRowHeight: compactRowHeight, showsSingleLine: showsSingleLine, onOverflowChange: onOverflowChange)
+                         compactRowHeight: compactRowHeight, showsSingleLine: showsSingleLine, onOverflowChange: onOverflowChange,
+                         selection: selection, stagesDictation: stagesDictation)
             .overlay {
                 if compactRowHeight != nil && text.isEmpty {
                     ComposerPlaceholderLayout(centered: showsSingleLine, topAligned: fillsHeight) {
@@ -227,7 +249,7 @@ struct ContextTextEditor: View {
                 }
             }
             .task(id: skills) { await artwork.load(skills) }
-            .onGeometryChange(for: CGFloat?.self) { skills.isEmpty ? nil : $0.size.width } action: { width in
+            .onGeometryChange(for: CGFloat?.self) { hasSkills ? $0.size.width : nil } action: { width in
                 if let width { measuredWidth = width }
             }
             .padding(.trailing, reservedTrailingWidth)
@@ -279,6 +301,8 @@ private struct ContextTextInput: UIViewRepresentable {
     let compactRowHeight: CGFloat?
     let showsSingleLine: Bool
     let onOverflowChange: ((Bool) -> Void)?
+    let selection: ComposerEditorSelection?
+    let stagesDictation: Bool
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.mainPaneCovered) private var mainPaneCovered
@@ -291,6 +315,7 @@ private struct ContextTextInput: UIViewRepresentable {
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.keyboardDismissMode = .interactive; view.adjustsFontForContentSizeCategory = true
         view.accessibilityIdentifier = identifier
+        selection?.view = view
         return view
     }
     func updateUIView(_ view: ComposerTextView, context: Context) {
@@ -400,6 +425,7 @@ private struct ContextTextInput: UIViewRepresentable {
             return result
         }
         func textViewDidChange(_ view: UITextView) {
+            guard !parent.stagesDictation else { return }
             let value = source(view.attributedText)
             var selected: [ContextSkill] = [], names: Set<String> = []
             view.attributedText.enumerateAttribute(.attachment, in: NSRange(location: 0, length: view.attributedText.length)) { attribute, range, _ in
@@ -414,6 +440,9 @@ private struct ContextTextInput: UIViewRepresentable {
                 editor.placeholder.isHidden = parent.compactRowHeight != nil || !value.isEmpty
                 editor.invalidateTextMeasurement()
             }
+        }
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            !parent.stagesDictation
         }
         func textViewDidChangeSelection(_ view: UITextView) {
             view.typingAttributes = [.font: UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor.label]

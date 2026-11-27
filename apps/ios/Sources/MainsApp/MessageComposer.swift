@@ -137,22 +137,30 @@ struct MessageComposer: View {
     let model: () -> Void
     let options: () -> Void
     let send: () -> Void
-    var onVoiceWorkspaceRequired: (() -> Void)? = nil
-    var voiceCreated: ((String) -> Void)? = nil
     var focusChanged: ((Bool) -> Void)? = nil
     #if MAINS_GPT_LIVE
     @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
-    @State private var voiceConsent: VoiceConsentRequest?
-    @State private var approvedVoiceConsentOwner: Int?
-    @State private var voiceStartOwner: Int?
-
-    private struct VoiceConsentRequest: Identifiable {
-        let context: ConsentContext
-        let owner: Int
-        var id: String { context.id }
-    }
     #endif
     @State private var focused = false
+    @State private var editorSelection = ComposerEditorSelection()
+    @State private var dictationOwner = UUID()
+    @State private var dictationAnchor: DictationAnchor?
+    @Environment(\.scenePhase) private var scenePhase
+    private var dictation: ComposerDictation { .shared }
+    private var dictating: Bool { dictation.owner == dictationOwner && dictation.error == nil }
+    private var dictatedText: String? {
+        guard dictating, !dictation.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let dictationAnchor else { return nil }
+        return dictationAnchor.inserting(dictation.transcript)
+    }
+    private var hasVisibleContent: Bool { draft.hasContent || dictatedText != nil }
+    private var voiceUsesMicrophone: Bool {
+        #if MAINS_GPT_LIVE
+        session.voice.ownsCall
+        #else
+        false
+        #endif
+    }
     @State private var textOverflows = false
     @State private var file = false
     @State private var pluginsOpen = false
@@ -161,7 +169,7 @@ struct MessageComposer: View {
     @State private var mateConsent: ConsentContext?
     @State private var mateSelectionAfterConsent: (() -> Void)?
     private var contextScope: ContextScope { context.contextScope(session) }
-    private var trigger: ContextTriggerMatch? { focused && !attachmentsOpen ? ContextMentions.detect(draft.text) : nil }
+    private var trigger: ContextTriggerMatch? { focused && !attachmentsOpen && !dictating ? ContextMentions.detect(draft.text) : nil }
     @State private var attachmentsOpen = false
     @State private var attachmentPresentationID = UUID()
     @State private var panelOwner = 0
@@ -182,7 +190,7 @@ struct MessageComposer: View {
         #if MAINS_GPT_LIVE
         if ownsVoice { return false }
         #endif
-        return collapsesWhenUnfocused && !(compactComposerEditing ?? focused) && !editorExpanded
+        return collapsesWhenUnfocused && !(compactComposerEditing ?? focused) && !editorExpanded && dictatedText == nil
     }
     private var selectedModel: ModelChoice? { context.model(session) }
     private var speed: ComposerSpeed? { ComposerSpeed(model: selectedModel, providerID: context.providerId) }
@@ -191,12 +199,7 @@ struct MessageComposer: View {
         guard session.voice.ownsCall else { return false }
         if let id = context.runID { return session.voice.runID == id }
         if let mate = context.mate { return session.voiceMate?.id == mate.id && session.voice.runID == nil }
-        return voiceStartOwner == session.ownership && session.voiceMate == nil && session.voiceSpaceID == context.spaceID
-    }
-    private var voiceStartAvailability: BackendSession.VoiceStartAvailability {
-        guard AppFeatures.gptLiveEnabled, !context.saving(session) else { return .unavailable }
-        return session.voiceStartAvailability(runID: context.runID, spaceID: context.spaceID, mate: context.mate,
-                                              workspaceID: context.workspaceID)
+        return session.voiceMate == nil && session.voiceSpaceID == context.spaceID
     }
     #endif
     private var effort: String? {
@@ -251,47 +254,43 @@ struct MessageComposer: View {
                 mateSelectionAfterConsent?()
             }
         }
-        .onChange(of: draft.text) { _, _ in draft.reconcileContext() }
+        .onChange(of: draft.text) { _, value in
+            draft.reconcileContext()
+            if let dictationAnchor, dictationAnchor.text.source != value { cancelDictation() }
+        }
         .onChange(of: focused) { _, focused in focusChanged?(focused) }
         .onChange(of: mainPaneCovered) { _, covered in
-            if covered { focused = false; expansion?.wrappedValue = false }
+            if covered { cancelDictation(); focused = false; expansion?.wrappedValue = false }
         }
-        .onChange(of: contextScope, initial: true) { _, scope in draft.synchronizeContext(scope); pluginsOpen = false }
+        .onChange(of: contextScope, initial: true) { _, scope in
+            cancelDictation()
+            draft.synchronizeContext(scope); pluginsOpen = false
+        }
         .attachmentOverlay(isPresented: attachmentsOpen, id: attachmentPresentationID, accent: Provider.accent(context.providerId),
                            maxCount: 5 - draft.attachments.count, maxBytes: remainingBytes, add: addFromPanel, close: closeAttachments)
         .onChange(of: session.ownership) { _, _ in
+            cancelDictation()
             attachmentsOpen = false; file = false; pluginsOpen = false; expansion?.wrappedValue = false
         }
         .onChange(of: paneVisible) { _, visible in
-            if !visible { focused = false; attachmentsOpen = false; pluginsOpen = false; expansion?.wrappedValue = false }
+            if !visible { cancelDictation(); focused = false; attachmentsOpen = false; pluginsOpen = false; expansion?.wrappedValue = false }
         }
-        .onDisappear { expansion?.wrappedValue = false }
-    #if MAINS_GPT_LIVE
-        .onChange(of: session.voice.runID) { _, id in
-            guard let id, context.runID == nil, voiceStartOwner == session.ownership else { return }
-            if let mate = context.mate {
-                guard session.voiceMate?.id == mate.id else { return }
-            } else {
-                guard session.voiceMate == nil, session.selectedSpaceID == context.spaceID else { return }
-            }
-            voiceStartOwner = nil
-            voiceCreated?(id)
+        .onChange(of: scenePhase) { _, phase in
+            // The permission prompt can temporarily make the scene inactive.
+            if phase == .background { cancelDictation() }
         }
-        .onChange(of: session.ownership) { _, _ in
-            approvedVoiceConsentOwner = nil; voiceConsent = nil
+        .onChange(of: voiceUsesMicrophone) { _, usesMicrophone in
+            if usesMicrophone { cancelDictation() }
         }
-        .onChange(of: ownsVoice && voicePresentation == .focus) { _, voiceFocused in
-            if voiceFocused { expansion?.wrappedValue = false; textOverflows = false }
-        }
+        .onChange(of: queueEditID) { _, _ in cancelDictation() }
+        .onChange(of: ObjectIdentifier(draft)) { _, _ in cancelDictation() }
         .onDisappear {
-            if context.mate != nil { voiceStartOwner = nil }
+            cancelDictation()
+            expansion?.wrappedValue = false
         }
-        .sheet(item: $voiceConsent, onDismiss: resumeVoiceAfterConsent) { request in
-            ConsentView(context: request.context) {
-                guard request.owner == session.ownership else { return }
-                session.grantConsent(providerID: "codex", backendID: request.context.backendID)
-                approvedVoiceConsentOwner = request.owner
-            }
+    #if MAINS_GPT_LIVE
+        .onChange(of: ownsVoice && voicePresentation == .focus) { _, voiceFocused in
+            if voiceFocused { focused = false; expansion?.wrappedValue = false; textOverflows = false }
         }
     #endif
         .fileImporter(isPresented: $file, allowedContentTypes: [.data]) { result in
@@ -310,10 +309,14 @@ struct MessageComposer: View {
         .alert("Couldn’t attach file", isPresented: Binding(get: { attachmentError != nil }, set: { if !$0 { attachmentError = nil } })) {
             Button("OK", role: .cancel) { attachmentError = nil }
         } message: { Text(attachmentError ?? "") }
+        .alert("Dictation", isPresented: Binding(get: { dictation.owner == dictationOwner && dictation.error != nil },
+                                                set: { if !$0 { dismissDictationError() } })) {
+            Button("OK", role: .cancel) { dismissDictationError() }
+        } message: { Text(dictation.error ?? "") }
     }
     private var standardComposer: some View {
         let usesLegacyMateLayout = context.lockedProfile && !collapsesWhenUnfocused
-        let stackedMate = usesLegacyMateLayout && (focused || !draft.text.isEmpty || editorExpanded)
+        let stackedMate = usesLegacyMateLayout && (focused || !draft.text.isEmpty || editorExpanded || dictatedText != nil)
         let compactMate = usesLegacyMateLayout && !stackedMate
         return VStack(alignment: .leading, spacing: 4) {
             if showsCollapseButtonAboveEditor {
@@ -335,25 +338,23 @@ struct MessageComposer: View {
             if context.lockedProfile || collapsesWhenUnfocused {
                 MateComposerLayout(expanded: usesLegacyMateLayout ? stackedMate : !compactComposer, fillsHeight: editorExpanded,
                                    compactRowHeight: collapsesWhenUnfocused ? Self.compactControlHeight : nil) {
-                    textEditor
-                    attachmentButton()
-                    if collapsesWhenUnfocused && !context.lockedProfile {
-                        HStack(spacing: 0) {
-                            if !compactComposer { configurationRow }
-                        }
+                    textEditor(compact: compactComposer || compactMate)
+                    composerLeadingAction
+                    HStack(spacing: 0) {
+                        if !compactComposer && !compactMate && (!context.lockedProfile || dictating) { composerCenterControls }
                     }
                     HStack(spacing: 6) {
                         if showsCollapseButtonInControls { editorSizeButton }
-                        composerActions(compact: compactComposer)
+                        composerActions()
                     }
                     .frame(minWidth: collapsesWhenUnfocused ? Self.controlHeight : nil, alignment: .trailing)
                 }
                 .buttonStyle(.plain)
             } else {
-                textEditor.padding(.horizontal, 10).padding(.top, 7).padding(.bottom, 3)
+                textEditor(compact: false).padding(.horizontal, 10).padding(.top, 7).padding(.bottom, 3)
                 HStack(spacing: 6) {
-                    attachmentButton()
-                    configurationRow
+                    composerLeadingAction
+                    composerCenterControls
                     if showsCollapseButtonInControls { editorSizeButton }
                     composerActions()
                 }
@@ -384,16 +385,25 @@ struct MessageComposer: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var textEditor: some View {
-        ContextTextEditor(text: $draft.text, skills: $draft.contextSkills, scope: contextScope, focused: $focused,
+    private func textEditor(compact: Bool) -> some View {
+        let showsMeter = compact && dictating
+        return ContextTextEditor(text: Binding(get: { dictatedText ?? draft.text }, set: { if !dictating { draft.text = $0 } }),
+            skills: $draft.contextSkills, scope: contextScope, focused: $focused,
             placeholder: context.placeholder,
             identifier: context.runID == nil ? "homeMessageInput" : "messageInput",
             fillsHeight: editorExpanded, reservedTrailingWidth: expandButtonSpace,
             compactRowHeight: collapsesWhenUnfocused ? Self.compactControlHeight : nil,
-            showsSingleLine: compactComposer, onOverflowChange: { textOverflows = $0 })
+            showsSingleLine: compactComposer, onOverflowChange: { textOverflows = $0 },
+            selection: editorSelection, stagesDictation: dictating)
+            .opacity(showsMeter ? 0 : 1)
+            .allowsHitTesting(!showsMeter)
+            .accessibilityHidden(showsMeter)
+            .overlay {
+                if showsMeter { dictationMeter }
+            }
     }
 
-    private var showsExpandButton: Bool { expansion != nil && !editorExpanded && !compactComposer && textOverflows && !draft.text.isEmpty }
+    private var showsExpandButton: Bool { !dictating && expansion != nil && !editorExpanded && !compactComposer && textOverflows && !draft.text.isEmpty }
     private var expandButtonSpace: CGFloat { showsExpandButton ? Self.editorSizeButtonWidth : 0 }
     private var showsCollapseButtonAboveEditor: Bool { editorExpanded && verticalSizeClass != .compact }
     private var showsCollapseButtonInControls: Bool { editorExpanded && !showsCollapseButtonAboveEditor }
@@ -460,12 +470,128 @@ struct MessageComposer: View {
 
     private var sendMessageButton: some View {
         ComposerSendButton(providerID: context.providerId, sending: draft.isSending) {
-            expansion?.wrappedValue = false
-            send()
+            if dictating { finishDictation(sendAfter: true) }
+            else { submitMessage() }
         }
-            .disabled(!canSend || draft.isSending || context.saving(session) || !draft.hasContent || voiceBlocksSending)
-            .accessibilityLabel(draft.isSending ? "Sending message" : sendLabel ?? "Send message")
-            .accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
+        .disabled(!canSend || draft.isSending || context.saving(session) || !hasVisibleContent || voiceBlocksSending ||
+                  stopping || (active && !canSendDuringRun) || (dictating && dictation.phase == .finishing))
+        .accessibilityLabel(draft.isSending ? "Sending message" : sendLabel ?? "Send message")
+        .accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
+    }
+
+    private func submitMessage() {
+        expansion?.wrappedValue = false
+        send()
+    }
+
+    @ViewBuilder private var composerLeadingAction: some View {
+        if dictating {
+            dictationControl("xmark", label: "Cancel dictation", id: "cancelDictation", action: cancelDictation)
+        } else {
+            attachmentButton()
+        }
+    }
+
+    @ViewBuilder private var composerCenterControls: some View {
+        if dictating { dictationMeter }
+        else { configurationRow }
+    }
+
+    @ViewBuilder private var dictationMeter: some View {
+        if dictation.phase == .listening {
+            ComposerDictationMeter(dictation: dictation)
+        } else {
+            ProgressView().controlSize(.small)
+                .frame(maxWidth: .infinity).frame(height: Self.controlHeight)
+                .accessibilityLabel(dictation.phase == .preparing ? "Preparing dictation" : "Finishing dictation")
+        }
+    }
+
+    private func dictationControl(_ symbol: String, label: LocalizedStringKey, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 16, weight: .semibold))
+                .frame(width: 34, height: 34)
+                .background(.primary.opacity(0.09), in: .circle)
+                .frame(width: Self.controlHeight, height: Self.controlHeight)
+                .contentShape(.rect)
+        }
+        .buttonStyle(ChatPressStyle())
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(id)
+    }
+
+    private var startDictationButton: some View {
+        Button(action: startDictation) {
+            Image("dictation-microphone")
+                .resizable()
+                .frame(width: 24, height: 24)
+                .frame(width: Self.controlHeight, height: Self.controlHeight)
+                .contentShape(.rect)
+        }
+        .buttonStyle(ChatPressStyle())
+        .disabled(draft.isSending || dictation.owner != nil || voiceUsesMicrophone)
+        .accessibilityLabel("Start dictation")
+        .accessibilityIdentifier("startDictation")
+    }
+
+    private var queueEditID: String? {
+        context.runID.flatMap { session.existingMessageQueue(for: $0)?.editingID }
+    }
+
+    private struct DictationAnchor {
+        let text: ContextText
+        let range: NSRange
+        let draft: ObjectIdentifier
+        let pairing: Int
+        let scope: ContextScope
+        let queueEditID: String?
+
+        func inserting(_ transcript: String) -> String {
+            let source = text.source as NSString
+            let start = text.sourceOffset(range.location)
+            let end = text.sourceOffset(NSMaxRange(range))
+            let prefix = source.substring(to: start)
+            let suffix = source.substring(from: end)
+            let spoken = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !spoken.isEmpty else { return text.source }
+            let spaceBefore = prefix.last.map { !$0.isWhitespace } == true && spoken.first?.isPunctuation != true
+            let spaceAfter = suffix.first.map { !$0.isWhitespace && !$0.isPunctuation } == true
+            return text.replacing(range, with: (spaceBefore ? " " : "") + spoken + (spaceAfter ? " " : ""))
+        }
+    }
+
+    private func startDictation() {
+        guard dictation.owner == nil, !voiceUsesMicrophone, !draft.isSending, paneVisible, !mainPaneCovered else { return }
+        let text = ContextText(draft.text, skills: draft.contextSkills)
+        dictationAnchor = DictationAnchor(text: text, range: editorSelection.insertionRange(in: text),
+                                         draft: ObjectIdentifier(draft), pairing: session.ownership,
+                                         scope: contextScope, queueEditID: queueEditID)
+        pluginsOpen = false
+        let preview = session.isDemo && ProcessInfo.processInfo.arguments.contains("--dictation-preview")
+        dictation.start(owner: dictationOwner, language: editorSelection.language, preview: preview)
+    }
+
+    private func finishDictation(sendAfter: Bool = false) {
+        guard let anchor = dictationAnchor else { return }
+        dictation.stop(owner: dictationOwner) { transcript in
+            guard dictationAnchor != nil else { return }
+            dictationAnchor = nil
+            guard anchor.pairing == session.ownership, anchor.scope == contextScope, anchor.queueEditID == queueEditID,
+                  anchor.draft == ObjectIdentifier(draft), anchor.text.source == draft.text, !draft.isSending else { return }
+            if let runID = context.runID, session.viewingRunID != runID { return }
+            if !transcript.isEmpty { draft.text = anchor.inserting(transcript) }
+            if sendAfter && draft.hasContent && dictation.error == nil { submitMessage() }
+        }
+    }
+
+    private func cancelDictation() {
+        dictationAnchor = nil
+        dictation.cancel(owner: dictationOwner)
+    }
+
+    private func dismissDictationError() {
+        dictationAnchor = nil
+        dictation.dismissError(owner: dictationOwner)
     }
 
     private var composerAccent: Color { mateTint ?? Provider.accent(context.providerId) }
@@ -478,45 +604,52 @@ struct MessageComposer: View {
         .frame(width: 44, height: 44).contentShape(.circle)
     }
 
-    @ViewBuilder private func composerActions(compact: Bool = false) -> some View {
+    @ViewBuilder private func composerActions() -> some View {
         #if MAINS_GPT_LIVE
-        if ownsVoice, session.voice.phase == .connected {
-            Button { session.voice.toggleMute() } label: {
-                Image(systemName: session.voice.muted ? "mic.slash.fill" : "mic.fill").frame(width: 40, height: 44)
-            }.accessibilityLabel(session.voice.muted ? "Unmute microphone" : "Mute microphone").accessibilityIdentifier("muteVoice")
-        }
-        if ownsVoice && (session.voice.phase != .connected || !(active && canSendDuringRun && draft.hasContent)) || stopping || active && (!canSendDuringRun || !draft.hasContent) {
-            Button {
-                if ownsVoice { Task { await session.voice.stop() } }
-                if active { stop?() }
-            } label: {
-                stopActionIcon(symbol: ownsVoice && session.voice.phase == .stopFailed ? "arrow.clockwise" : "stop.fill")
-            }.buttonStyle(ChatPressStyle()).disabled(ownsVoice ? session.voice.phase == .ending : !session.isConnected || stopping)
-                .accessibilityLabel(ownsVoice ? session.voice.phase == .stopFailed ? "Retry ending voice chat" : "End voice chat" : stopping ? "Stopping reply" : "Stop reply")
-                .accessibilityIdentifier(ownsVoice ? "endVoice" : "stopReply")
-        } else if !draft.hasContent && context.providerId == "codex" && !active && !session.isDemo {
-            Button(action: prepareVoice) {
-                Image(systemName: "waveform").font(.system(size: 18, weight: .medium))
-                    .frame(width: 36, height: 36).foregroundStyle(compact ? Color.secondary : .white)
-                    .background(compact ? Color.clear : composerAccent, in: .circle)
-                    .frame(width: 44, height: 44).contentShape(.circle)
-            }.buttonStyle(ChatPressStyle()).disabled(voiceStartAvailability == .unavailable)
-                .accessibilityLabel("Start GPT Live").accessibilityIdentifier("startVoice")
-        } else if !compact || draft.hasContent || draft.isSending {
-            sendMessageButton
+        if ownsVoice {
+            if session.voice.phase == .connected {
+                Button { session.voice.toggleMute() } label: {
+                    Image(systemName: session.voice.muted ? "mic.slash.fill" : "mic.fill").frame(width: 40, height: 44)
+                }.accessibilityLabel(session.voice.muted ? "Unmute microphone" : "Mute microphone").accessibilityIdentifier("muteVoice")
+            }
+            if session.voice.phase == .connected && !stopping && active && canSendDuringRun && draft.hasContent {
+                sendMessageButton
+            } else {
+                Button {
+                    Task { await session.voice.stop() }
+                    if active { stop?() }
+                } label: {
+                    stopActionIcon(symbol: session.voice.phase == .stopFailed ? "arrow.clockwise" : "stop.fill")
+                }.buttonStyle(ChatPressStyle()).disabled(session.voice.phase == .ending)
+                    .accessibilityLabel(session.voice.phase == .stopFailed ? "Retry ending voice chat" : "End voice chat")
+                    .accessibilityIdentifier("endVoice")
+            }
+        } else {
+            messageActions
         }
         #else
-        if stopping || active {
-            Button { stop?() } label: {
-                stopActionIcon()
-            }
-            .buttonStyle(ChatPressStyle()).disabled(!session.isConnected || stopping)
-            .accessibilityLabel(stopping ? "Stopping reply" : "Stop reply").accessibilityIdentifier("stopReply")
-        }
-        if !stopping && (!active || canSendDuringRun && draft.hasContent) && (!compact || draft.hasContent || draft.isSending) {
-            sendMessageButton
-        }
+        messageActions
         #endif
+    }
+
+    @ViewBuilder private var messageActions: some View {
+        if dictating {
+            dictationControl("stop.fill", label: "Stop dictation", id: "stopDictation") { finishDictation() }
+                .disabled(dictation.phase == .finishing)
+        } else {
+            startDictationButton
+        }
+        if stopping || active {
+            Button { stop?() } label: { stopActionIcon() }
+                .buttonStyle(ChatPressStyle()).disabled(!session.isConnected || stopping)
+                .accessibilityLabel(stopping ? "Stopping reply" : "Stop reply")
+                .accessibilityIdentifier("stopReply")
+        }
+        if hasVisibleContent || draft.isSending {
+            if dictating || !stopping && (!active || canSendDuringRun) {
+                sendMessageButton
+            }
+        }
     }
 
     #if MAINS_GPT_LIVE
@@ -608,38 +741,6 @@ struct MessageComposer: View {
                 pluginsOpen = false
             })
     }
-    #if MAINS_GPT_LIVE
-    private func validateVoiceStart() -> Bool {
-        let availability = voiceStartAvailability
-        if availability == .workspaceRequired { onVoiceWorkspaceRequired?() }
-        if availability == .mateHostUpdateRequired {
-            session.actionError = "Update Mains on your computer to start a new Mate voice chat. You can also start voice from an existing chat."
-        }
-        return availability == .ready
-    }
-    private func prepareVoice() {
-        guard validateVoiceStart(), let backendID = session.pairing?.descriptor.backendId else { return }
-        if session.hasConsent(providerID: "codex") { beginVoice() }
-        else {
-            voiceConsent = VoiceConsentRequest(context: ConsentContext(backendID: backendID, providerID: "codex", isVoice: true),
-                                               owner: session.ownership)
-        }
-    }
-    private func resumeVoiceAfterConsent() {
-        let owner = approvedVoiceConsentOwner
-        approvedVoiceConsentOwner = nil
-        guard owner == session.ownership else { return }
-        beginVoice()
-    }
-    private func beginVoice() {
-        let owner = session.ownership
-        Task {
-            guard owner == session.ownership, validateVoiceStart() else { return }
-            focused = false; voiceStartOwner = owner
-            await session.startVoice(runID: context.runID, spaceID: context.spaceID, mate: context.mate, workspaceID: context.workspaceID)
-        }
-    }
-    #endif
     private var remainingBytes: Int {
         min(2 * 1024 * 1024, max(0, (2_800_000 - draft.attachments.reduce(0) { $0 + $1.data.utf8.count }) / 4 * 3))
     }

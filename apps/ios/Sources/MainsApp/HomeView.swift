@@ -18,6 +18,7 @@ struct HomeView: View {
     @State private var optionsSheet = false
     @State private var consent: ConsentContext?
     @State private var composerFocused = false
+    @State private var workspaceRequired = false
     #if MAINS_GPT_LIVE
     @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
     private var preparingVoice: Bool {
@@ -56,13 +57,20 @@ struct HomeView: View {
             if preparingVoice {
                 ToolbarItem(placement: .topBarTrailing) { VoicePresentationMenu() }
             }
+            if let space {
+                ToolbarItem(placement: .topBarTrailing) {
+                    VoiceStartButton(session: session, context: ComposerContext(space: space),
+                                     workspaceRequired: { workspaceRequired = true }, onCreated: onCreated)
+                        .id(space.id)
+                }
+            }
             #endif
         }
         .composerInset(preservesReaderViewport: false, composerFocused: space == nil ? nil : composerFocused) { editorExpanded in
             if let space {
                 HomeComposerArea(session: session, space: space, targetPicker: $targetPicker, modelSheet: $modelSheet,
                                  optionsSheet: $optionsSheet, consent: $consent, editorExpanded: editorExpanded,
-                                 focusChanged: { composerFocused = $0 }, onCreated: onCreated)
+                                 workspaceRequired: $workspaceRequired, focusChanged: { composerFocused = $0 }, onCreated: onCreated)
                     .id(space.id)
                     .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
             }
@@ -71,7 +79,7 @@ struct HomeView: View {
         .composerPickers(model: $modelSheet, options: $optionsSheet, target: $targetPicker, session: session,
                          context: space.map { ComposerContext(space: $0) })
         .onChange(of: session.ownership) { _, _ in targetPicker = false }
-        .onChange(of: space?.id) { _, _ in targetPicker = false; composerFocused = false }
+        .onChange(of: space?.id) { _, _ in targetPicker = false; composerFocused = false; workspaceRequired = false }
         .onChange(of: space?.mode) { _, _ in targetPicker = false }
         .task(id: "\(space?.providerId ?? ""):\(session.isConnected)") {
             if let space { await session.loadModels(space.providerId, force: true) }
@@ -209,7 +217,7 @@ struct HomeComposerArea: View {
     let isCurrent: () -> Bool
     let onCreated: (String) -> Void
     @Bindable private var draft: ConversationDraft
-    @State private var workspaceRequired = false
+    @Binding private var workspaceRequired: Bool
     private var target: HomeTarget { session.homeTargets[space.id] ?? HomeTarget() }
     private var workspaceID: String? { fixedWorkspace?.id ?? target.workspaceID }
     private var workspace: Workspace? { session.workspaces.first { $0.id == workspaceID && $0.isReplica != true } }
@@ -220,10 +228,12 @@ struct HomeComposerArea: View {
     private var targetReady: Bool { space.mode != "developer" || workspace != nil && session.gitStates.first(where: { $0.workspaceId == workspace?.id })?.pathExists != false }
     init(session: BackendSession, space: Space, targetPicker: Binding<Bool>, modelSheet: Binding<Bool>, optionsSheet: Binding<Bool>,
          consent: Binding<ConsentContext?>, editorExpanded: Bool, fixedWorkspace: Workspace? = nil,
+         workspaceRequired: Binding<Bool> = .constant(false),
          focusChanged: ((Bool) -> Void)? = nil, isCurrent: @escaping () -> Bool = { true },
          onCreated: @escaping (String) -> Void) {
         self.session = session; self.space = space; _targetPicker = targetPicker; _modelSheet = modelSheet; _optionsSheet = optionsSheet
         _consent = consent; self.editorExpanded = editorExpanded
+        _workspaceRequired = workspaceRequired
         self.fixedWorkspace = fixedWorkspace; self.focusChanged = focusChanged; self.isCurrent = isCurrent; self.onCreated = onCreated
         draft = session.homeDraft(for: space.id, workspaceID: fixedWorkspace?.id)
     }
@@ -308,7 +318,7 @@ struct HomeComposerArea: View {
             MessageComposer(session: session, context: ComposerContext(space: space, workspace: fixedWorkspace), draft: draft, canSend: ready,
                          collapsesWhenUnfocused: fixedWorkspace == nil,
                          model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend,
-                         onVoiceWorkspaceRequired: showWorkspaceRequired, voiceCreated: onCreated, focusChanged: focusChanged)
+                         focusChanged: focusChanged)
         }.padding(.bottom, HomeView.composerBottomInset)
         .onChange(of: targetReady) { _, ready in
             if ready { workspaceRequired = false }

@@ -282,7 +282,8 @@ class ReleaseTest < Minitest::Test
       assert_equal expected_plist, plist_name
       plist = Xcodeproj::Plist.read_from_path(File.join(MainsRelease::ROOT, plist_name))
       assert_match(/Save an image/, plist.fetch('NSPhotoLibraryAddUsageDescription'))
-      assert_equal voice_enabled, plist.key?('NSMicrophoneUsageDescription'), plist_name
+      assert_match(/dictate messages/i, plist.fetch('NSMicrophoneUsageDescription'), plist_name)
+      assert_equal voice_enabled, plist['NSMicrophoneUsageDescription'].include?('OpenAI'), plist_name
       assert_equal voice_enabled, Array(plist['UIBackgroundModes']).include?('audio'), plist_name
     end
   end

@@ -535,7 +535,6 @@ private struct ChatTurnView: View {
                             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: expanded)
                     }.foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
                         .padding(.bottom, 8).contentShape(Rectangle().inset(by: -6))
-                        .overlay(alignment: .bottom) { Color(.separator).frame(height: 0.5) }
                 }.buttonStyle(.plain).accessibilityIdentifier("executionDetails-" + section.id)
                     .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             }

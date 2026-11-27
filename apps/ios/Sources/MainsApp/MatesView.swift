@@ -1079,6 +1079,11 @@ struct MateView: View {
                 }
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
+                #if MAINS_GPT_LIVE
+                if !showsSetup, let mate, mate.ready {
+                    VoiceStartButton(session: session, context: ComposerContext(mate: mate), onCreated: openChat)
+                }
+                #endif
                 if session.isConnected, !showsSetup, mate != nil {
                     Button("Mate Details", systemImage: "info.circle", action: openInfo)
                         .accessibilityIdentifier("openMateInfo")
@@ -1372,7 +1377,7 @@ struct MateView: View {
             MessageComposer(session: session, context: ComposerContext(mate: mate), draft: draft,
                 canSend: session.isConnected && !session.sending && session.pendingMessage?.status != .uncertain && !draft.isSending,
                 model: {}, options: {}, send: { withConsent(mate) { Task { await send(mate) } } },
-                voiceCreated: openChat, focusChanged: focusChanged)
+                focusChanged: focusChanged)
         }.padding(.bottom, 8)
     }
 

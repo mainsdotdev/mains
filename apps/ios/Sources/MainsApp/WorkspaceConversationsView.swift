@@ -96,6 +96,21 @@ struct TargetConversationsView: View {
                 listScreen.safeAreaInset(edge: .bottom, spacing: 0) { projectBottomBar }
             }
         }
+        #if MAINS_GPT_LIVE
+        .toolbar {
+            if let space = workspaceSpace, let workspace {
+                ToolbarItem(placement: .topBarTrailing) {
+                    VoiceStartButton(session: session, context: ComposerContext(space: space, workspace: workspace),
+                                     workspaceRequired: {
+                        session.homeDraft(for: space.id, workspaceID: workspace.id)
+                            .showFailure("This workspace’s folder is unavailable on your computer.", title: "Workspace unavailable")
+                    }, onCreated: { id in
+                        if visible && isCurrentWorkspace() { onWorkspaceChatCreated?(id) }
+                    })
+                }
+            }
+        }
+        #endif
         .onAppear { visible = true }
         .onDisappear { visible = false; composerFocused = false }
         .modifier(ConversationActionPrompts(session: session, request: $chatAction))

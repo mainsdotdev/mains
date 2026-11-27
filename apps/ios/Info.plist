@@ -36,6 +36,8 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Use the microphone to dictate messages on this iPhone.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan a pairing code or attach a photo to your message.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
