@@ -43,47 +43,6 @@
       ]
     },
     {
-      "id": "clear",
-      "label": "Clear Shell",
-      "presets": [
-        {
-          "id": "clear-violet",
-          "label": "Violet Drop",
-          "color": "violet"
-        },
-        {
-          "id": "clear-glacier",
-          "label": "Glacier Dome",
-          "color": "cyan"
-        },
-        {
-          "id": "clear-jade",
-          "label": "Jade Tile",
-          "color": "mint"
-        },
-        {
-          "id": "clear-rose",
-          "label": "Rose Prism",
-          "color": "rose"
-        },
-        {
-          "id": "clear-honey",
-          "label": "Honey Lantern",
-          "color": "amber"
-        },
-        {
-          "id": "clear-lime",
-          "label": "Lime Capsule",
-          "color": "lime"
-        },
-        {
-          "id": "clear-coral",
-          "label": "Coral Kite",
-          "color": "coral"
-        }
-      ]
-    },
-    {
       "id": "metal",
       "label": "One-Eye Metal",
       "presets": [

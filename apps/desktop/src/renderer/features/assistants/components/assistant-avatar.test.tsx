@@ -46,7 +46,7 @@ describe("robot assistant avatars", () => {
   });
 
   it("shows a warning icon while waiting and an activity dot while working", () => {
-    const avatar = { shape: "clear-glacier", color: "cyan" } as const;
+    const avatar = { shape: "metal-ice", color: "cyan" } as const;
     const { container, rerender } = render(<AssistantAvatar avatar={avatar} robotState="waiting" />);
     const warning = () => container.querySelector("svg.assistant-robot-avatar__warning");
     const activity = () => container.querySelector(".assistant-robot-avatar__activity");
@@ -68,17 +68,17 @@ describe("robot assistant avatars", () => {
     }
     render(<Picker />);
     const styles = within(screen.getByRole("radiogroup", { name: "Robot style" }));
-    expect(styles.getAllByRole("radio").map(option => option.textContent)).toEqual(["Retro Terminal", "Clear Shell", "One-Eye Metal", "Specialists"]);
+    expect(styles.getAllByRole("radio").map(option => option.textContent)).toEqual(["Retro Terminal", "One-Eye Metal", "Specialists"]);
     expect(screen.queryByRole("radiogroup", { name: "Avatar color" })).toBeNull();
     expect(screen.getByRole("status").textContent).toBe("sphere rose");
-    for (const name of ["Retro Terminal", "Clear Shell", "One-Eye Metal"]) {
+    for (const name of ["Retro Terminal", "One-Eye Metal"]) {
       fireEvent.click(styles.getByRole("radio", { name }));
       const variants = within(screen.getByRole("radiogroup", { name: "Robot variant" }));
       expect(variants.getAllByRole("radio")).toHaveLength(7);
     }
     fireEvent.click(screen.getByRole("radio", { name: "Bronze" }));
     expect(screen.getByRole("status", { hidden: true }).textContent).toBe("metal-bronze amber");
-    fireEvent.click(screen.getByRole("radio", { name: "Clear Shell" }));
+    fireEvent.click(styles.getByRole("radio", { name: "Retro Terminal" }));
     fireEvent.click(screen.getByRole("radio", { name: "One-Eye Metal" }));
     expect(screen.getByRole("radio", { name: "Bronze", checked: true })).toBeTruthy();
     fireEvent.click(styles.getByRole("radio", { name: "Specialists" }));
@@ -87,10 +87,42 @@ describe("robot assistant avatars", () => {
     expect(specialists.getByRole("radio", { name: "Travel Planner", checked: true })).toBeTruthy();
     fireEvent.click(specialists.getByRole("radio", { name: "Beach Palm" }));
     expect(screen.getByRole("status").textContent).toBe("specialist-beach-palm lime");
-    fireEvent.click(styles.getByRole("radio", { name: "Clear Shell" }));
+    fireEvent.click(styles.getByRole("radio", { name: "One-Eye Metal" }));
     fireEvent.click(styles.getByRole("radio", { name: "Specialists" }));
     expect(specialists.getByRole("radio", { name: "Beach Palm", checked: true })).toBeTruthy();
     expect(screen.queryByRole("radio", { name: "Mosaic" })).toBeNull();
+  });
+
+  it("pages the Specialists variants in both directions and updates the overflow controls", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    render(<AssistantAvatarPicker avatar={{ shape: "specialist-travel", color: ASSISTANT_ROBOT_AVATARS["specialist-travel"] }}
+      onChange={vi.fn()} seed="picker" />);
+    const variants = screen.getByRole("radiogroup", { name: "Robot variant" });
+    const viewport = variants.closest<HTMLDivElement>(".overflow-x-auto")!;
+    const viewportWidth = 480;
+    const overflow = 384;
+    Object.defineProperties(viewport, {
+      clientWidth: { value: viewportWidth },
+      scrollWidth: { value: viewportWidth + overflow },
+      scrollBy: { value: ({ left = 0 }: ScrollToOptions) => {
+        viewport.scrollLeft = Math.max(0, Math.min(overflow, viewport.scrollLeft + left));
+        fireEvent.scroll(viewport);
+      } },
+    });
+
+    const left = screen.getByRole("button", { name: "Scroll left" });
+    const right = screen.getByRole("button", { name: "Scroll right" });
+    fireEvent.scroll(viewport);
+    expect(left.classList.contains("pointer-events-none")).toBe(true);
+    expect(right.classList.contains("pointer-events-none")).toBe(false);
+    fireEvent.click(right);
+    expect(viewport.scrollLeft).toBe(overflow);
+    expect(viewport.style.maskImage).toMatch(/to right, transparent, /);
+    expect(left.classList.contains("pointer-events-none")).toBe(false);
+    expect(right.classList.contains("pointer-events-none")).toBe(true);
+    fireEvent.click(left);
+    expect(viewport.scrollLeft).toBe(0);
+    expect(right.classList.contains("pointer-events-none")).toBe(false);
   });
 
   it("renders different reactions for successive picker selections and starts the new avatar facing forward", async () => {

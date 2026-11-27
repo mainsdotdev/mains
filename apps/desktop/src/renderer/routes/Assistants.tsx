@@ -201,7 +201,7 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
           <div aria-hidden="true" className="flex items-end gap-3 px-2 py-2 sm:gap-4">
             <AssistantRobotAvatar shape="terminal-amber"
               className="assistant-avatar--floating size-14 -rotate-10 [--avatar-float-delay:-3.2s] sm:size-16" />
-            <AssistantRobotAvatar shape="clear-violet"
+            <AssistantRobotAvatar shape="specialist-travel"
               className="assistant-avatar--floating size-18 sm:size-20" />
             <AssistantRobotAvatar shape="metal-silver"
               className="assistant-avatar--floating size-14 rotate-10 [--avatar-float-delay:-1.6s] sm:size-16" />

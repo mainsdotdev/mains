@@ -3,7 +3,7 @@ import type { AssistantAvatar as Avatar, AssistantTeam } from "@mains/contracts/
 import { useGetSpacesQuery, useGetProviderModelsQuery, useGetProvidersQuery } from "@/lib/redux/api";
 import type { ModelInfo } from "@/lib/redux/api/providersApi";
 import { useAssistantOverviewQuery, useCreateAssistantMutation } from "@/lib/redux/api/assistantsApi";
-import { Button, Input, Label, Select, ModelSelectDropdown } from "@/components/ui";
+import { Button, Input, Label, Select, SegmentedTabs, ModelSelectDropdown } from "@/components/ui";
 import { getModelPrettyName } from "@/lib/model-display";
 import { AssistantAvatarPicker } from "./assistant-avatar-picker";
 import { AssistantCreationHeader } from "./assistant-profile-header";
@@ -11,12 +11,17 @@ import { AssistantTeamEditor } from "./assistant-team-editor";
 import { DEFAULT_ROBOT_AVATAR } from "../lib/assistant-robot-presets";
 import { errorText } from "../lib/assistant-ui";
 
+const MATE_PROVIDER_OPTIONS = [
+  { value: "claude_code", label: "Claude" },
+  { value: "codex", label: "Codex" },
+] as const;
+
 export function AssistantProfileForm({ accountId, onCreated, onClose }: {
   accountId: string; onCreated(id: string, teamId: string | null): void; onClose(): void;
 }) {
   const { data: spaces = [] } = useGetSpacesQuery();
   const { data: providers, isLoading: loadingProviders } = useGetProvidersQuery();
-  const [providerChoice, setProviderId] = useState<string>();
+  const [providerChoice, setProviderChoice] = useState<typeof MATE_PROVIDER_OPTIONS[number]["value"]>();
   const accountSpaces = spaces.filter(s => s.accountId === accountId && !s.isArchived);
   const hasProvider = (id: string) => accountSpaces.some(s => s.providerId === id) &&
     (!providers || providers.some(provider => provider.id === id && provider.isEnabled));
@@ -93,7 +98,16 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
         {teamEditorOpen && <AssistantTeamEditor accountId={accountId} onCreated={onTeamCreated} onCancel={() => setTeamEditorOpen(false)} />}
       </div>
       <div className="glass-outline space-y-3 rounded-2xl p-4">
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2"><span className="text-sm">Provider</span><Select aria-label="Mate provider" value={providerId} onChange={value => { setProviderId(value); setModelId(""); setModelMenu(false); }} options={[{ value: "codex", label: "Codex" }, { value: "claude_code", label: "Claude" }]} /></div>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <span className="text-sm">Provider</span>
+          <SegmentedTabs aria-label="Mate provider" semantics="radiogroup" value={providerId} options={MATE_PROVIDER_OPTIONS}
+            onChange={value => {
+              if (value === providerId) return;
+              setProviderChoice(value);
+              setModelId("");
+              setModelMenu(false);
+            }} />
+        </div>
         <div className="flex items-center justify-between gap-3"><span className="shrink-0 text-sm">Model & effort</span><ModelSelectDropdown model={modelName} models={Array.from(modelsByName.keys())} modelEffortLevelsByModel={levels} onModelChange={value => setModelId(modelsByName.get(value)?.id ?? "")}
           thinkingMode={!!effort} effortLevel={effort} onEffortLevelChange={value => { setEffortChoice(value); setThinking(true); }} onThinkingModeToggle={() => setThinking(!thinking)} allowUltracode={false} openUpward maxMenuHeight={224} isOpen={modelMenu} onToggle={() => setModelMenu(!modelMenu)} onClose={() => setModelMenu(false)} dropdownRef={modelRef} isLoading={isFetching} variant={variant} /></div>
       </div>

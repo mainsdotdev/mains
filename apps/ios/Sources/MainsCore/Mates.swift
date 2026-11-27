@@ -40,7 +40,7 @@ struct MateRobotCatalogue: Decodable, Sendable {
     func preset(for avatar: MateAvatar?, mateID: String) -> Preset? {
         if let avatar, let exact = styles.lazy.flatMap(\.presets).first(where: { $0.id == avatar.shape }) { return exact }
         // Keep a legacy profile's display stable across relaunches and navigation.
-        let presets = styles.filter { ["terminal", "clear", "metal"].contains($0.id) }.flatMap(\.presets)
+        let presets = styles.filter { ["terminal", "metal"].contains($0.id) }.flatMap(\.presets)
         guard !presets.isEmpty else { return defaultPreset }
         let hash = mateID.utf8.reduce(UInt32(2_166_136_261)) { ($0 ^ UInt32($1)) &* 16_777_619 }
         return presets[Int(hash % UInt32(presets.count))]

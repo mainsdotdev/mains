@@ -7,8 +7,6 @@ export const ASSISTANT_AVATAR_COLORS = ["coral", "amber", "lime", "mint", "cyan"
 export const ASSISTANT_ROBOT_AVATARS = {
     "terminal-amber": "amber", "terminal-teal": "mint", "terminal-cherry": "coral", "terminal-indigo": "blue",
     "terminal-plum": "violet", "terminal-olive": "lime", "terminal-frost": "cyan",
-    "clear-violet": "violet", "clear-glacier": "cyan", "clear-jade": "mint", "clear-rose": "rose",
-    "clear-honey": "amber", "clear-lime": "lime", "clear-coral": "coral",
     "metal-silver": "mint", "metal-bronze": "amber", "metal-graphite": "blue", "metal-titanium": "violet",
     "metal-copper": "coral", "metal-ice": "cyan", "metal-moss": "lime",
     "specialist-travel": "mint", "specialist-kitchen": "coral", "specialist-cloud": "cyan",

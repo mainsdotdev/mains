@@ -81,61 +81,6 @@ function terminal(preset: TerminalPreset): RobotPart[] {
   return parts;
 }
 
-const CLEAR_SHELLS = {
-  "clear-violet": {
-    outline: [[-.54, -.65], [.54, -.65], [.79, -.46], [.77, -.06], [.64, .33], [.45, .67], [.32, .86],
-      [.12, .81], [-.23, .59], [-.57, .28], [-.8, -.08], [-.8, -.43]],
-    shell: "#7657ef", core: "#afa1ec", light: "#f6eaff", width: .48, depth: .74,
-  },
-  "clear-glacier": {
-    outline: [[-.61, -.63], [.61, -.63], [.85, -.38], [.77, .12], [.56, .52], [.23, .67],
-      [-.23, .67], [-.56, .52], [-.77, .12], [-.85, -.38]],
-    shell: "#308fae", core: "#8bcbdc", light: "#e4fcff", width: .53, depth: .72,
-  },
-  "clear-jade": {
-    outline: [[-.58, -.64], [.63, -.64], [.8, -.44], [.78, .43], [.6, .64], [-.43, .7], [-.79, .32], [-.82, -.44]],
-    shell: "#29a883", core: "#87cfb0", light: "#dfffef", width: .48, depth: .68,
-  },
-  "clear-rose": {
-    outline: [[-.47, -.72], [.45, -.72], [.75, -.41], [.83, .2], [.54, .57], [-.04, .73], [-.61, .51], [-.82, .17], [-.75, -.41]],
-    shell: "#c74e97", core: "#e6a0c5", light: "#ffe3f8", width: .49, depth: .76,
-  },
-  "clear-honey": {
-    outline: [[-.35, -.79], [.35, -.79], [.64, -.54], [.67, .43], [.44, .78], [-.42, .78], [-.65, .5], [-.66, -.52]],
-    shell: "#d78f24", core: "#edbf67", light: "#fff1bf", width: .44, depth: .75,
-  },
-  "clear-lime": {
-    outline: [[-.58, -.58], [.57, -.58], [.82, -.47], [.94, -.25], [.94, .22], [.75, .49], [.48, .59],
-      [-.55, .59], [-.81, .5], [-.94, .25], [-.94, -.25], [-.82, -.48]],
-    shell: "#8caf27", core: "#c3da66", light: "#f9ffd8", width: .57, depth: .71,
-  },
-  "clear-coral": {
-    outline: [[-.48, -.65], [.48, -.65], [.84, -.23], [.84, .12], [.19, .82], [-.07, .85], [-.8, .28], [-.87, -.07]],
-    shell: "#ee6354", core: "#f6a489", light: "#fff0e6", width: .48, depth: .82,
-  },
-} as const;
-
-function clearShell(preset: typeof CLEAR_SHELLS[keyof typeof CLEAR_SHELLS]): RobotPart[] {
-  const { outline, shell, core, light, width, depth } = preset;
-  const parts = [
-    plate(roundedProfile(outline, .24), [0, 0, 0], depth, .18, shell, "shell"),
-    plate(rectangle(width + .025, .48, .15), [.045, -.012, -.13], .04, .018, "#273041"),
-    plate(rectangle(width + .06, .09, .07), [0, -.5, -.08], .38, .05, "#495367"),
-    plate(rectangle(width * .89, .366, .28), [-.045, -.105, .075], .24, .104, core, "matte", "clearFace"),
-    plate(rectangle(.18, .051, .038), [0, -.36, -.21], .055, .025, "#252939", "metal"),
-  ];
-  for (const [x, y] of [[.07, .27], [.313, .23], [.44, -.092]]) {
-    parts.push(plate(rectangle(.062, .063, .022), [x, y, -.088], .039, .016, "#656a82", "metal"));
-  }
-  for (const x of [-.228, .138]) {
-    parts.push(
-      plate(ellipse(.108, .116), [x, -.11, .194], .03, .012, "#241e39", "glass", "clearFace"),
-      plate(ellipse(.041, .05), [x, -.11, .213], .018, .007, light, "light", "clearEyes"),
-    );
-  }
-  return parts;
-}
-
 const METAL_SHELLS = {
   "metal-silver": {
     outline: [[-.72, -.7], [.72, -.7], [.72, .31], [.34, .71], [-.72, .71]],
@@ -196,13 +141,6 @@ const MODELS: Record<AssistantRobotShape, RobotFactory> = {
   "terminal-plum": () => terminal(TERMINALS["terminal-plum"]),
   "terminal-olive": () => terminal(TERMINALS["terminal-olive"]),
   "terminal-frost": () => terminal(TERMINALS["terminal-frost"]),
-  "clear-violet": () => clearShell(CLEAR_SHELLS["clear-violet"]),
-  "clear-glacier": () => clearShell(CLEAR_SHELLS["clear-glacier"]),
-  "clear-jade": () => clearShell(CLEAR_SHELLS["clear-jade"]),
-  "clear-rose": () => clearShell(CLEAR_SHELLS["clear-rose"]),
-  "clear-honey": () => clearShell(CLEAR_SHELLS["clear-honey"]),
-  "clear-lime": () => clearShell(CLEAR_SHELLS["clear-lime"]),
-  "clear-coral": () => clearShell(CLEAR_SHELLS["clear-coral"]),
   "metal-silver": () => metalShell(METAL_SHELLS["metal-silver"]),
   "metal-bronze": () => metalShell(METAL_SHELLS["metal-bronze"]),
   "metal-graphite": () => metalShell(METAL_SHELLS["metal-graphite"]),

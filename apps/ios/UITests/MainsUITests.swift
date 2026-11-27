@@ -2342,9 +2342,6 @@ final class MainsUITests: XCTestCase {
         drag(from: midpoint, dx: 145)
         checkAvatar("Frost")
 
-        app.buttons["mate-avatar-style-clear"].tap()
-        checkAvatar("Violet Drop")
-        attachScreenshot(app, name: "New Mate – Clear Shell")
         app.buttons["mate-avatar-style-metal"].tap()
         checkAvatar("Silver")
         attachScreenshot(app, name: "New Mate – One-Eye Metal")
