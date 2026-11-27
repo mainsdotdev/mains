@@ -45,6 +45,54 @@ enum VoiceOrbStyle: String, CaseIterable {
     }
 }
 
+enum VoiceOrbColor: String, CaseIterable {
+    case theme, blue, violet, rose, amber, mint
+    static let storageKey = "voiceOrbColor"
+
+    var title: String {
+        switch self {
+        case .theme: String(localized: "Theme")
+        case .blue: String(localized: "Blue")
+        case .violet: String(localized: "Violet")
+        case .rose: String(localized: "Rose")
+        case .amber: String(localized: "Amber")
+        case .mint: String(localized: "Mint")
+        }
+    }
+
+    // Keep the fixed palettes in step with desktop's voice-orb-colors.ts.
+    fileprivate var palette: VoiceOrbPalette {
+        switch self {
+        case .theme: VoiceOrbPalette(0x2257CC, 0xB9CDF9, 0xEEF3FD, 0xBE93DC, 0xA5DEB6)
+        case .blue: VoiceOrbPalette(0x245CDD, 0x9ABBFC, 0xF1F6FF, 0x79D5D2, 0xBEA4F3)
+        case .violet: VoiceOrbPalette(0x7C3AED, 0xCCB8F9, 0xF9F5FF, 0x93BFF2, 0xF2A8CE)
+        case .rose: VoiceOrbPalette(0xDC435C, 0xF2ACBB, 0xFFF1F4, 0xF3B878, 0xAAAFE9)
+        case .amber: VoiceOrbPalette(0xD97706, 0xF5C987, 0xFFF8E7, 0xF28F91, 0xF7DC86)
+        case .mint: VoiceOrbPalette(0x078569, 0x8BDCC2, 0xEFFFF7, 0xA3C9F5, 0xF5DFA0)
+        }
+    }
+}
+
+private struct VoiceOrbPalette {
+    let deep: Shader.Argument
+    let soft: Shader.Argument
+    let light: Shader.Argument
+    let secondary: Shader.Argument
+    let tertiary: Shader.Argument
+
+    init(_ deep: UInt32, _ soft: UInt32, _ light: UInt32, _ secondary: UInt32, _ tertiary: UInt32) {
+        self.deep = Self.rgb(deep)
+        self.soft = Self.rgb(soft)
+        self.light = Self.rgb(light)
+        self.secondary = Self.rgb(secondary)
+        self.tertiary = Self.rgb(tertiary)
+    }
+
+    private static func rgb(_ hex: UInt32) -> Shader.Argument {
+        .float3(Float(hex >> 16) / 255, Float((hex >> 8) & 0xff) / 255, Float(hex & 0xff) / 255)
+    }
+}
+
 struct VoicePresentationMenu: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -122,6 +170,7 @@ struct VoiceOrb: View {
     let voice: RealtimeVoiceController
     var size: CGFloat = 104
     @AppStorage(VoiceOrbStyle.storageKey) private var style = VoiceOrbStyle.water
+    @AppStorage(VoiceOrbColor.storageKey) private var color = VoiceOrbColor.theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.voiceSurfaceVisible) private var surfaceVisible
@@ -150,7 +199,7 @@ struct VoiceOrb: View {
             let time = timeline.date.timeIntervalSinceReferenceDate
             let frame = moving ? envelope.sample(input: voice.muted ? 0 : voice.inputLevel, output: voice.outputLevel,
                                                 time: time, style: style) : VoiceOrbFrame()
-            VoiceOrbArtwork(style: style, size: size, frame: frame)
+            VoiceOrbArtwork(style: style, size: size, color: color, frame: frame)
                 .opacity(connecting && moving ? 0.84 + 0.16 * cos(time * .pi / 0.8) : 1)
         }
         .frame(width: size, height: size)
@@ -189,15 +238,20 @@ struct VoiceOrbArtwork: View {
     #endif
     let style: VoiceOrbStyle
     let size: CGFloat
+    let color: VoiceOrbColor
     var frame = VoiceOrbFrame()
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let palette = color.palette
+        let shading: [Shader.Argument] = style == .water
+            ? [.float(colorScheme == .dark ? 1 : 0), .float(color == .theme ? 0 : 1)]
+            : [palette.secondary, palette.tertiary]
         Rectangle().fill(.white)
             .colorEffect(Shader(function: style.shaderFunction, arguments: [
                 .float2(Float(size), Float(size)), .float(frame.flow),
-                .float(frame.levels.x), .float(frame.levels.y), .float(colorScheme == .dark ? 1 : 0)
-            ]))
+                .float(frame.levels.x), .float(frame.levels.y), palette.deep, palette.soft, palette.light
+            ] + shading))
             .frame(width: size, height: size)
     }
 }

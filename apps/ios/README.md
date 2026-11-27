@@ -134,9 +134,10 @@ stops when the voice settings page closes or the app becomes inactive. An unconf
 retains its original command identity for **Check saved voice** before another
 selection or a new voice call.
 
-**Settings → GPT Live → Orb Style** previews Water and the desktop Cloud, Sphere
-and Aurora styles in the stock desktop palette. Water is the default. The phone
-remembers the style and applies it to Focus, Conversation and the call dock.
+**Settings → GPT Live → Orb Style** lets you swipe between Water, Cloud, Sphere
+and Aurora, with the desktop color palettes below the preview. Water and Theme
+are the defaults. The phone remembers the style and color and applies them to
+Focus, Conversation and the call dock.
 The bundled Metal shaders use the existing microphone and GPT audio-level
 meters through a local attack/release envelope.
 Rendering pauses offscreen/inactive, uses 30 fps (15 in Low Power Mode), and becomes

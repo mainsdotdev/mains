@@ -82,7 +82,7 @@ struct AsciiSpinner: View {
     }
 }
 
-private struct ActivityShimmer: ViewModifier {
+struct ActivityShimmer: ViewModifier {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
@@ -90,10 +90,15 @@ private struct ActivityShimmer: ViewModifier {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.conversationPaneVisible) private var paneVisible
     @State private var inViewport = false
+    let animated: Bool
+
+    init(animated: Bool = true) {
+        self.animated = animated
+    }
 
     func body(content: Content) -> some View {
         content.overlay {
-            if paneVisible && inViewport && !reduceMotion && scenePhase == .active {
+            if animated && paneVisible && inViewport && !reduceMotion && scenePhase == .active {
                 GeometryReader { geometry in
                     TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
                         let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2

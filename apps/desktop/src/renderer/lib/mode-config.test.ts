@@ -88,12 +88,6 @@ describe("MODE_CONFIGS table invariants", () => {
     }
   });
 
-  it("shows the plugins picker only in work", () => {
-    expect(MODE_CONFIGS.developer.showPluginsButton).toBe(false);
-    expect(MODE_CONFIGS.work.showPluginsButton).toBe(true);
-    expect(MODE_CONFIGS.chat.showPluginsButton).toBe(false);
-  });
-
   it("keeps chat free of every composer mode control", () => {
     expect(MODE_CONFIGS.chat.showPlanControls).toBe(false);
     expect(MODE_CONFIGS.chat.showGoalControls).toBe(false);

@@ -259,7 +259,10 @@ private struct MateSkillAuthor: View {
 
                         ZStack(alignment: .leading) {
                             Text("Generate Draft").opacity(generating ? 0 : 1).accessibilityHidden(generating)
-                            Text("Generating draft…").opacity(generating ? 1 : 0).accessibilityHidden(!generating)
+                            Text("Generating draft…")
+                                .modifier(ActivityShimmer(animated: generating))
+                                .opacity(generating ? 1 : 0)
+                                .accessibilityHidden(!generating)
                         }
                     }
                     .frame(maxWidth: .infinity)

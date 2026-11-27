@@ -74,11 +74,6 @@ export interface ModeConfigDescriptor {
   /** Tab strip above the content; false = tab-less single-chat view. */
   showTabs: boolean;
   /**
-   * Plugins picker in the composer toolbar. Developer reaches plugins through
-   * the `$` / `@` menus; work gets a visible entry point instead.
-   */
-  showPluginsButton: boolean;
-  /**
    * The right panel (Files/Changes/Activity) and its open/close toggle.
    * The browser toggle is independent and survives without it.
    */
@@ -117,7 +112,6 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     ...MODE_COMPOSER_CONTROLS.developer,
     showTasksNav: true,
     showTabs: true,
-    showPluginsButton: false,
     showRightPanel: true,
     showTurnChanges: true,
   },
@@ -149,7 +143,6 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     ...MODE_COMPOSER_CONTROLS.work,
     showTasksNav: false,
     showTabs: false,
-    showPluginsButton: true,
     showRightPanel: false,
     showTurnChanges: true,
   },
@@ -178,7 +171,6 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     ...MODE_COMPOSER_CONTROLS.chat,
     showTasksNav: false,
     showTabs: false,
-    showPluginsButton: false,
     showRightPanel: false,
     showTurnChanges: false,
   },

@@ -24,12 +24,6 @@ import { isAbsoluteFilePath, isWindowsAbsolutePath } from "@/lib/file-path";
  */
 export type UnifiedContextTrigger = "@" | "/" | "$" | "#";
 
-/**
- * Optional narrowing on top of the trigger: the toolbar's plugins picker opens
- * the "$" menu restricted to the plugins bucket, with no token in the text.
- */
-export type UnifiedContextBucket = "plugins";
-
 interface FetchState {
   entries: DirEntry[];
   loading: boolean;
@@ -205,8 +199,6 @@ interface UnifiedContextDropdownProps {
   isOpen: boolean;
   trigger: UnifiedContextTrigger;
   providerId?: string;
-  /** Restrict the menu to one skill bucket (toolbar-opened pickers). */
-  bucket?: UnifiedContextBucket | null;
   filterText: string;
   workspacePath?: string;
   projectId?: string;
@@ -222,8 +214,6 @@ interface UnifiedContextDropdownProps {
   onSelectIssue: (issue: IssueWithEntity) => void;
   onClose: () => void;
   dropdownRef: RefObject<HTMLDivElement | null>;
-  /** A toolbar trigger that opened this menu — clicks on it are not "outside". */
-  triggerRef?: RefObject<HTMLElement | null>;
 }
 
 function buildSections(
@@ -301,7 +291,6 @@ export function UnifiedContextDropdown({
   isOpen,
   trigger,
   providerId,
-  bucket = null,
   filterText,
   workspacePath,
   projectId,
@@ -317,15 +306,13 @@ export function UnifiedContextDropdown({
   onSelectIssue,
   onClose,
   dropdownRef,
-  triggerRef,
 }: UnifiedContextDropdownProps) {
-  const pluginsOnly = bucket === "plugins";
-  const isCombined = !pluginsOnly && (trigger === "@" || trigger === "/");
-  const wantsSkills = isCombined || trigger === "$" || pluginsOnly;
+  const isCombined = trigger === "@" || trigger === "/";
+  const wantsSkills = isCombined || trigger === "$";
   const wantsFiles = isCombined && Boolean(workspacePath);
-  const wantsIssues = isCombined || (!pluginsOnly && trigger === "#");
+  const wantsIssues = isCombined || trigger === "#";
   const wantsCommands = isCombined;
-  const wantsMacApps = providerId === PROVIDER_IDS.codex && trigger === "@" && !pluginsOnly && filterText.trim().length > 0;
+  const wantsMacApps = providerId === PROVIDER_IDS.codex && trigger === "@" && filterText.trim().length > 0;
 
   const { currentData: mentionableApps = [], isFetching: isSearchingMacApps } = useGetMentionableAppsQuery(filterText, {
     skip: !isOpen || !wantsMacApps,
@@ -337,13 +324,9 @@ export function UnifiedContextDropdown({
     error: null,
   });
 
-  useClickOutside(
-    dropdownRef,
-    () => {
-      if (isOpen) onClose();
-    },
-    triggerRef,
-  );
+  useClickOutside(dropdownRef, () => {
+    if (isOpen) onClose();
+  });
 
   const { dirPath, nameFilter } = useMemo(() => parseFileFilterText(filterText, workspacePath), [filterText, workspacePath]);
 
@@ -509,15 +492,15 @@ export function UnifiedContextDropdown({
   }, [filteredFileEntries, isWorkspaceFileSearch, workspacePath]);
 
   const sections = useMemo(() => {
-    const assistantRows: FlatRow[] = trigger === "@" && !pluginsOnly
+    const assistantRows: FlatRow[] = trigger === "@"
       ? assistantsReadyForWork(assistantOverview)
         .filter(assistant => `${assistant.name} ${assistant.description}`.toLocaleLowerCase().includes(filterText.toLocaleLowerCase()))
         .map(assistant => ({ kind: "assistant", assistant }))
       : [];
     return [...(assistantRows.length ? [{ title: "Mates", rows: assistantRows }] : []), ...buildSections(
       wantsSkills ? pluginSkills : [],
-      wantsSkills && !pluginsOnly ? [...matchingMacApps, ...macSkills] : [],
-      wantsSkills && !pluginsOnly ? regularSkills : [],
+      wantsSkills ? [...matchingMacApps, ...macSkills] : [],
+      wantsSkills ? regularSkills : [],
       wantsFiles ? sortedFiles : [],
       dirPath,
       wantsFiles,
@@ -527,7 +510,6 @@ export function UnifiedContextDropdown({
   }, [
     assistantOverview, trigger, filterText,
     wantsSkills,
-    pluginsOnly,
     pluginSkills,
     macSkills,
     matchingMacApps,
@@ -618,21 +600,19 @@ export function UnifiedContextDropdown({
     flatRows.length === 0 &&
     ((wantsSkills && isLoadingSkills) || (wantsMacApps && isSearchingMacApps
       ? true
-      : trigger === "$" || pluginsOnly
+      : trigger === "$"
       ? isLoadingSkills
       : trigger === "#"
         ? Boolean(projectId) && isLoadingIssues
         : fetchState.loading || (Boolean(projectId) && isLoadingIssues)));
 
-  const emptyText = pluginsOnly
-    ? "No plugins installed"
-    : trigger === "$"
-      ? "No skills available"
-      : trigger === "#"
-        ? projectId
-          ? "No matching issues"
-          : "No project linked"
-        : "No matches";
+  const emptyText = trigger === "$"
+    ? "No skills available"
+    : trigger === "#"
+      ? projectId
+        ? "No matching issues"
+        : "No project linked"
+      : "No matches";
 
   return (
     <div ref={dropdownRef} >

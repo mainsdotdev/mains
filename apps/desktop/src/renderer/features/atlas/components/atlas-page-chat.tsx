@@ -418,7 +418,6 @@ function AtlasWorkingChat({
             projectId={page.collectionId ?? undefined}
             layout="floating"
             floatingChatMode={state.mode}
-            showPluginsButton={false}
             floatingAutoFocus={!runId && state.mode === "details"}
             onFloatingFocus={() => {
               if (state.mode === "input") update({ mode: "details" });

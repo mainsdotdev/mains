@@ -7,43 +7,147 @@ struct VoiceOrbSettingsView: View {
     @ObserveHotReload private var hotReload
     #endif
     @Binding var selection: VoiceOrbStyle
+    @AppStorage(VoiceOrbColor.storageKey) private var color = VoiceOrbColor.theme
     private let previewFrame = VoiceOrbFrame(levels: SIMD2(0.42, 0.58), flow: 1.4)
 
     var body: some View {
-        List {
-            Section {
-                VoiceOrbArtwork(style: selection, size: 168, frame: previewFrame)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .accessibilityHidden(true)
-                    .listRowBackground(Color.clear)
-            }
-            Section {
-                ForEach(VoiceOrbStyle.allCases, id: \.self) { style in
-                    Button { selection = style } label: {
-                        HStack(spacing: 12) {
-                            VoiceOrbArtwork(style: style, size: 44, frame: previewFrame)
-                                .accessibilityHidden(true)
-                            Text(style.title)
-                            Spacer(minLength: 8)
-                            if selection == style {
-                                Image(systemName: "checkmark").font(.body.weight(.semibold))
-                                    .foregroundStyle(AppBrand.accent).accessibilityHidden(true)
-                            }
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 12) {
+                    Text(selection.title)
+                        .font(.largeTitle.weight(.semibold).width(.expanded))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 16)
+                        .accessibilityHidden(true)
+
+                    VoiceOrbCarousel(selection: $selection, color: color, width: min(geometry.size.width, 520), frame: previewFrame)
+
+                    HStack(spacing: 6) {
+                        ForEach(VoiceOrbStyle.allCases, id: \.self) { style in
+                            Capsule().fill(Color.primary.opacity(selection == style ? 0.85 : 0.25))
+                                .frame(width: selection == style ? 18 : 6, height: 6)
                         }
-                        .foregroundStyle(.primary)
-                        .frame(minHeight: 44)
-                        .contentShape(.rect)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(selection == style ? .isSelected : [])
-                    .accessibilityIdentifier("voiceOrbChoice-" + style.rawValue)
+                    .accessibilityHidden(true)
+
+                    paletteOptions.padding(.top, 16)
                 }
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity, minHeight: geometry.size.height)
             }
+            .scrollBounceBehavior(.basedOnSize)
+            .navigationHeaderFade()
         }
-        .navigationHeaderFade(background: Color(.systemGroupedBackground))
+        .background(Color(.systemBackground))
         .expandedNavigationTitle("Orb Style")
         .toolbar(.visible, for: .navigationBar)
+    }
+
+    private var paletteOptions: some View {
+        VStack(spacing: 6) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 44, maximum: 44), spacing: 6)], spacing: 6) {
+                ForEach(VoiceOrbColor.allCases, id: \.self) { candidate in
+                    Button { color = candidate } label: {
+                        VoiceOrbArtwork(style: selection, size: 32, color: candidate, frame: previewFrame)
+                            .frame(width: 44, height: 44)
+                            .overlay {
+                                Circle()
+                                    .strokeBorder(Color.primary.opacity(color == candidate ? 0.85 : 0), lineWidth: 2)
+                            }
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(candidate.title)
+                    .accessibilityAddTraits(color == candidate ? .isSelected : [])
+                    .accessibilityIdentifier("voiceOrbColor-" + candidate.rawValue)
+                }
+            }
+            .frame(maxWidth: 294)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Orb color")
+
+            Text(color.title)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, 12)
+        .sensoryFeedback(.selection, trigger: color)
+    }
+}
+
+private struct VoiceOrbCarousel: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    @Binding var selection: VoiceOrbStyle
+    let color: VoiceOrbColor
+    let width: CGFloat
+    let frame: VoiceOrbFrame
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var index: Int
+    @State private var dragOffset: CGFloat = 0
+
+    private static let styles = VoiceOrbStyle.allCases
+
+    init(selection: Binding<VoiceOrbStyle>, color: VoiceOrbColor, width: CGFloat, frame: VoiceOrbFrame) {
+        _selection = selection
+        self.color = color
+        self.width = width
+        self.frame = frame
+        _index = State(initialValue: Self.styles.firstIndex(of: selection.wrappedValue) ?? 0)
+    }
+
+    var body: some View {
+        let size = min(250, width * 0.64)
+        let spacing = size * 0.86 + 8
+        ZStack {
+            ForEach((index - 2)...(index + 2), id: \.self) { slot in
+                let x = CGFloat(slot - index) * spacing + dragOffset
+                VoiceOrbArtwork(style: style(at: slot), size: size, color: color, frame: frame)
+                    .modifier(PickerCarouselArc(x: x, radius: max(1, width * 0.58), reduceMotion: reduceMotion))
+                    .transition(.identity)
+            }
+        }
+        .frame(width: width, height: size + 32)
+        .clipped()
+        .overlay {
+            PickerCarouselGestures(
+                onDrag: { dragOffset = min(spacing, max(-spacing, $0)) },
+                onEnd: { distance in
+                    select(step: abs(distance) >= spacing / 3 ? (distance < 0 ? 1 : -1) : 0)
+                },
+                onTap: { x in
+                    if abs(x) >= spacing / 2 { select(step: x < 0 ? -1 : 1) }
+                }
+            )
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Orb style")
+        .accessibilityValue(selection.title)
+        .accessibilityIdentifier("voiceOrbCarousel")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: select(step: 1)
+            case .decrement: select(step: -1)
+            @unknown default: break
+            }
+        }
+        .sensoryFeedback(.selection, trigger: selection)
+    }
+
+    private func style(at slot: Int) -> VoiceOrbStyle {
+        let count = Self.styles.count
+        return Self.styles[(slot % count + count) % count]
+    }
+
+    private func select(step: Int) {
+        let next = index + step
+        withAnimation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.88)) {
+            index = next
+            dragOffset = 0
+        }
+        selection = style(at: next)
     }
 }
 

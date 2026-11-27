@@ -43,7 +43,6 @@ import { appApi } from "@/lib/transport";
 import { useRealtimeVoice } from "../hooks/use-realtime-voice";
 import {
   UnifiedContextDropdown,
-  type UnifiedContextBucket,
   type UnifiedContextTrigger,
 } from "@/features/workspace/components/unified-context-dropdown";
 import type { IssueWithEntity } from "@/lib/redux/api/entitiesApi";
@@ -63,7 +62,6 @@ import { useContextUsage } from "../hooks/use-context-usage";
 import { useProviderModels } from "../hooks/use-provider-models";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { useGetProviderAccountInfoQuery } from "@/lib/redux/api";
-import { PROVIDER_IDS } from "../../../../shared/provider-ids";
 import {
   VISUALIZATION_FOLLOW_UP_EVENT,
   type VisualizationFollowUpDetail,
@@ -137,8 +135,6 @@ interface UnifiedMenuState {
   visible: boolean;
   filter: string;
   trigger: UnifiedContextTrigger;
-  /** Set only by toolbar pickers; cleared whenever the menu closes. */
-  bucket: UnifiedContextBucket | null;
 }
 
 export type { ComposerSendTarget } from "../lib/composer-send-target";
@@ -157,7 +153,6 @@ interface WorkspaceInputProps {
   sendDisabled?: boolean;
   allowVoice?: boolean;
   showGoalButton?: boolean;
-  showPluginsButton?: boolean;
   placeholder?: string;
   inputLabel?: string;
   sendLabel?: string;
@@ -209,7 +204,6 @@ export function WorkspaceInput({
   sendDisabled: externalSendDisabled = false,
   allowVoice = true,
   showGoalButton = true,
-  showPluginsButton = true,
   placeholder,
   inputLabel,
   sendLabel = "Send prompt",
@@ -265,7 +259,6 @@ export function WorkspaceInput({
     return () => cancelAnimationFrame(frame);
   }, [suspended, layout, floatingAutoFocus]);
   const unifiedContextDropdownRef = useRef<HTMLDivElement>(null);
-  const pluginsButtonRef = useRef<HTMLButtonElement>(null);
   const {
     files: contextFiles,
     items: contextItems,
@@ -401,11 +394,8 @@ export function WorkspaceInput({
   }, [onGoalChange, suspended]);
 
   const [unifiedMenu, updateUnifiedMenu] = useReducer(
-    (prev: UnifiedMenuState, next: Partial<UnifiedMenuState>) => {
-      const merged = { ...prev, ...next };
-      return merged.visible ? merged : { ...merged, bucket: null };
-    },
-    { visible: false, filter: "", trigger: "@", bucket: null },
+    (prev: UnifiedMenuState, next: Partial<UnifiedMenuState>) => ({ ...prev, ...next }),
+    { visible: false, filter: "", trigger: "@" },
   );
 
   const selectAssistant = (assistant: Assistant) => {
@@ -417,26 +407,6 @@ export function WorkspaceInput({
       if (next !== null) onGoalChange(next);
     }
   };
-
-  // The toolbar plugin picker is a Codex-only capability. Other providers may
-  // still expose skills through the context menu, but they do not show this button.
-  const pluginSkills = useMemo(
-    () =>
-      activeProviderId === PROVIDER_IDS.codex
-        ? providerSkills.filter(
-            (skill) => skill.scope === "plugin" && skill.userInvokable !== false,
-          )
-        : [],
-    [activeProviderId, providerSkills],
-  );
-  const pluginsMenuOpen = unifiedMenu.visible && unifiedMenu.bucket === "plugins";
-  const handleTogglePluginsMenu = useCallback(() => {
-    if (pluginsMenuOpen) {
-      updateUnifiedMenu({ visible: false, filter: "" });
-      return;
-    }
-    updateUnifiedMenu({ visible: true, filter: "", trigger: "$", bucket: "plugins" });
-  }, [pluginsMenuOpen]);
 
   // Detect @ / context menu when goal is set externally (e.g. quick actions)
   useEffect(() => {
@@ -472,18 +442,19 @@ export function WorkspaceInput({
       updateUnifiedMenu({ visible: false, filter: "" });
       return;
     }
-    const match = before.match(/(?:^|\s)([/@#$])(\S*)$/);
+    const match = before.match(
+      effectiveMode === "work" ? /(?:^|\s)([/@])(\S*)$/ : /(?:^|\s)([/@#$])(\S*)$/,
+    );
     if (match) {
       updateUnifiedMenu({
         filter: match[2],
         visible: true,
         trigger: match[1] as UnifiedContextTrigger,
-        bucket: null,
       });
     } else {
       updateUnifiedMenu({ visible: false, filter: "" });
     }
-  }, []);
+  }, [effectiveMode]);
 
   const addAdditionalDirectory = useCallback((folderPath: string) => {
     const normalized = folderPath.trim();
@@ -1012,10 +983,6 @@ export function WorkspaceInput({
       onPlanModeToggle={handlePlanModeToggle}
       goalMode={goalMode}
       onGoalModeToggle={showGoalButton ? handleGoalModeToggle : undefined}
-      pluginSkills={pluginSkills}
-      pluginsMenuOpen={pluginsMenuOpen}
-      onTogglePluginsMenu={showPluginsButton ? handleTogglePluginsMenu : undefined}
-      pluginsButtonRef={pluginsButtonRef}
       thinkingMode={thinkingMode}
       onThinkingModeToggle={handleThinkingModeToggle}
       fastMode={fastMode}
@@ -1176,7 +1143,6 @@ export function WorkspaceInput({
               isOpen={unifiedMenu.visible}
               trigger={unifiedMenu.trigger}
               providerId={activeProviderId}
-              bucket={unifiedMenu.bucket}
               filterText={unifiedMenu.filter}
               workspacePath={workspacePath}
               projectId={projectId}
@@ -1192,7 +1158,6 @@ export function WorkspaceInput({
               onSelectIssue={handleUnifiedIssueSelect}
               onClose={() => updateUnifiedMenu({ visible: false, filter: "" })}
               dropdownRef={unifiedContextDropdownRef}
-              triggerRef={pluginsButtonRef}
             />
           </div>
           {(compactFloating || assistantComposer) && toolbar}

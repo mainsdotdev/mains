@@ -2566,7 +2566,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["scanPairingCode"].waitForExistence(timeout: 5))
     }
 
-    func testGPTLiveOrbStylePickerPersistsSelection() {
+    func testGPTLiveOrbPickerSwipesAndPersistsStyleAndColor() throws {
         continueAfterFailure = false
         let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
@@ -2580,23 +2580,46 @@ final class MainsUITests: XCTestCase {
         }
 
         openPicker()
-        let styles = [("water", "Water"), ("cloud", "Cloud"), ("sphere", "Sphere"), ("aurora", "Aurora")]
-        let choices = styles.map { app.buttons["voiceOrbChoice-\($0.0)"] }
+        let carousel = app.descendants(matching: .any)["voiceOrbCarousel"].firstMatch
+        let styles = ["Water", "Cloud", "Sphere", "Aurora"]
+        let palettes = ["theme", "blue", "violet", "rose", "amber", "mint"].map { app.buttons["voiceOrbColor-\($0)"] }
         let back = app.navigationBars.buttons["BackButton"]
-        XCTAssertTrue(choices[0].waitForExistence(timeout: 5))
-        let original = choices.firstIndex(where: \.isSelected) ?? 0
-        for ((key, title), choice) in zip(styles, choices) {
-            choice.tap()
-            XCTAssertTrue(choice.isSelected)
-            if key != "water" { attachScreenshot(app, name: "GPT Live – \(title) picker preview") }
+        XCTAssertTrue(carousel.waitForExistence(timeout: 5))
+        let originalStyle = try XCTUnwrap(styles.firstIndex { $0 == carousel.value as? String })
+        XCTAssertTrue(palettes.allSatisfy(\.isHittable))
+        let originalPalette = try XCTUnwrap(palettes.first { $0.isSelected })
+
+        func checkStyle(_ title: String) {
+            let expected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", title), object: carousel)
+            XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 5), .completed)
         }
+
+        carousel.swipeRight()
+        checkStyle(styles[(originalStyle + 3) % styles.count])
+        for step in 0..<styles.count {
+            carousel.swipeLeft()
+            let title = styles[(originalStyle + step) % styles.count]
+            checkStyle(title)
+            attachScreenshot(app, name: "GPT Live – \(title) picker preview")
+        }
+
+        let savedStyle = try XCTUnwrap(carousel.value as? String)
+        let newPalette = palettes[4].isSelected ? palettes[5] : palettes[4]
+        let beforeColor = carousel.screenshot().pngRepresentation
+        newPalette.tap()
+        XCTAssertTrue(newPalette.isSelected)
+        XCTAssertNotEqual(carousel.screenshot().pngRepresentation, beforeColor)
+        attachScreenshot(app, name: "GPT Live – selected orb color")
+
         app.terminate()
         app.launch()
         openPicker()
-        let aurora = app.buttons["voiceOrbChoice-aurora"]
-        XCTAssertTrue(aurora.waitForExistence(timeout: 5))
-        XCTAssertTrue(aurora.isSelected)
-        choices[original].tap()
+        XCTAssertTrue(carousel.waitForExistence(timeout: 5))
+        checkStyle(savedStyle)
+        XCTAssertTrue(newPalette.isSelected)
+        carousel.swipeLeft()
+        checkStyle(styles[originalStyle])
+        originalPalette.tap()
         back.tap()
         back.tap()
         forgetFixture(app)

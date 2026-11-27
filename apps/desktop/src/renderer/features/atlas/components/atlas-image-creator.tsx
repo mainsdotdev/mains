@@ -389,7 +389,6 @@ function ImageComposer({
       sendDisabled={!lifecycle.canSubmit(canSubmit)}
       allowVoice={false}
       showGoalButton={false}
-      showPluginsButton={false}
       providerId={providerId}
       selectedModel={conversation.settings.model}
       onModelChange={conversation.changeModel}

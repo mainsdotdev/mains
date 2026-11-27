@@ -211,7 +211,7 @@ private struct MateAvatarCarousel: View {
                         }
                     }
                         .frame(width: size, height: size)
-                        .modifier(MateAvatarArc(x: x, radius: max(1, width * 0.58), reduceMotion: reduceMotion))
+                        .modifier(PickerCarouselArc(x: x, radius: max(1, width * 0.58), reduceMotion: reduceMotion))
                         .transition(reduceMotion || slot == index ? .identity : .offset(x: exitDistance))
                 }
             }
@@ -219,7 +219,7 @@ private struct MateAvatarCarousel: View {
             .clipped()
             .overlay {
                 if isSelecting {
-                    MateAvatarGestures(
+                    PickerCarouselGestures(
                         rotationSize: renderedSlots.contains(index) ? size : 0,
                         onDrag: { dragOffset = min(spacing, max(-spacing, $0)) },
                         onEnd: { distance in
@@ -286,13 +286,13 @@ struct RobotPreviewDrag: Equatable {
     let held: Bool
 }
 
-/// A hold on the center model owns rotation. Quick swipes keep their horizontal and vertical roles.
-private struct MateAvatarGestures: UIViewRepresentable {
-    let rotationSize: CGFloat
+/// Horizontal swipes move the picker. A hold can give the center model its own rotation gesture.
+struct PickerCarouselGestures: UIViewRepresentable {
+    var rotationSize: CGFloat = 0
     var onDrag: (CGFloat) -> Void
     var onEnd: (CGFloat) -> Void
     var onTap: (CGFloat) -> Void
-    var onRotate: (RobotPreviewDrag) -> Void
+    var onRotate: ((RobotPreviewDrag) -> Void)? = nil
     @Environment(\.isEnabled) private var isEnabled
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -303,16 +303,18 @@ private struct MateAvatarGestures: UIViewRepresentable {
         let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.panChanged(_:)))
         pan.maximumNumberOfTouches = 1
         pan.delegate = coordinator
-        let hold = UILongPressGestureRecognizer(target: coordinator, action: #selector(Coordinator.rotated(_:)))
-        hold.minimumPressDuration = 0.25
-        hold.allowableMovement = 12
-        hold.delegate = coordinator
-        pan.require(toFail: hold)
         let tap = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.tapped(_:)))
         tap.require(toFail: pan)
         view.addGestureRecognizer(pan)
-        view.addGestureRecognizer(hold)
         view.addGestureRecognizer(tap)
+        if onRotate != nil {
+            let hold = UILongPressGestureRecognizer(target: coordinator, action: #selector(Coordinator.rotated(_:)))
+            hold.minimumPressDuration = 0.25
+            hold.allowableMovement = 12
+            hold.delegate = coordinator
+            pan.require(toFail: hold)
+            view.addGestureRecognizer(hold)
+        }
         return view
     }
 
@@ -322,9 +324,9 @@ private struct MateAvatarGestures: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var parent: MateAvatarGestures
+        var parent: PickerCarouselGestures
         private var rotationStart: CGPoint?
-        init(_ parent: MateAvatarGestures) { self.parent = parent }
+        init(_ parent: PickerCarouselGestures) { self.parent = parent }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
@@ -365,13 +367,13 @@ private struct MateAvatarGestures: UIViewRepresentable {
             if hold.state == .began { rotationStart = point }
             guard let origin = rotationStart else { return }
             let held = hold.state == .began || hold.state == .changed
-            parent.onRotate(RobotPreviewDrag(offset: CGPoint(x: point.x - origin.x, y: point.y - origin.y), held: held))
+            parent.onRotate?(RobotPreviewDrag(offset: CGPoint(x: point.x - origin.x, y: point.y - origin.y), held: held))
             if !held { rotationStart = nil }
         }
     }
 }
 
-private struct MateAvatarArc: ViewModifier, Animatable {
+struct PickerCarouselArc: ViewModifier, Animatable {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif

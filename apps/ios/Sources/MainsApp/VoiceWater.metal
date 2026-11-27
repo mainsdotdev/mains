@@ -32,7 +32,8 @@ static float3 voiceWaterEnvironment(float3 direction, float dark) {
 }
 
 [[ stitchable ]] half4 voiceWater(float2 position, half4 source, float2 size,
-                                 float time, float input, float output, float dark) {
+                                 float time, float input, float output,
+                                 float3 deep, float3 soft, float3 light, float dark, float recolor) {
     float2 uv = (position - size * 0.5) / (min(size.x, size.y) * 0.5);
     float energy = saturate(max(input, output));
     float angle = atan2(uv.y, uv.x);
@@ -84,16 +85,23 @@ static float3 voiceWaterEnvironment(float3 direction, float dark) {
     color += float3(0.90, 0.98, 1.0) * (glint * 1.0 + shoulder * 0.16);
     color *= 0.88 + depth * 0.12;
     color = color / (1.0 + color * 0.22);
+    if (recolor > 0.0) {
+        // Map the shaded water to the chosen palette and keep its bright reflections.
+        float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
+        color = mix(deep, soft, smoothstep(0.32, 0.74, luminance));
+        color = mix(color, light, smoothstep(0.68, 1.0, luminance));
+    }
     return half4(half3(color * alpha), half(alpha)) * source.a;
 }
 
-// Metal port of the desktop voice-orb-renderer shader. These are its stock
-// Theme palette colors after the CSS values are resolved to sRGB.
-constant float3 voiceOrbDeep = float3(34, 87, 204) / 255.0;
-constant float3 voiceOrbSoft = float3(185, 205, 249) / 255.0;
-constant float3 voiceOrbLight = float3(238, 243, 253) / 255.0;
-constant float3 voiceOrbSecondary = float3(190, 147, 220) / 255.0;
-constant float3 voiceOrbTertiary = float3(165, 222, 182) / 255.0;
+// Metal port of the desktop voice-orb-renderer shader.
+struct VoiceOrbPalette {
+    float3 deep;
+    float3 soft;
+    float3 light;
+    float3 secondary;
+    float3 tertiary;
+};
 
 static float voiceOrbHash(float2 p) {
     p = fract(p * float2(123.34, 456.21));
@@ -121,7 +129,7 @@ static float voiceOrbCloud(float2 p) {
     return value;
 }
 
-static float3 voiceCloudColor(float2 p, float flow, float energy) {
+static float3 voiceCloudColor(float2 p, float flow, float energy, VoiceOrbPalette palette) {
     float2 drift = float2(flow * 0.24, -flow * 0.18);
     float2 breeze = float2(sin(flow * 0.42), cos(flow * 0.31)) * 0.3;
     float2 wind = float2(voiceOrbCloud(p * 1.25 + drift),
@@ -134,9 +142,9 @@ static float3 voiceCloudColor(float2 p, float flow, float energy) {
     float billow = voiceOrbCloud(curl * 1.1 - drift * 0.65 + 5.6);
     float ribbon = curl.x * 0.46 + curl.y * 0.2 + (mist - 0.48) * 2.15 + (billow - 0.48) * 0.65;
     float warmth = smoothstep(-0.55, 0.72, ribbon);
-    float3 color = mix(voiceOrbDeep, voiceOrbSoft, warmth);
+    float3 color = mix(palette.deep, palette.soft, warmth);
     float light = smoothstep(0.04, 0.72, ribbon + billow * 0.25);
-    color = mix(color, voiceOrbLight, light);
+    color = mix(color, palette.light, light);
 
     // Shading stays gentle; only the interior flows, never the circular edge.
     float shade = 0.96 + 0.04 * smoothstep(-1.0, 1.0, p.y - p.x * 0.3);
@@ -161,7 +169,7 @@ static float voiceOrbVolumeCloud(float3 p) {
     return voiceOrbVolumeNoise(p) * 0.65 + voiceOrbVolumeNoise(p.yzx * 1.85 + float3(3.7, 7.3, 5.1)) * 0.35;
 }
 
-static float3 voiceSphereColor(float2 p, float flow, float energy, float2 grainPixel) {
+static float3 voiceSphereColor(float2 p, float flow, float energy, float2 grainPixel, VoiceOrbPalette palette) {
     // Keep spherical depth while advecting clouds through its interior.
     float depth = sqrt(max(0.0, 1.0 - dot(p, p)));
     float3 normal = float3(p, depth);
@@ -180,25 +188,25 @@ static float3 voiceSphereColor(float2 p, float flow, float energy, float2 grainP
     float bank = voiceOrbVolumeCloud(curl * 1.55 + drift * 0.45);
     float wisp = voiceOrbVolumeCloud(curl * 1.3 - drift * 0.6 + 5.6);
     float ribbon = curl.x * 0.32 + curl.y * 0.18 + (bank - 0.5) * 1.45 + (wisp - 0.5) * 0.65;
-    float3 color = mix(voiceOrbDeep, voiceOrbSoft, smoothstep(-0.55, 0.65, ribbon));
+    float3 color = mix(palette.deep, palette.soft, smoothstep(-0.55, 0.65, ribbon));
     float secondary = voiceOrbVolumeCloud(curl * 1.1 + drift * 0.3 + 11.3);
     float tertiary = voiceOrbVolumeCloud(curl * 1.35 - drift * 0.5 + 21.7);
-    color = mix(color, voiceOrbSecondary, smoothstep(0.36, 0.67, secondary) * 0.86);
-    color = mix(color, voiceOrbTertiary, smoothstep(0.35, 0.69, tertiary) * 0.82);
+    color = mix(color, palette.secondary, smoothstep(0.36, 0.67, secondary) * 0.86);
+    color = mix(color, palette.tertiary, smoothstep(0.35, 0.69, tertiary) * 0.82);
     float light = smoothstep(0.48, 0.73, bank + (wisp - 0.5) * 0.35);
-    color = mix(color, voiceOrbLight, light * 0.62);
+    color = mix(color, palette.light, light * 0.62);
 
     float diffuse = max(0.0, dot(normal, normalize(float3(-0.72, 0.58, 0.67))));
     color *= 0.55 + 0.49 * pow(diffuse, 0.9);
     float highlight = pow(max(0.0, dot(normal, normalize(float3(-0.47, 0.51, 1.0)))), 20.0) * 0.24;
     float rim = pow(1.0 - depth, 3.0) * diffuse * 0.18;
-    color = mix(color, voiceOrbLight, highlight + rim);
+    color = mix(color, palette.light, highlight + rim);
     // Film grain stays fixed in screen space: the clouds move without flicker.
     float grain = (voiceOrbHash(floor(grainPixel)) - 0.5) * 0.07;
     return clamp(color + grain, 0.0, 1.0);
 }
 
-static float3 voiceAuroraColor(float2 p, float flow, float energy, float2 voice) {
+static float3 voiceAuroraColor(float2 p, float flow, float energy, float2 voice, VoiceOrbPalette palette) {
     float depth = sqrt(max(0.0, 1.0 - dot(p, p)));
     float3 normal = float3(p, depth);
     float3 medium = normal;
@@ -216,30 +224,30 @@ static float3 voiceAuroraColor(float2 p, float flow, float energy, float2 voice)
     float ribbon = 0.5 + 0.5 * sin(phase);
     float pearl = smoothstep(0.24, 0.94, ribbon);
     float hue = smoothstep(-0.65, 0.8, medium.x + (veil - 0.5) * 1.6);
-    float3 silk = mix(voiceOrbTertiary, voiceOrbSecondary, hue);
-    float3 color = mix(voiceOrbDeep * 0.56, voiceOrbSoft, 0.16 + bank * 0.24);
+    float3 silk = mix(palette.tertiary, palette.secondary, hue);
+    float3 color = mix(palette.deep * 0.56, palette.soft, 0.16 + bank * 0.24);
     color = mix(color, silk, pearl * 0.88);
-    color = mix(color, voiceOrbLight, pow(ribbon, 5.0) * (0.52 + voice.y * 0.1));
+    color = mix(color, palette.light, pow(ribbon, 5.0) * (0.52 + voice.y * 0.1));
 
     // A narrow luminous hem gives each broad ribbon depth at compact sizes.
     float hem = pow(0.5 + 0.5 * cos(phase - 0.72), 56.0);
     float underside = pow(0.5 + 0.5 * cos(phase - 1.12), 18.0);
     color *= 1.0 - underside * 0.2;
-    color = mix(color, voiceOrbLight, hem * (0.58 + voice.x * 0.1));
+    color = mix(color, palette.light, hem * (0.58 + voice.x * 0.1));
     float diffuse = max(0.0, dot(normal, normalize(float3(-0.5, 0.65, 0.9))));
     color *= 0.65 + diffuse * 0.36;
     float fresnel = pow(1.0 - depth, 2.7);
-    color = mix(color, mix(voiceOrbSoft, voiceOrbLight, 0.65), fresnel * (0.28 + diffuse * 0.3));
+    color = mix(color, mix(palette.soft, palette.light, 0.65), fresnel * (0.28 + diffuse * 0.3));
     float glint = pow(max(0.0, dot(normal, normalize(float3(-0.38, 0.48, 0.8)))), 80.0);
     float reflection = pow(max(0.0, dot(normal, normalize(float3(0.6, -0.5, 0.55)))), 28.0);
-    color = mix(color, voiceOrbLight, glint * 0.72 + reflection * 0.16);
+    color = mix(color, palette.light, glint * 0.72 + reflection * 0.16);
     return clamp(color, 0.0, 1.0);
 }
 
 enum class VoiceDesktopOrbStyle { cloud, sphere, aurora };
 
 static half4 voiceDesktopOrb(float2 position, half4 source, float2 size,
-                             float flow, float2 voice, VoiceDesktopOrbStyle style) {
+                             float flow, float2 voice, VoiceDesktopOrbStyle style, VoiceOrbPalette palette) {
     float diameter = min(size.x, size.y);
     float2 point = (position - size * 0.5) / (diameter * 0.5);
     point.y = -point.y; // The desktop shader uses WebGL's upward y axis.
@@ -253,29 +261,35 @@ static half4 voiceDesktopOrb(float2 position, half4 source, float2 size,
     float3 color;
     switch (style) {
     case VoiceDesktopOrbStyle::cloud:
-        color = voiceCloudColor(point, flow, energy);
+        color = voiceCloudColor(point, flow, energy, palette);
         break;
     case VoiceDesktopOrbStyle::sphere:
-        color = voiceSphereColor(point, flow, energy, (point * 0.5 + 0.5) * pixels);
+        color = voiceSphereColor(point, flow, energy, (point * 0.5 + 0.5) * pixels, palette);
         break;
     case VoiceDesktopOrbStyle::aurora:
-        color = voiceAuroraColor(point, flow, energy, voice);
+        color = voiceAuroraColor(point, flow, energy, voice, palette);
         break;
     }
     return half4(half3(color * alpha), half(alpha)) * source.a;
 }
 
 [[ stitchable ]] half4 voiceCloud(float2 position, half4 source, float2 size,
-                                  float flow, float input, float output, float dark) {
-    return voiceDesktopOrb(position, source, size, flow, float2(input, output), VoiceDesktopOrbStyle::cloud);
+                                  float flow, float input, float output,
+                                  float3 deep, float3 soft, float3 light, float3 secondary, float3 tertiary) {
+    return voiceDesktopOrb(position, source, size, flow, float2(input, output), VoiceDesktopOrbStyle::cloud,
+                           {deep, soft, light, secondary, tertiary});
 }
 
 [[ stitchable ]] half4 voiceSphere(float2 position, half4 source, float2 size,
-                                   float flow, float input, float output, float dark) {
-    return voiceDesktopOrb(position, source, size, flow, float2(input, output), VoiceDesktopOrbStyle::sphere);
+                                   float flow, float input, float output,
+                                   float3 deep, float3 soft, float3 light, float3 secondary, float3 tertiary) {
+    return voiceDesktopOrb(position, source, size, flow, float2(input, output), VoiceDesktopOrbStyle::sphere,
+                           {deep, soft, light, secondary, tertiary});
 }
 
 [[ stitchable ]] half4 voiceAurora(float2 position, half4 source, float2 size,
-                                   float flow, float input, float output, float dark) {
-    return voiceDesktopOrb(position, source, size, flow, float2(input, output), VoiceDesktopOrbStyle::aurora);
+                                   float flow, float input, float output,
+                                   float3 deep, float3 soft, float3 light, float3 secondary, float3 tertiary) {
+    return voiceDesktopOrb(position, source, size, flow, float2(input, output), VoiceDesktopOrbStyle::aurora,
+                           {deep, soft, light, secondary, tertiary});
 }
