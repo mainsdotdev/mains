@@ -93,6 +93,7 @@ struct ConversationTranscript: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationPaneVisible) private var paneVisible
     @Environment(\.mainPaneCovered) private var mainPaneCovered
+    @Environment(\.composerCoversReader) private var composerCoversReader
     @State private var scrollPosition = ScrollPosition(idType: String.self)
     @State private var sectionFrames: [String: TranscriptFrame] = [:]
     @State private var navigationID: UUID?
@@ -259,7 +260,9 @@ struct ConversationTranscript: View {
         .defaultScrollAnchor(centersEmptyState ? .center : .top, for: .alignment)
         .defaultScrollAnchor(nil, for: .sizeChanges)
         .contentShape(.rect)
-        .background(alignment: .center) { TranscriptKeyboardDismissArea(active: paneVisible && !mainPaneCovered) }
+        .background(alignment: .center) {
+            TranscriptKeyboardDismissArea(active: paneVisible && !mainPaneCovered && !composerCoversReader)
+        }
         .onScrollPhaseChange { _, phase in
             guard paneVisible else { return }
             if phase == .tracking || phase == .interacting {

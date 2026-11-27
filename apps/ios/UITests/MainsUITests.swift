@@ -1071,6 +1071,7 @@ final class MainsUITests: XCTestCase {
         _ = pairFixture(app, code: "ios-test")
 
         app.buttons["closeSidebar"].tap()
+        app.textViews["homeMessageInput"].tap()
         app.buttons["chooseModel"].tap()
         assertEffortSliderInteraction(app)
         chooseModel("fixture-thinking", in: app)
@@ -1563,17 +1564,16 @@ final class MainsUITests: XCTestCase {
 
         let input = app.textViews.firstMatch
         let send = app.buttons["Send message"]
-        #if MAINS_GPT_LIVE
-        let idleAction = app.buttons["startVoice"]
-        #else
-        let idleAction = send
-        #endif
         let addAttachment = app.buttons["Add attachment"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         XCTAssertEqual(addAttachment.frame.midX, compactListAttachment.midX, accuracy: 1)
         XCTAssertEqual(addAttachment.frame.midY, compactListAttachment.midY, accuracy: 1)
         XCTAssertEqual(input.frame.midY, addAttachment.frame.midY, accuracy: 3)
-        XCTAssertEqual(input.frame.midY, idleAction.frame.midY, accuracy: 3)
+        #if MAINS_GPT_LIVE
+        XCTAssertEqual(input.frame.midY, app.buttons["startVoice"].frame.midY, accuracy: 3)
+        #else
+        XCTAssertFalse(send.exists)
+        #endif
         let compactWidth = input.frame.width
         input.tap()
         let keyboard = app.keyboards.firstMatch
@@ -1618,7 +1618,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(try actionFill(stop), sendFill)
         attachScreenshot(app, name: "Mate composer – avatar-tinted stop button")
         stop.tap()
-        XCTAssertTrue(idleAction.waitForExistence(timeout: 10))
+        XCTAssertTrue(stop.waitForNonExistence(timeout: 10))
 
         app.navigationBars.buttons["BackButton"].tap()
         XCTAssertTrue(app.staticTexts["Release check 1"].waitForExistence(timeout: 5))
@@ -2918,14 +2918,15 @@ final class MainsUITests: XCTestCase {
         let app = makeApplication()
         app.launchArguments += ["-appearancePreference", "dark"]
         prepareUnpaired(app); app.buttons["startDemo"].tap()
+        let input = app.textViews["homeMessageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap()
         let options = app.buttons["runOptions"]
         XCTAssertTrue(options.waitForExistence(timeout: 10)); options.tap()
         let planMode = app.switches["runPlanMode"]
         XCTAssertTrue(planMode.waitForExistence(timeout: 5)); planMode.tap()
         assertControl(planMode, value: "1")
         closeRunOptions(in: app)
-        let input = app.textViews["homeMessageInput"]
-        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap(); input.typeText("Review the code")
+        input.typeText("Review the code")
         app.buttons["startConversation"].tap()
         let consent = app.buttons["allowDataSharing"]
         if consent.waitForExistence(timeout: 4) { consent.tap() }
@@ -2972,7 +2973,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(input.frame.width, fullWidth, accuracy: 1)
         XCTAssertEqual(input.value as? String, "First line" + moreLines)
 
-        app.keyboards.firstMatch.keys["a"].tap()
+        input.typeText("a")
         collapse.tap()
         XCTAssertTrue(expand.waitForExistence(timeout: 5))
         assertKeyboardVisible(app)
@@ -3141,7 +3142,7 @@ final class MainsUITests: XCTestCase {
         app.buttons["closeSubagent"].tap()
         XCTAssertTrue(dock.waitForExistence(timeout: 5))
         XCTAssertEqual(dock.frame.minY, before, accuracy: 1)
-        XCTAssertTrue(app.buttons["sendMessage"].exists)
+        XCTAssertTrue(app.textViews["messageInput"].isHittable)
     }
 
     func testDemoChangedFilesDiffPagingAndReturn() throws {
@@ -3266,7 +3267,11 @@ final class MainsUITests: XCTestCase {
         let running = app.buttons["inboxRun-demo-activity-queue"]
         XCTAssertTrue(running.waitForExistence(timeout: 5)); running.tap()
         let input = app.textViews["messageInput"]
-        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap(); input.typeText("Include Atlas")
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        let stop = app.buttons["stopReply"]
+        XCTAssertTrue(stop.isHittable)
+        XCTAssertEqual(input.frame.midY, stop.frame.midY, accuracy: 1)
+        input.tap(); input.typeText("Include Atlas")
         let submit = app.buttons["sendMessage"]
         XCTAssertEqual(submit.label, "Queue message")
         submit.tap()
@@ -3481,6 +3486,7 @@ final class MainsUITests: XCTestCase {
         app.buttons["startDemo"].tap()
         XCTAssertTrue(app.buttons["connectionPill"].waitForExistence(timeout: 10), app.debugDescription)
 
+        app.textViews["homeMessageInput"].tap()
         let options = app.buttons["runOptions"]
         XCTAssertTrue(options.waitForExistence(timeout: 10)); options.tap()
         let tiers = app.buttons["runServiceTier"]
@@ -4001,6 +4007,59 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(slider.isHittable, file: file, line: line)
     }
 
+    func testHomeComposerExpandsOnFocusAndKeepsItsDraftWhenCollapsed() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test-home")
+        app.buttons["closeSidebar"].tap()
+
+        let input = app.textViews["homeMessageInput"]
+        let add = app.buttons["addAttachment"]
+        let model = app.buttons["chooseModel"]
+        let target = app.buttons["chooseTarget"]
+        let composers = app.descendants(matching: .any).matching(identifier: "messageComposer")
+        let composer = composers.firstMatch
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue(target.exists)
+        XCTAssertEqual(composers.count, 1)
+        XCTAssertEqual(input.label, "Start a run in Codex")
+        XCTAssertFalse(model.exists)
+        XCTAssertLessThan(add.frame.maxX, input.frame.minX)
+        XCTAssertEqual(add.frame.midY, input.frame.midY, accuracy: 1)
+        XCTAssertTrue(composer.frame.contains(add.frame))
+        let restingTarget = target.frame
+        let restingComposer = composer.frame
+        let gap = restingComposer.minY - restingTarget.maxY
+
+        input.tap()
+        XCTAssertTrue(model.waitForExistence(timeout: 5))
+        assertKeyboardVisible(app)
+        XCTAssertEqual(input.label, "Start a run in Codex")
+        XCTAssertLessThan(input.frame.maxY, add.frame.minY)
+        XCTAssertEqual(composers.count, 1)
+        XCTAssertLessThan(target.frame.maxY, restingTarget.maxY)
+        XCTAssertLessThanOrEqual(composer.frame.maxY, keyboard.frame.minY)
+        XCTAssertEqual(composer.frame.minY - target.frame.maxY, gap, accuracy: 2)
+
+        let draft = "Keep this draft\nAnd its second line"
+        input.typeText(draft)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.24)).tap()
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(model.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, draft)
+        XCTAssertEqual(add.frame.midY, input.frame.midY, accuracy: 1)
+        XCTAssertTrue(app.buttons["startConversation"].isEnabled)
+        XCTAssertEqual(target.frame.maxY, restingTarget.maxY, accuracy: 2)
+        XCTAssertEqual(composer.frame.maxY, restingComposer.maxY, accuracy: 2)
+
+        input.tap()
+        assertKeyboardVisible(app)
+        XCTAssertEqual(input.value as? String, draft)
+        forgetFixture(app)
+    }
+
     func testComposerControlsStayAboveKeyboard() throws {
         continueAfterFailure = false
         let app = makeApplication()
@@ -4017,10 +4076,18 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(conversation.waitForExistence(timeout: 10)); conversation.tap()
         let input = app.textViews["messageInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
+        let addAttachment = app.buttons["addAttachment"]
+        let model = app.buttons["chooseModel"]
+        XCTAssertEqual(input.label, "Continue this run…")
+        XCTAssertFalse(model.exists)
+        XCTAssertLessThan(addAttachment.frame.maxX, input.frame.minX)
+        XCTAssertEqual(addAttachment.frame.midY, input.frame.midY, accuracy: 1)
         let inputCenter = input.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         inputCenter.tap()
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        assertKeyboardVisible(app)
+        XCTAssertTrue(model.isHittable)
+        XCTAssertLessThan(input.frame.maxY, addAttachment.frame.minY)
         input.typeText("A conversation keyboard draft")
         assertComposerAboveKeyboard(app)
         input.typeText("\nAnother line\nA third line")
@@ -4028,6 +4095,8 @@ final class MainsUITests: XCTestCase {
         let leadingBlank = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.width * 0.12, dy: 0))
         leadingBlank.withOffset(CGVector(dx: 0, dy: input.frame.minY - app.frame.minY - 110)).tap()
         XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(model.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(addAttachment.frame.midY, input.frame.midY, accuracy: 1)
         assertKeyboardStaysDismissed(keyboard)
         inputCenter.tap()
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
@@ -4061,8 +4130,21 @@ final class MainsUITests: XCTestCase {
             input.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.9)).tap()
             XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
         }
-        keyboard.keys["a"].tap()
-        XCTAssertEqual(input.value as? String, "A conversation keyboard draft\nAnother line\nA third linea")
+        let originalDraft = "A conversation keyboard draft\nAnother line\nA third line"
+        XCTAssertEqual(input.value as? String, originalDraft)
+        input.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.88)).tap()
+        let extendedDraft = originalDraft + "\nFourth\nFifth\nSixth\nSeventh\nEighth"
+        input.typeText("\nFourth\nFifth\nSixth\nSeventh\nEighth")
+        let expand = app.buttons["expandMessageEditor"]
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        expand.tap()
+        let collapse = app.buttons["collapseMessageEditor"]
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5))
+        XCTAssertTrue(collapse.isHittable)
+        XCTAssertEqual(input.value as? String, extendedDraft)
+        collapse.tap()
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, extendedDraft)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.navigationBars.buttons.element(boundBy: 0).tap()
         openSidebar(app); app.buttons["openSettings"].tap()
@@ -4262,6 +4344,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["chooseModel"].label.contains("Deep Thinker 5.2"))
         XCTAssertTrue(app.buttons["chooseModel"].label.contains("Ultracode"))
         app.terminate(); app.launch()
+        XCTAssertTrue(draft.waitForExistence(timeout: 10)); draft.tap()
         XCTAssertTrue(app.buttons["chooseModel"].waitForExistence(timeout: 10))
         let restoredEffort = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Ultracode"), object: app.buttons["chooseModel"])
         let restored = await XCTWaiter.fulfillment(of: [restoredEffort], timeout: 10)
@@ -4531,6 +4614,7 @@ final class MainsUITests: XCTestCase {
         app.buttons["closeSidebar"].tap()
         let input = app.textViews["homeMessageInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
         app.buttons["runOptions"].tap()
         let goal = app.switches["runGoalMode"]
         assertControl(goal, value: "0")
@@ -4539,7 +4623,7 @@ final class MainsUITests: XCTestCase {
         closeRunOptions(in: app)
 
         let objective = "Refactor the hero section"
-        input.tap(); input.typeText(objective)
+        input.typeText(objective)
         app.buttons["startConversation"].tap()
         let allow = app.buttons["allowDataSharing"]
         if allow.waitForExistence(timeout: 3) { allow.tap() }
@@ -4573,6 +4657,7 @@ final class MainsUITests: XCTestCase {
         app.buttons["closeSidebar"].tap()
         let input = app.textViews["homeMessageInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
         app.buttons["runOptions"].tap()
         let goalMode = app.switches["runGoalMode"]
         assertControl(goalMode, value: "0")
@@ -4580,7 +4665,7 @@ final class MainsUITests: XCTestCase {
         assertControl(goalMode, value: "1")
         closeRunOptions(in: app)
 
-        input.tap(); input.typeText("Refactor the hero section")
+        input.typeText("Refactor the hero section")
         app.buttons["startConversation"].tap()
         let allow = app.buttons["allowDataSharing"]
         if allow.waitForExistence(timeout: 3) { allow.tap() }
@@ -4644,6 +4729,8 @@ final class MainsUITests: XCTestCase {
         let app = makeApplication()
         app.launchArguments += ["-appearancePreference", "dark"]
         pairFixture(app, code: "ios-test-design", search: true).tap()
+        let input = app.textViews["messageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap()
         let options = app.buttons["runOptions"]
         XCTAssertTrue(options.waitForExistence(timeout: 10))
         attachScreenshot(app, name: "Composer options – Fast and Goal off")
@@ -4691,8 +4778,6 @@ final class MainsUITests: XCTestCase {
         _ = permissionWheel("Read Only", in: app)
         closeRunOptions(in: app)
 
-        let input = app.textViews["messageInput"]
-        XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText("Use my selected permissions")
         app.buttons["sendMessage"].tap()
         let consent = app.buttons["allowDataSharing"]
@@ -4728,6 +4813,9 @@ final class MainsUITests: XCTestCase {
         details.tap()
         XCTAssertFalse(app.staticTexts["Kaynağı inceleyip temel yaklaşımı çıkarıyorum."].exists)
 
+        let input = app.textViews["messageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap()
+        assertKeyboardVisible(app)
         let readingPosition = details.frame.minY
         app.buttons["chooseModel"].tap()
         chooseModel("fixture-deep", in: app)
@@ -4759,7 +4847,6 @@ final class MainsUITests: XCTestCase {
         closePreview.tap()
         XCTAssertTrue(closePreview.waitForNonExistence(timeout: 5))
         app.buttons["closeComposerSheet"].tap()
-        let input = app.textViews["messageInput"]
         input.tap(); input.typeText("Use the conversation’s saved settings")
         app.buttons["sendMessage"].tap()
         if app.buttons["allowDataSharing"].waitForExistence(timeout: 3) { app.buttons["allowDataSharing"].tap() }
@@ -4845,7 +4932,7 @@ final class MainsUITests: XCTestCase {
         chooseSidebarSpace("fixture-claude", in: app)
         XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["modeSwitcher"].exists)
-        XCTAssertFalse(app.buttons["startConversation"].isEnabled)
+        XCTAssertFalse(app.buttons["startConversation"].exists)
         openSidebar(app)
         XCTAssertTrue(app.buttons["sidebarMode-developer"].isSelected)
         XCTAssertTrue(app.staticTexts["Workspaces"].exists)
@@ -4874,6 +4961,8 @@ final class MainsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["conversation-fixture-work"].exists)
         attachScreenshot(app, name: "Native sidebar – Chat tabs")
         app.buttons["closeSidebar"].tap()
+        let input = app.textViews["homeMessageInput"]
+        input.tap()
         app.buttons["runOptions"].tap()
         XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "selectPermission").firstMatch.exists)
         let fast = app.buttons["runFastMode"]
@@ -4899,6 +4988,7 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "Native workspace – compact selection")
         confirmTarget(in: app)
 
+        input.tap()
         app.buttons["chooseModel"].tap()
         chooseModel("fixture-deep", in: app)
         attachScreenshot(app, name: "Native model selection")
@@ -4929,8 +5019,7 @@ final class MainsUITests: XCTestCase {
         closeRunOptions(in: app)
         XCTAssertEqual(options.label, "Plan")
 
-        let input = app.textViews["homeMessageInput"]
-        input.tap(); input.typeText("Build from the native composer")
+        input.typeText("Build from the native composer")
         app.buttons["startConversation"].tap()
         if app.buttons["allowDataSharing"].waitForExistence(timeout: 3) { app.buttons["allowDataSharing"].tap() }
         XCTAssertTrue(app.staticTexts["Native reply delivered."].waitForExistence(timeout: 15))
@@ -4951,6 +5040,7 @@ final class MainsUITests: XCTestCase {
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["chooseTarget"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["chooseTarget"].label.contains("mains"))
+        input.tap()
         XCTAssertTrue(app.buttons["chooseModel"].label.contains("Deep Thinker"))
         attachScreenshot(app, name: "Native home – saved configuration")
         openSidebar(app)

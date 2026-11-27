@@ -54,6 +54,7 @@ struct ConversationView: View {
     @State private var acceptedCount = 0
     @State private var modelSheet = false
     @State private var optionsSheet = false
+    @State private var composerFocused = false
     @State private var conversationAction: ConversationActionRequest?
     @State private var companion = ConversationCompanionState()
     @State private var outputSelection: ConversationOutputSelection?
@@ -478,7 +479,7 @@ struct ConversationView: View {
             #endif
         }
         .background(alignment: .center) { KeyboardDismissBackground(color: Color(.systemBackground)) }
-        .composerInset { composerArea(editorExpanded: $0) }
+        .composerInset(composerFocused: composerFocused) { composerArea(editorExpanded: $0) }
         .environment(\.mateChatTint, composerMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
         .environment(\.solidChatNotices, true)
         .composerPickers(model: $modelSheet, options: $optionsSheet, session: session,
@@ -722,7 +723,9 @@ struct ConversationView: View {
                         session.isConnected && !uncertain && !session.sending && pending?.status != .accepted && !scroll.paging && run?.isActive != true),
                     active: run?.isActive == true, canSendDuringRun: run?.supportsSteering == true, sendLabel: sendLabel,
                     stopping: session.stoppingRunID == runID, stop: { Task { await stop() } },
-                    model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend)
+                    collapsesWhenUnfocused: true,
+                    model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend,
+                    focusChanged: { composerFocused = $0 })
                     .disabled(disablesComposer)
             }
         }

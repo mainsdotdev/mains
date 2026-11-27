@@ -36,17 +36,15 @@ private struct ComposerPickers: ViewModifier {
     let session: BackendSession
     let context: ComposerContext?
     let withinPane: Bool
-    @State private var sourceFrames: [ComposerPicker: CGRect] = [:]
     @Environment(\.conversationPaneVisible) private var paneVisible
 
     func body(content: Content) -> some View {
         let picker: ComposerPicker? = model ? .model : options ? .runOptions : target ? .target : nil
         content
-            .onPreferenceChange(ComposerPickerSourceFrames.self) { sourceFrames = $0 }
             .onChange(of: paneVisible) { _, visible in
                 if withinPane && !visible { model = false; options = false }
             }
-            .overlay {
+            .overlayPreferenceValue(ComposerPickerSourceFrames.self) { sourceFrames in
                 if let picker, let context {
                     ComposerPickerPanel(sourceFrame: sourceFrames[picker] ?? .zero,
                                         currentSourceFrame: { sourceFrames[picker] ?? .zero },

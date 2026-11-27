@@ -207,16 +207,57 @@ struct ContextTextEditor: View {
     let identifier: String
     var fillsHeight = false
     var reservedTrailingWidth: CGFloat = 0
+    var compactRowHeight: CGFloat? = nil
+    var showsSingleLine = false
     var onOverflowChange: ((Bool) -> Void)? = nil
     @State private var artwork = ContextArtwork()
     @State private var measuredWidth: CGFloat = 320
     var body: some View {
         ContextTextInput(text: $text, skills: $skills, scope: scope, focused: $focused, placeholder: placeholder, identifier: identifier,
                          images: artwork.images, artworkRevision: artwork.revision, measuredWidth: measuredWidth,
-                         fillsHeight: fillsHeight, reservedTrailingWidth: reservedTrailingWidth, onOverflowChange: onOverflowChange)
+                         fillsHeight: fillsHeight, reservedTrailingWidth: reservedTrailingWidth,
+                         compactRowHeight: compactRowHeight, showsSingleLine: showsSingleLine, onOverflowChange: onOverflowChange)
+            .overlay {
+                if compactRowHeight != nil && text.isEmpty {
+                    ComposerPlaceholderLayout(centered: showsSingleLine, topAligned: fillsHeight) {
+                        Text(placeholder).font(.body).foregroundStyle(Color(.placeholderText)).lineLimit(1)
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
+            }
             .task(id: skills) { await artwork.load(skills) }
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth = $0 }
+            .onGeometryChange(for: CGFloat?.self) { skills.isEmpty ? nil : $0.size.width } action: { width in
+                if let width { measuredWidth = width }
+            }
             .padding(.trailing, reservedTrailingWidth)
+    }
+}
+
+private struct ComposerPlaceholderLayout: Layout {
+    let topAligned: Bool
+    private var alignment: CGFloat
+
+    init(centered: Bool, topAligned: Bool) {
+        self.topAligned = topAligned
+        alignment = centered ? 1 : 0
+    }
+
+    var animatableData: CGFloat {
+        get { alignment }
+        set { alignment = newValue }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let label = subviews[0].sizeThatFits(.unspecified)
+        return CGSize(width: proposal.width ?? label.width, height: proposal.height ?? label.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let width = min(bounds.width, subviews[0].sizeThatFits(.unspecified).width)
+        let x = bounds.minX + (bounds.width - width) * alignment / 2
+        subviews[0].place(at: CGPoint(x: x, y: topAligned ? bounds.minY : bounds.midY),
+                          anchor: topAligned ? .topLeading : .leading, proposal: ProposedViewSize(width: width, height: nil))
     }
 }
 
@@ -235,6 +276,8 @@ private struct ContextTextInput: UIViewRepresentable {
     let measuredWidth: CGFloat
     let fillsHeight: Bool
     let reservedTrailingWidth: CGFloat
+    let compactRowHeight: CGFloat?
+    let showsSingleLine: Bool
     let onOverflowChange: ((Bool) -> Void)?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
@@ -261,11 +304,25 @@ private struct ContextTextInput: UIViewRepresentable {
             view.undoManager?.removeAllActions(); coordinator.scope = scope
         }
         let font = UIFont.preferredFont(forTextStyle: .body)
-        view.font = font; view.textColor = .label; view.tintColor = .link
+        let drawsSingleLine = showsSingleLine && !text.isEmpty
+        let verticalInset = drawsSingleLine ? max(5, ((compactRowHeight ?? 0) - ceil(font.lineHeight)) / 2) : 0
+        let horizontalInset: CGFloat = drawsSingleLine ? 4 : 0
+        let insets = UIEdgeInsets(top: verticalInset, left: horizontalInset, bottom: verticalInset, right: horizontalInset)
+        let lineLimit = drawsSingleLine ? 1 : 0
+        if view.textContainer.maximumNumberOfLines != lineLimit || view.textContainerInset != insets {
+            view.textContainer.maximumNumberOfLines = lineLimit
+            view.textContainer.lineBreakMode = lineLimit == 1 ? .byTruncatingTail : .byWordWrapping
+            view.textContainerInset = insets
+            if drawsSingleLine { view.setContentOffset(.zero, animated: false) }
+            view.invalidateTextMeasurement()
+        }
+        if view.font != font { view.font = font }
+        view.textColor = .label; view.tintColor = .link
         view.typingAttributes = [.font: font, .foregroundColor: UIColor.label]
         view.placeholder.text = placeholder; view.placeholder.font = font
-        view.placeholder.isHidden = !text.isEmpty
-        let signature = "\(font.pointSize):\(colorScheme):\(measuredWidth):\(artworkRevision)"
+        view.placeholder.isHidden = compactRowHeight != nil || !text.isEmpty
+        view.accessibilityLabel = placeholder
+        let signature = "\(font.pointSize):\(colorScheme):\(skills.isEmpty ? 0 : measuredWidth):\(artworkRevision)"
         let projection = ContextText(text, skills: skills)
         if view.markedTextRange == nil, coordinator.source(view.attributedText) != text || coordinator.skills != skills || coordinator.signature != signature {
             let selection = projection.selection(after: coordinator.projection, range: view.selectedRange)
@@ -304,11 +361,18 @@ private struct ContextTextInput: UIViewRepresentable {
         guard let width = proposal.width else { return nil }
         let font = uiView.font ?? .preferredFont(forTextStyle: .body)
         let minimum = ceil(font.lineHeight)
-        if fillsHeight, let height = proposal.height, height.isFinite {
+        if fillsHeight || compactRowHeight != nil, let height = proposal.height, height.isFinite {
             return CGSize(width: width, height: max(minimum, height))
         }
+        if text.isEmpty { return CGSize(width: width, height: minimum) }
+        if showsSingleLine || uiView.textContainer.maximumNumberOfLines == 1 {
+            // SwiftUI can ask for the new size before UIKit adopts the new line mode.
+            return CGSize(width: width, height: context.coordinator.multilineHeight ?? minimum)
+        }
         let fitted = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        return CGSize(width: width, height: max(minimum, min(uiView.compactHeightLimit, fitted.height)))
+        let height = max(minimum, min(uiView.compactHeightLimit, fitted.height))
+        if compactRowHeight != nil { context.coordinator.multilineHeight = height }
+        return CGSize(width: width, height: height)
     }
     static func dismantleUIView(_ uiView: ComposerTextView, coordinator: Coordinator) {
         uiView.wantsFocus = false
@@ -322,6 +386,7 @@ private struct ContextTextInput: UIViewRepresentable {
         var skills: [ContextSkill] = []
         var scope: ContextScope?
         var signature = ""
+        var multilineHeight: CGFloat?
         private(set) var isEndingEditing = false
         init(_ parent: ContextTextInput) { self.parent = parent }
         func source(_ value: NSAttributedString) -> String {
@@ -346,7 +411,7 @@ private struct ContextTextInput: UIViewRepresentable {
             parent.text = value
             view.accessibilityValue = projection.readable
             if let editor = view as? ComposerTextView {
-                editor.placeholder.isHidden = !value.isEmpty
+                editor.placeholder.isHidden = parent.compactRowHeight != nil || !value.isEmpty
                 editor.invalidateTextMeasurement()
             }
         }
@@ -401,20 +466,25 @@ final class ComposerTextView: UITextView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        placeholder.frame = CGRect(x: 0, y: 0, width: bounds.width, height: font?.lineHeight ?? 22)
+        let insets = textContainerInset
+        placeholder.frame = CGRect(x: insets.left, y: insets.top, width: max(0, bounds.width - insets.left - insets.right),
+                                   height: font?.lineHeight ?? 22)
         let resized = measuredViewport != bounds.size
         guard bounds.width > 0, bounds.height > 0, resized || needsTextMeasurement else { return }
         measuredViewport = bounds.size
         needsTextMeasurement = false
-        let fitted = sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude))
-        let needsScrolling = fitted.height > bounds.height + 0.5
+        let empty = !hasText
+        let fittedHeight = empty ? ceil((font ?? .preferredFont(forTextStyle: .body)).lineHeight)
+            : sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height
+        let isSingleLine = textContainer.maximumNumberOfLines == 1
+        let needsScrolling = !isSingleLine && fittedHeight > bounds.height + 0.5
         if needsScrolling != isScrollEnabled { isScrollEnabled = needsScrolling }
         if resized, isFirstResponder, needsScrolling { scrollRangeToVisible(selectedRange) }
-        guard onOverflowChange != nil else { return }
+        guard !isSingleLine, onOverflowChange != nil else { return }
         // Check the original width so the space for the button cannot keep it visible.
-        let fullHeight = reservedTrailingWidth > 0
+        let fullHeight = !empty && reservedTrailingWidth > 0
             ? sizeThatFits(CGSize(width: bounds.width + reservedTrailingWidth, height: .greatestFiniteMagnitude)).height
-            : fitted.height
+            : fittedHeight
         let overflowsWithoutButton = fullHeight > compactHeightLimit + 0.5
         guard overflows != overflowsWithoutButton else { return }
         overflows = overflowsWithoutButton

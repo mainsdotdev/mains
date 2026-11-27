@@ -54,13 +54,15 @@ private struct AttachmentOverlayModifier: ViewModifier {
     let maxBytes: Int
     let add: @MainActor @Sendable ([PromptAttachment]) throws -> Void
     let close: @MainActor @Sendable (UUID, AttachmentDestination) -> Void
-    @State private var sourceFrame = CGRect.zero
     func body(content: Content) -> some View {
-        content
-            .onPreferenceChange(AttachmentSourceFrameKey.self) { sourceFrame = $0 }
-            .preference(key: AttachmentOverlayRequestKey.self, value: isPresented ? AttachmentOverlayRequest(
-                id: id, sourceFrame: sourceFrame, accent: accent, maxCount: maxCount, maxBytes: maxBytes,
-                add: add, close: { destination in close(id, destination) }) : nil)
+        content.backgroundPreferenceValue(AttachmentSourceFrameKey.self) { sourceFrame in
+            if isPresented {
+                Color.clear.allowsHitTesting(false)
+                    .preference(key: AttachmentOverlayRequestKey.self, value: AttachmentOverlayRequest(
+                        id: id, sourceFrame: sourceFrame, accent: accent, maxCount: maxCount, maxBytes: maxBytes,
+                        add: add, close: { destination in close(id, destination) }))
+            }
+        }
     }
 }
 

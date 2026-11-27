@@ -17,6 +17,7 @@ struct HomeView: View {
     @State private var modelSheet = false
     @State private var optionsSheet = false
     @State private var consent: ConsentContext?
+    @State private var composerFocused = false
     #if MAINS_GPT_LIVE
     @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
     private var preparingVoice: Bool {
@@ -57,10 +58,11 @@ struct HomeView: View {
             }
             #endif
         }
-        .composerInset { editorExpanded in
+        .composerInset(preservesReaderViewport: false, composerFocused: space == nil ? nil : composerFocused) { editorExpanded in
             if let space {
                 HomeComposerArea(session: session, space: space, targetPicker: $targetPicker, modelSheet: $modelSheet,
-                                 optionsSheet: $optionsSheet, consent: $consent, editorExpanded: editorExpanded, onCreated: onCreated)
+                                 optionsSheet: $optionsSheet, consent: $consent, editorExpanded: editorExpanded,
+                                 focusChanged: { composerFocused = $0 }, onCreated: onCreated)
                     .id(space.id)
                     .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
             }
@@ -69,7 +71,7 @@ struct HomeView: View {
         .composerPickers(model: $modelSheet, options: $optionsSheet, target: $targetPicker, session: session,
                          context: space.map { ComposerContext(space: $0) })
         .onChange(of: session.ownership) { _, _ in targetPicker = false }
-        .onChange(of: space?.id) { _, _ in targetPicker = false }
+        .onChange(of: space?.id) { _, _ in targetPicker = false; composerFocused = false }
         .onChange(of: space?.mode) { _, _ in targetPicker = false }
         .task(id: "\(space?.providerId ?? ""):\(session.isConnected)") {
             if let space { await session.loadModels(space.providerId, force: true) }
@@ -304,6 +306,7 @@ struct HomeComposerArea: View {
                 }
             }
             MessageComposer(session: session, context: ComposerContext(space: space, workspace: fixedWorkspace), draft: draft, canSend: ready,
+                         collapsesWhenUnfocused: fixedWorkspace == nil,
                          model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend,
                          onVoiceWorkspaceRequired: showWorkspaceRequired, voiceCreated: onCreated, focusChanged: focusChanged)
         }.padding(.bottom, HomeView.composerBottomInset)

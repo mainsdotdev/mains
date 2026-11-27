@@ -3,11 +3,18 @@ import UniformTypeIdentifiers
 
 private extension EnvironmentValues {
     @Entry var composerExpansion: Binding<Bool>? = nil
+    @Entry var compactComposerEditing: Bool? = nil
+}
+
+extension EnvironmentValues {
+    @Entry var composerCoversReader = false
 }
 
 extension View {
-    func composerInset<Bar: View>(@ViewBuilder _ bar: @escaping (Bool) -> Bar) -> some View {
-        modifier(ComposerInset(bar: bar))
+    func composerInset<Bar: View>(preservesReaderViewport: Bool = true,
+                                 composerFocused: Bool? = nil,
+                                 @ViewBuilder _ bar: @escaping (Bool) -> Bar) -> some View {
+        modifier(ComposerInset(preservesReaderViewport: preservesReaderViewport, composerFocused: composerFocused, bar: bar))
     }
 }
 
@@ -15,30 +22,94 @@ private struct ComposerInset<Bar: View>: ViewModifier {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
+    let preservesReaderViewport: Bool
+    let composerFocused: Bool?
     let bar: (Bool) -> Bar
     @State private var expanded = false
     @State private var compactHeight: CGFloat = 0
+    @State private var keyboardFreeFrame: CGRect?
+    @State private var hardwareEditing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    func body(content: Content) -> some View {
-        content
+    @ViewBuilder func body(content: Content) -> some View {
+        let page = content
+            .environment(\.composerCoversReader, expanded)
             .allowsHitTesting(!expanded)
             .accessibilityHidden(expanded)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                // Keep the reader's viewport stable while the editor covers it.
-                Color.clear.frame(height: compactHeight).allowsHitTesting(false).accessibilityHidden(true)
+        if preservesReaderViewport && composerFocused == nil {
+            reserveReaderInset(page).overlay {
+                GeometryReader { viewport in readerPanel(viewportHeight: viewport.size.height) }
             }
-            .overlay {
-                GeometryReader { viewport in
-                    bar(expanded)
-                        .environment(\.composerExpansion, $expanded)
-                        .frame(height: expanded ? viewport.size.height : nil)
-                        .background(expanded ? Color(.systemBackground) : .clear)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                            if !expanded { compactHeight = height }
+        } else {
+            GeometryReader { viewport in
+                let visibleFrame = viewport.frame(in: .global)
+                let keyboardIsDocked = keyboardFreeFrame.map { fullFrame in
+                    abs(fullFrame.width - visibleFrame.width) < 1 && fullFrame.maxY - visibleFrame.maxY > 1
+                } ?? false
+                let needsHardwareFallback = composerFocused == true && !keyboardIsDocked
+                let editing = keyboardIsDocked || hardwareEditing
+
+                // The native keyboard changes the viewport and the editor layout in the same transaction.
+                Group {
+                    if preservesReaderViewport {
+                        reserveReaderInset(page).overlay {
+                            readerPanel(viewportHeight: viewport.size.height, editing: editing)
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    } else {
+                        page.safeAreaInset(edge: .bottom, spacing: 0) {
+                            panel(viewportHeight: viewport.size.height)
+                                .environment(\.compactComposerEditing, composerFocused == nil ? nil : editing)
+                        }
+                    }
+                }
+                .task(id: needsHardwareFallback) {
+                    if needsHardwareFallback {
+                        // Hardware-keyboard focus can leave the native viewport unchanged.
+                        do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+                        guard !Task.isCancelled else { return }
+                    }
+                    guard hardwareEditing != needsHardwareFallback else { return }
+                    withAnimation(reduceMotion || keyboardIsDocked ? nil : .easeInOut(duration: 0.24)) {
+                        hardwareEditing = needsHardwareFallback
+                    }
                 }
             }
+            .background(alignment: .center) {
+                if composerFocused != nil {
+                    GeometryReader { _ in
+                        Color.clear
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                                keyboardFreeFrame = $0
+                            }
+                    }
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
+                    .allowsHitTesting(false)
+                }
+            }
+        }
+    }
+
+    private func reserveReaderInset(_ page: some View) -> some View {
+        page.safeAreaInset(edge: .bottom, spacing: 0) {
+            // The transcript retains its inset while the editor covers it.
+            Color.clear.frame(height: compactHeight).allowsHitTesting(false).accessibilityHidden(true)
+        }
+    }
+
+    private func readerPanel(viewportHeight: CGFloat, editing: Bool? = nil) -> some View {
+        panel(viewportHeight: viewportHeight)
+            .environment(\.compactComposerEditing, editing)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                if !expanded { compactHeight = height }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+    }
+
+    private func panel(viewportHeight: CGFloat) -> some View {
+        bar(expanded)
+            .environment(\.composerExpansion, $expanded)
+            .frame(height: expanded ? viewportHeight : nil)
+            .background(expanded ? Color(.systemBackground) : .clear)
     }
 }
 
@@ -46,6 +117,8 @@ struct MessageComposer: View {
     static let horizontalInset: CGFloat = 12
     static let standardVerticalInset: CGFloat = 8
     static let controlHeight: CGFloat = 44
+    private static let compactControlHeight: CGFloat = 50
+    private static let compactCornerRadius: CGFloat = compactControlHeight / 2
     private static let editorSizeButtonWidth: CGFloat = 44
 
     #if DEBUG && targetEnvironment(simulator)
@@ -60,6 +133,7 @@ struct MessageComposer: View {
     var sendLabel: String? = nil
     var stopping = false
     var stop: (() -> Void)? = nil
+    var collapsesWhenUnfocused = false
     let model: () -> Void
     let options: () -> Void
     let send: () -> Void
@@ -83,7 +157,6 @@ struct MessageComposer: View {
     @State private var file = false
     @State private var pluginsOpen = false
     @State private var contextPresentationID = UUID()
-    @State private var composerFrame = CGRect.zero
     @State private var panelScope: ContextScope?
     @State private var mateConsent: ConsentContext?
     @State private var mateSelectionAfterConsent: (() -> Void)?
@@ -95,6 +168,7 @@ struct MessageComposer: View {
     @State private var fileOwner = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.composerExpansion) private var expansion
+    @Environment(\.compactComposerEditing) private var compactComposerEditing
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.colorScheme) private var colorScheme
@@ -104,6 +178,12 @@ struct MessageComposer: View {
     @State private var attachmentError: String?
     private var settings: ComposerSettings { context.settings(session) }
     private var editorExpanded: Bool { expansion?.wrappedValue == true }
+    private var compactComposer: Bool {
+        #if MAINS_GPT_LIVE
+        if ownsVoice { return false }
+        #endif
+        return collapsesWhenUnfocused && !(compactComposerEditing ?? focused) && !editorExpanded
+    }
     private var selectedModel: ModelChoice? { context.model(session) }
     private var speed: ComposerSpeed? { ComposerSpeed(model: selectedModel, providerID: context.providerId) }
     #if MAINS_GPT_LIVE
@@ -157,11 +237,13 @@ struct MessageComposer: View {
             standardComposer
             #endif
         }
-        .background(GeometryReader { geometry in
-            Color.clear.onAppear { composerFrame = geometry.frame(in: .global) }
-                .onChange(of: geometry.frame(in: .global)) { _, frame in composerFrame = frame }
-        })
-        .contextPicker(pickerRequest)
+        .background(alignment: .center) {
+            if session.isConnected, !draft.isSending, !attachmentsOpen, trigger != nil || pluginsOpen {
+                GeometryReader { geometry in
+                    Color.clear.contextPicker(pickerRequest(in: geometry.frame(in: .global)))
+                }
+            }
+        }
         .sheet(item: $mateConsent, onDismiss: { mateSelectionAfterConsent = nil }) { consent in
             ConsentView(context: consent) {
                 guard consent.backendID == session.pairing?.descriptor.backendId else { return }
@@ -230,8 +312,9 @@ struct MessageComposer: View {
         } message: { Text(attachmentError ?? "") }
     }
     private var standardComposer: some View {
-        let stackedMate = context.lockedProfile && (focused || !draft.text.isEmpty || editorExpanded)
-        let compactMate = context.lockedProfile && !stackedMate
+        let usesLegacyMateLayout = context.lockedProfile && !collapsesWhenUnfocused
+        let stackedMate = usesLegacyMateLayout && (focused || !draft.text.isEmpty || editorExpanded)
+        let compactMate = usesLegacyMateLayout && !stackedMate
         return VStack(alignment: .leading, spacing: 4) {
             if showsCollapseButtonAboveEditor {
                 HStack {
@@ -249,35 +332,38 @@ struct MessageComposer: View {
                     withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { draft.attachments.removeAll { $0.id == id } }
                 }.padding(.horizontal, 8).padding(.top, 6).padding(.trailing, expandButtonSpace)
             }
-            if context.lockedProfile {
-                MateComposerLayout(expanded: stackedMate, fillsHeight: editorExpanded) {
+            if context.lockedProfile || collapsesWhenUnfocused {
+                MateComposerLayout(expanded: usesLegacyMateLayout ? stackedMate : !compactComposer, fillsHeight: editorExpanded,
+                                   compactRowHeight: collapsesWhenUnfocused ? Self.compactControlHeight : nil) {
                     textEditor
-                    attachmentButton
+                    attachmentButton()
+                    if collapsesWhenUnfocused && !context.lockedProfile {
+                        HStack(spacing: 0) {
+                            if !compactComposer { configurationRow }
+                        }
+                    }
                     HStack(spacing: 6) {
                         if showsCollapseButtonInControls { editorSizeButton }
-                        composerActions
+                        composerActions(compact: compactComposer)
                     }
+                    .frame(minWidth: collapsesWhenUnfocused ? Self.controlHeight : nil, alignment: .trailing)
                 }
                 .buttonStyle(.plain)
             } else {
                 textEditor.padding(.horizontal, 10).padding(.top, 7).padding(.bottom, 3)
                 HStack(spacing: 6) {
-                    attachmentButton
-                    Group {
-                        if dynamicTypeSize.isAccessibilitySize {
-                            ScrollView(.horizontal) { configurationControls }.scrollIndicators(.hidden)
-                        } else {
-                            configurationControls
-                        }
-                    }.fixedSize(horizontal: false, vertical: true)
+                    attachmentButton()
+                    configurationRow
                     if showsCollapseButtonInControls { editorSizeButton }
-                    composerActions
+                    composerActions()
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, compactMate ? 4 : Self.standardVerticalInset)
-        .modifier(GlassSurface(radius: editorExpanded ? 24 : 34, interactive: false))
+        .padding(.horizontal, 8)
+        .padding(.vertical, compactComposer ? 0 : compactMate ? 4 : Self.standardVerticalInset)
+        .modifier(GlassSurface(radius: compactComposer ? Self.compactCornerRadius : editorExpanded ? 24 : 34,
+                               interactive: false))
         .overlay(alignment: .topTrailing) {
             if showsExpandButton { editorSizeButton.padding([.top, .trailing], 8) }
         }
@@ -287,14 +373,27 @@ struct MessageComposer: View {
         .animation(reduceMotion ? nil : MateComposerLayout.transition, value: stackedMate)
     }
 
+    private var configurationRow: some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                ScrollView(.horizontal) { configurationControls }.scrollIndicators(.hidden)
+            } else {
+                configurationControls
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var textEditor: some View {
         ContextTextEditor(text: $draft.text, skills: $draft.contextSkills, scope: contextScope, focused: $focused,
             placeholder: context.placeholder,
             identifier: context.runID == nil ? "homeMessageInput" : "messageInput",
-            fillsHeight: editorExpanded, reservedTrailingWidth: expandButtonSpace, onOverflowChange: { textOverflows = $0 })
+            fillsHeight: editorExpanded, reservedTrailingWidth: expandButtonSpace,
+            compactRowHeight: collapsesWhenUnfocused ? Self.compactControlHeight : nil,
+            showsSingleLine: compactComposer, onOverflowChange: { textOverflows = $0 })
     }
 
-    private var showsExpandButton: Bool { expansion != nil && !editorExpanded && textOverflows && !draft.text.isEmpty }
+    private var showsExpandButton: Bool { expansion != nil && !editorExpanded && !compactComposer && textOverflows && !draft.text.isEmpty }
     private var expandButtonSpace: CGFloat { showsExpandButton ? Self.editorSizeButtonWidth : 0 }
     private var showsCollapseButtonAboveEditor: Bool { editorExpanded && verticalSizeClass != .compact }
     private var showsCollapseButtonInControls: Bool { editorExpanded && !showsCollapseButtonAboveEditor }
@@ -318,10 +417,11 @@ struct MessageComposer: View {
         .accessibilityIdentifier(editorExpanded ? "collapseMessageEditor" : "expandMessageEditor")
     }
 
-    private var attachmentButton: some View {
+    private func attachmentButton() -> some View {
         Button(action: openAttachments) {
             Image(systemName: "plus").font(.system(size: 22, weight: .light))
                 .frame(width: Self.controlHeight, height: Self.controlHeight)
+                .contentShape(.rect)
         }
         .background(GeometryReader { geometry in
             Color.clear.preference(key: AttachmentSourceFrameKey.self, value: geometry.frame(in: .global))
@@ -378,7 +478,7 @@ struct MessageComposer: View {
         .frame(width: 44, height: 44).contentShape(.circle)
     }
 
-    @ViewBuilder private var composerActions: some View {
+    @ViewBuilder private func composerActions(compact: Bool = false) -> some View {
         #if MAINS_GPT_LIVE
         if ownsVoice, session.voice.phase == .connected {
             Button { session.voice.toggleMute() } label: {
@@ -397,12 +497,12 @@ struct MessageComposer: View {
         } else if !draft.hasContent && context.providerId == "codex" && !active && !session.isDemo {
             Button(action: prepareVoice) {
                 Image(systemName: "waveform").font(.system(size: 18, weight: .medium))
-                    .frame(width: 36, height: 36).foregroundStyle(.white)
-                    .background(composerAccent, in: .circle)
+                    .frame(width: 36, height: 36).foregroundStyle(compact ? Color.secondary : .white)
+                    .background(compact ? Color.clear : composerAccent, in: .circle)
                     .frame(width: 44, height: 44).contentShape(.circle)
             }.buttonStyle(ChatPressStyle()).disabled(voiceStartAvailability == .unavailable)
                 .accessibilityLabel("Start GPT Live").accessibilityIdentifier("startVoice")
-        } else {
+        } else if !compact || draft.hasContent || draft.isSending {
             sendMessageButton
         }
         #else
@@ -413,7 +513,9 @@ struct MessageComposer: View {
             .buttonStyle(ChatPressStyle()).disabled(!session.isConnected || stopping)
             .accessibilityLabel(stopping ? "Stopping reply" : "Stop reply").accessibilityIdentifier("stopReply")
         }
-        if !stopping && (!active || canSendDuringRun && draft.hasContent) { sendMessageButton }
+        if !stopping && (!active || canSendDuringRun && draft.hasContent) && (!compact || draft.hasContent || draft.isSending) {
+            sendMessageButton
+        }
         #endif
     }
 
@@ -473,8 +575,7 @@ struct MessageComposer: View {
     }
 
     #endif
-    private var pickerRequest: ContextPickerRequest? {
-        guard session.isConnected, !draft.isSending, !attachmentsOpen, trigger != nil || pluginsOpen else { return nil }
+    private func pickerRequest(in composerFrame: CGRect) -> ContextPickerRequest {
         let scope = contextScope, owner = session.ownership
         let hasLocalWorkspace = session.workspaces.contains { $0.id == scope.workspaceID && $0.isReplica != true }
         let match = trigger
@@ -609,11 +710,13 @@ struct MateComposerLayout: Layout {
     static let transition = Animation.easeInOut(duration: 0.24)
     private let editorInset: CGFloat = 10
     private let fillsHeight: Bool
+    private let compactRowHeight: CGFloat?
     private var progress: CGFloat
 
-    init(expanded: Bool, fillsHeight: Bool = false) {
+    init(expanded: Bool, fillsHeight: Bool = false, compactRowHeight: CGFloat? = nil) {
         progress = expanded ? 1 : 0
         self.fillsHeight = fillsHeight
+        self.compactRowHeight = compactRowHeight
     }
 
     var animatableData: CGFloat {
@@ -629,27 +732,47 @@ struct MateComposerLayout: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let layout = metrics(width: bounds.width, height: bounds.height, subviews: subviews)
         subviews[0].place(at: CGPoint(x: bounds.minX + layout.editorX, y: bounds.minY + layout.editorY),
-                          anchor: .topLeading, proposal: ProposedViewSize(width: layout.editorWidth, height: fillsHeight ? layout.editorHeight : nil))
+                          anchor: .topLeading, proposal: ProposedViewSize(width: layout.editorWidth,
+                              height: fillsHeight || compactRowHeight != nil ? layout.editorHeight : nil))
         let controlsY = bounds.minY + layout.controlsY
-        if subviews.count == 3 {
+        if subviews.count >= 3 {
             subviews[1].place(at: CGPoint(x: bounds.minX, y: controlsY), anchor: .leading, proposal: .unspecified)
+        }
+        if subviews.count == 4 {
+            subviews[2].place(at: CGPoint(x: bounds.minX + layout.configurationX, y: controlsY),
+                              anchor: .leading, proposal: ProposedViewSize(width: layout.configurationWidth, height: nil))
         }
         subviews[subviews.count - 1].place(at: CGPoint(x: bounds.maxX, y: controlsY), anchor: .trailing, proposal: .unspecified)
     }
 
-    private func metrics(width: CGFloat, height: CGFloat?, subviews: Subviews) -> (editorX: CGFloat, editorY: CGFloat, editorWidth: CGFloat, editorHeight: CGFloat, controlsY: CGFloat, height: CGFloat) {
-        let leading = subviews.count == 3 ? subviews[1].sizeThatFits(.unspecified) : .zero
+    private func metrics(width: CGFloat, height: CGFloat?, subviews: Subviews) -> (
+        editorX: CGFloat, editorY: CGFloat, editorWidth: CGFloat, editorHeight: CGFloat,
+        configurationX: CGFloat, configurationWidth: CGFloat, controlsY: CGFloat, height: CGFloat
+    ) {
+        let leading = subviews.count >= 3 ? subviews[1].sizeThatFits(.unspecified) : .zero
         let trailing = subviews[subviews.count - 1].sizeThatFits(.unspecified)
         let editorX = editorInset + leading.width * (1 - progress)
         let editorWidth = max(0, width - editorX - editorInset - trailing.width * (1 - progress))
-        let controlHeight = max(44, leading.height, trailing.height)
+        let configurationX = leading.width + 6
+        let configurationWidth = max(0, width - configurationX - trailing.width - 6)
+        let configurationHeight = subviews.count == 4
+            ? subviews[2].sizeThatFits(ProposedViewSize(width: configurationWidth, height: nil)).height : 0
+        let compactControlHeight = max(44, leading.height, trailing.height)
+        let controlHeight = max(compactControlHeight, configurationHeight)
         let proposedEditorHeight = fillsHeight ? height.map { max(0, $0 - 14 - controlHeight) } : nil
-        let editorHeight = subviews[0].sizeThatFits(ProposedViewSize(width: editorWidth, height: proposedEditorHeight)).height
-        let compactHeight = max(controlHeight, editorHeight)
-        let expandedHeight = 14 + editorHeight + controlHeight
+        // Reserve the final multiline width while the visible field changes width.
+        let measurementWidth = compactRowHeight == nil ? editorWidth : max(0, width - 2 * editorInset)
+        let expandedEditorHeight = subviews[0].sizeThatFits(
+            ProposedViewSize(width: measurementWidth, height: proposedEditorHeight)).height
+        let compactEditorHeight = compactRowHeight.map {
+            max($0, ceil(UIFont.preferredFont(forTextStyle: .body).lineHeight) + 10)
+        } ?? expandedEditorHeight
+        let compactHeight = max(compactControlHeight, compactEditorHeight)
+        let expandedHeight = 14 + expandedEditorHeight + controlHeight
         let layoutHeight = compactHeight + (expandedHeight - compactHeight) * progress
-        let editorY = (compactHeight - editorHeight) / 2 * (1 - progress) + 7 * progress
+        let editorHeight = compactEditorHeight + (expandedEditorHeight - compactEditorHeight) * progress
+        let editorY = (compactHeight - compactEditorHeight) / 2 * (1 - progress) + 7 * progress
         let controlsY = compactHeight / 2 * (1 - progress) + (expandedHeight - controlHeight / 2) * progress
-        return (editorX, editorY, editorWidth, editorHeight, controlsY, layoutHeight)
+        return (editorX, editorY, editorWidth, editorHeight, configurationX, configurationWidth, controlsY, layoutHeight)
     }
 }
