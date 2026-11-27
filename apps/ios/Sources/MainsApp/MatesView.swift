@@ -1050,6 +1050,9 @@ struct MateView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.calendar) private var calendar
     @Environment(\.colorScheme) private var colorScheme
+    #if MAINS_GPT_LIVE
+    private var preparingVoice: Bool { session.voice.ownsCall && session.voice.runID == nil && session.voiceMate?.id == mateID }
+    #endif
     private var showsSetup: Bool {
         guard let mate else { return false }
         return mate.welcome?.question?.profileSetup != nil && (!mate.ready || chats.isEmpty)
@@ -1141,12 +1144,20 @@ struct MateView: View {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             }, isEnabled: composerFocused)
         }
+        #if MAINS_GPT_LIVE
+        .opacity(preparingVoice ? 0 : 1)
+        .allowsHitTesting(!preparingVoice)
+        .accessibilityHidden(preparingVoice)
+        #endif
         .composerInset { editorExpanded in
             if session.isConnected, let mate, mate.ready {
                 firstTaskComposer(mate, editorExpanded: editorExpanded) { composerFocused = $0 }
                     .onDisappear { composerFocused = false }
             }
         }
+        #if MAINS_GPT_LIVE
+        .modifier(VoicePresentationLayer(voice: session.voice, presented: preparingVoice))
+        #endif
         .background(alignment: .center) {
             Color(.systemBackground).ignoresSafeArea()
             if let mate { MateAvatarBackdrop(avatar: mate.avatar) }

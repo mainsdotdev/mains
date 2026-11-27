@@ -42,7 +42,6 @@ extension SessionIntegrationTests {
     let page = try samplePage(artifacts: #"[{"id":7,"runId":"r","kind":"report","content":"A bounded preview","metadata":{"mobileContentDeferred":{"chars":20000}},"createdAt":{"$date":"2026-01-01T00:00:00Z"}}]"#)
     transcript.replace(page)
     #expect(transcript.rows.first?.deferredArtifactID == 7)
-    #expect(TranscriptSection.build(transcript.rows).first?.responseIsPreview == true)
     let request = try transcript.request(runID: "r", direction: "latest")
     #expect(request["profile"] == .string("mobile") && request["conversationWindow"] == .bool(true))
 }

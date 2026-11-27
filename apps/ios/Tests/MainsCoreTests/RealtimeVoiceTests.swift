@@ -49,8 +49,10 @@ import Testing
     @Test @MainActor func connectsOnlyAfterNativeAndMediaReadinessAndUsesTheOriginalOffer() async throws {
         let voice = RealtimeVoiceController(), media = VoiceMediaProbe(), backend = VoiceSignalingProbe()
         voice.makeMedia = { media }
+        voice.presentation = .conversation
         await voice.start(label: "Project") { backend.signaling() }
         #expect(backend.starts.first?.0 == "v=0\r\nphone-offer" && voice.phase == .connecting)
+        #expect(voice.presentation == .focus)
         voice.receive(backend.event("sdp", extra: ["sdp": .string("v=0\r\nanswer")]))
         try await eventually { media.answerSDPs.count == 1 }
         voice.receive(backend.event("started"))

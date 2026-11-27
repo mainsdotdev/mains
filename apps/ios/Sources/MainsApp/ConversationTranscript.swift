@@ -89,6 +89,7 @@ struct ConversationTranscript: View {
     let fork: () -> Void
     var searchCursor: HistoryCursor? = nil
     var mate: Mate? = nil
+    var hidesEmptyPrompt = false
     let readContent: (Int) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationPaneVisible) private var paneVisible
@@ -151,7 +152,8 @@ struct ConversationTranscript: View {
         let empty = rows.isEmpty && pending == nil && run?.isActive != true
         let needsConnection = empty && !session.isConnected
         let waitsForHistory = session.isConnected && page == nil && rows.isEmpty && pending == nil && historyError == nil
-        let showsEmptyState = needsConnection || empty && !waitsForHistory && historyError == nil
+        let showsEmptyPrompt = empty && !needsConnection && !waitsForHistory && historyError == nil && !hidesEmptyPrompt
+        let showsEmptyState = needsConnection || showsEmptyPrompt
         let centersEmptyState = showsEmptyState && page?.hasOlder != true && page?.hasNewer != true && page?.activity == nil
         let sections = TranscriptSection.build(rows, foldsResponses: !isMate)
         let liveSectionID = run?.isActive == true && !session.transcript.isHistorical ? sections.last?.id : nil
@@ -186,7 +188,7 @@ struct ConversationTranscript: View {
                 } else if waitsForHistory {
                     ConversationSkeleton(isMate: isMate)
                         .accessibilityIdentifier("conversationSkeleton")
-                } else if empty && historyError == nil {
+                } else if showsEmptyPrompt {
                     EmptyStateView(artwork: .chats, title: "Pick up where you left off",
                                    description: Text("Send a message to continue with \(Provider.name(providerID))."))
                         .accessibilityIdentifier("conversationEmptyState")
@@ -547,8 +549,6 @@ private struct ChatTurnView: View {
     }
     private func messages(_ rows: [TranscriptRow]) -> some View {
         VStack(alignment: .leading, spacing: TranscriptRowMetrics.spacing) {
-            let lastResponse = section.rows.last(where: { $0.kind == .response && $0.mateTask == nil })
-            let copyRowID = live || lastResponse?.live == true ? nil : lastResponse?.id
             ForEach(TranscriptGroup.build(rows)) { group in
                 if let plan = group.rows.first?.plan, !isMate { ChatPlanCard(session: session, runID: forkRunID, plan: plan, providerID: providerID) }
                 else if group.rows.first?.kind == .tool {
@@ -559,7 +559,6 @@ private struct ChatTurnView: View {
                 else if group.rows.first?.kind == .media { ChatMediaGallery(session: session, media: group.rows.flatMap(\.media)) }
                 else if let row = group.rows.first {
                     ChatMessage(session: session, row: row, providerID: providerID, readContent: readContent, isMate: isMate, openSubagents: openSubagents,
-                                copyText: row.id == copyRowID ? section.responseText : nil, copyIsPreview: section.responseIsPreview,
                                 forkRunID: row.id == forkRowID ? forkRunID : nil, fork: fork)
                         .background(row.id == searchRowID ? Color.accentColor.opacity(0.08) : .clear, in: .rect(cornerRadius: 8))
                 }

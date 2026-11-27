@@ -21,6 +21,10 @@ public enum RealtimeVoicePhase: String, Sendable {
     case idle, connecting, connected, ending, stopFailed, error
 }
 
+public enum VoicePresentation: Equatable, Sendable {
+    case focus, conversation
+}
+
 public struct PendingVoiceConversation: Sendable {
     public var uncertain = false
     let commandID: String
@@ -57,6 +61,7 @@ public struct RealtimeVoiceSignaling {
 @MainActor @Observable
 public final class RealtimeVoiceController {
     public private(set) var phase: RealtimeVoicePhase = .idle
+    public var presentation: VoicePresentation = .focus
     public private(set) var runID: String?
     public private(set) var label = ""
     public private(set) var muted = false
@@ -95,7 +100,7 @@ public final class RealtimeVoiceController {
     public func start(label: String, prepare: @escaping () async throws -> RealtimeVoiceSignaling) async {
         guard attempt == nil, let makeMedia else { return }
         let call = Attempt(); attempt = call
-        self.label = label; error = nil; runID = nil; muted = false
+        self.label = label; error = nil; runID = nil; muted = false; presentation = .focus
         phase = .connecting; onChange?()
         call.timer = Task { [weak self, weak call] in
             do { try await Task.sleep(for: self?.timeout ?? .seconds(30)) } catch { return }

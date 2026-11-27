@@ -1301,7 +1301,7 @@ final class MainsUITests: XCTestCase {
         firstTask.typeText("Make a prep list")
         XCTAssertLessThanOrEqual(firstTask.frame.maxY, startTask.frame.minY)
         startTask.tap()
-        XCTAssertTrue(app.buttons["newConversation"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["conversationOptions"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Native reply delivered."].waitForExistence(timeout: 10))
         XCTAssertTrue(greeting.exists)
         XCTAssertTrue(app.staticTexts["Help me plan meals"].exists)
@@ -1519,7 +1519,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(bar.exists)
         XCTAssertGreaterThan(header.frame.height, 84)
         XCTAssertGreaterThan(header.frame.maxY, bar.frame.maxY + 20)
-        XCTAssertTrue(app.buttons["newConversation"].exists)
+        XCTAssertFalse(app.buttons["newConversation"].exists)
         XCTAssertTrue(app.buttons["conversationOptions"].exists)
         let prompt = app.staticTexts["Check whether the build is ready."]
         XCTAssertTrue(prompt.waitForExistence(timeout: 5))
@@ -1743,6 +1743,41 @@ final class MainsUITests: XCTestCase {
         let change = try XCTUnwrap(arguments[2] as? [String: Any])
         XCTAssertEqual(change["action"] as? String, "archive")
         XCTAssertEqual(change["archived"] as? Bool, true)
+
+        app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars["Chats"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMateSkillsOpenFromTheWholeRow() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test-mate-skills")
+        app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        mate.tap()
+        app.buttons["openMateInfo"].tap()
+
+        let skills = app.navigationBars["Skills"]
+        let detailsRow = app.buttons["mateSkillsDetails"]
+        scrollTo(detailsRow, in: app)
+        XCTAssertGreaterThan(detailsRow.frame.width, app.frame.width * 0.8)
+        detailsRow.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap()
+        XCTAssertTrue(skills.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Release checks"].exists)
+        skills.buttons["Done"].tap()
+
+        app.navigationBars["Mate Details"].buttons["editMateProfile"].tap()
+        let editorRow = app.buttons["editMateSkills"]
+        scrollTo(editorRow, in: app)
+        XCTAssertGreaterThan(editorRow.frame.width, app.frame.width * 0.8)
+        editorRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(skills.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["mateAddSkill"].exists)
+        skills.buttons["Done"].tap()
+        app.navigationBars["Edit Mate"].buttons["Cancel"].tap()
 
         app.navigationBars.buttons["BackButton"].tap()
         app.navigationBars["Chats"].buttons["BackButton"].tap()
@@ -2441,49 +2476,169 @@ final class MainsUITests: XCTestCase {
         let app = makeApplication()
         app.launchArguments = ["--voice-preview"]
         app.launch()
-        let stage = app.descendants(matching: .any).matching(identifier: "voiceFocusStage").firstMatch
-        XCTAssertTrue(stage.waitForExistence(timeout: 15))
         let transcript = app.scrollViews["conversationTranscript"]
-        XCTAssertFalse(transcript.staticTexts.firstMatch.isHittable)
-        let orb = app.descendants(matching: .any).matching(identifier: "voiceOrb").firstMatch
+        let orb = app.buttons["voiceOrb"]
         waitForVoiceConnection(orb, minimumWidth: 180)
-        XCTAssertEqual(orb.value as? String, "Water")
+        XCTAssertFalse(transcript.staticTexts.firstMatch.isHittable)
+        XCTAssertFalse(app.buttons["voiceDisplayOptions"].exists)
+        XCTAssertEqual(orb.value as? String, "Focus, Water")
         XCTAssertGreaterThan(orb.frame.width, 180)
-        let focusedOrbWidth = orb.frame.width
+        let focusedOrbFrame = orb.frame
         XCTAssertEqual(orb.frame.midX, app.frame.midX, accuracy: 4)
         attachScreenshot(app, name: "GPT Live – water focus")
         app.buttons["muteVoice"].tap()
         XCTAssertEqual(app.buttons["muteVoice"].label, "Unmute microphone")
-        app.buttons["voiceDisplayOptions"].tap()
-        app.buttons["Conversation"].tap()
-        XCTAssertTrue(stage.waitForNonExistence(timeout: 5))
+        orb.tap()
         XCTAssertTrue(transcript.waitForExistence(timeout: 5))
-        let compactOrb = app.descendants(matching: .any).matching(identifier: "voiceComposerOrb").firstMatch
-        XCTAssertTrue(compactOrb.waitForExistence(timeout: 5))
-        XCTAssertGreaterThan(compactOrb.frame.width, 80)
-        XCTAssertLessThan(compactOrb.frame.width, focusedOrbWidth)
-        XCTAssertLessThan(compactOrb.frame.maxY, app.textViews["messageInput"].frame.minY)
+        XCTAssertTrue(transcript.staticTexts.firstMatch.exists)
+        XCTAssertEqual(orb.value as? String, "Conversation, Water")
+        XCTAssertGreaterThan(orb.frame.width, 80)
+        XCTAssertLessThan(orb.frame.width, focusedOrbFrame.width)
+        XCTAssertGreaterThan(orb.frame.midY, focusedOrbFrame.midY)
+        XCTAssertLessThan(orb.frame.maxY, app.textViews["messageInput"].frame.minY)
         XCTAssertEqual(app.buttons["muteVoice"].label, "Unmute microphone")
         attachScreenshot(app, name: "GPT Live – water above composer")
-        app.buttons["voiceDisplayOptions"].tap()
-        app.buttons["Focus"].tap()
-        XCTAssertTrue(stage.waitForExistence(timeout: 5))
+        orb.tap()
+        let returnedToFocus = NSPredicate { _, _ in
+            guard orb.exists, orb.value as? String == "Focus, Water" else { return false }
+            let frame = orb.frame
+            return abs(frame.width - focusedOrbFrame.width) < 4 && abs(frame.midY - focusedOrbFrame.midY) < 4
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: returnedToFocus, object: orb)], timeout: 5), .completed)
+        XCTAssertFalse(transcript.staticTexts.firstMatch.isHittable)
         XCTAssertEqual(app.buttons["muteVoice"].label, "Unmute microphone")
         app.buttons["endVoice"].tap()
-        XCTAssertTrue(stage.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(orb.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.scrollViews["conversationTranscript"].exists)
     }
 
     func testVoiceOrbDisappearsWhenEndingInConversation() {
         continueAfterFailure = false
         let app = makeApplication()
-        app.launchArguments = ["--voice-preview", "--voice-preview-conversation"]
+        app.launchArguments = ["--voice-preview", "--voice-preview-conversation", "--voice-preview-empty"]
         app.launch()
-        let orb = app.descendants(matching: .any)["voiceComposerOrb"].firstMatch
+        let orb = app.buttons["voiceOrb"]
         waitForVoiceConnection(orb, minimumWidth: 80)
+        XCTAssertEqual(orb.value as? String, "Conversation, Water")
+        XCTAssertEqual(orb.frame.width, 104, accuracy: 4)
+        let emptyPrompt = app.staticTexts["Pick up where you left off"]
+        XCTAssertFalse(emptyPrompt.exists)
+        attachScreenshot(app, name: "GPT Live – empty conversation")
         app.buttons["endVoice"].tap()
         XCTAssertTrue(orb.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.scrollViews["conversationTranscript"].exists)
+        XCTAssertTrue(emptyPrompt.waitForExistence(timeout: 5))
+    }
+
+    func testMateVoiceKeepsItsHeaderAndOptionsWhenTranscriptSlidesOut() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments = ["--voice-preview", "--voice-preview-mate", "--voice-preview-conversation"]
+        app.launch()
+
+        let orb = app.buttons["voiceOrb"]
+        let header = app.descendants(matching: .any)["mateConversationHeader"].firstMatch
+        let options = app.buttons["conversationOptions"]
+        let prompt = app.staticTexts["Put together a checklist for testing the iPhone release."]
+        waitForVoiceConnection(orb, minimumWidth: 80)
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        XCTAssertEqual(orb.value as? String, "Conversation, Water")
+        XCTAssertEqual(header.label, "Release Reviewer")
+        XCTAssertTrue(options.isHittable)
+        let headerFrame = header.frame
+        let optionsFrame = options.frame
+        let promptFrame = prompt.frame
+
+        orb.tap()
+        waitForVoiceConnection(orb, minimumWidth: 180)
+        XCTAssertEqual(orb.value as? String, "Focus, Water")
+        XCTAssertFalse(prompt.isHittable)
+        XCTAssertEqual(header.label, "Release Reviewer")
+        XCTAssertEqual(header.frame.minY, headerFrame.minY, accuracy: 2)
+        XCTAssertEqual(options.frame.minY, optionsFrame.minY, accuracy: 2)
+        attachScreenshot(app, name: "GPT Live – Mate header in Focus")
+
+        options.tap()
+        let rename = app.buttons["renameConversation"]
+        XCTAssertTrue(rename.waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.55)).tap()
+        XCTAssertTrue(rename.waitForNonExistence(timeout: 5))
+        orb.tap()
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        let settled = NSPredicate { _, _ in prompt.isHittable && abs(prompt.frame.minY - promptFrame.minY) < 2 }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: settled, object: prompt)], timeout: 5), .completed)
+        XCTAssertEqual(header.label, "Release Reviewer")
+        XCTAssertTrue(options.isHittable)
+        attachScreenshot(app, name: "GPT Live – Mate transcript restored")
+        app.buttons["endVoice"].tap()
+    }
+
+    func testVoiceComposerReturnsToSingleLineAndEachCallStartsInFocus() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments = ["--voice-preview", "--voice-preview-manual-start", "--voice-preview-empty"]
+        app.launch()
+
+        let start = app.buttons["startVoice"]
+        let composer = app.descendants(matching: .any)["messageComposer"].firstMatch
+        let input = app.textViews["messageInput"]
+        let attachment = app.buttons["addAttachment"]
+        let orb = app.buttons["voiceOrb"]
+        let mute = app.buttons["muteVoice"]
+        let end = app.buttons["endVoice"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["newConversation"].exists)
+        let compactHeight = composer.frame.height
+
+        func checkCompactVoiceControls(keyboardVisible: Bool = false) {
+            XCTAssertTrue(mute.waitForExistence(timeout: 5))
+            XCTAssertTrue(end.exists)
+            XCTAssertEqual(app.keyboards.firstMatch.exists, keyboardVisible)
+            XCTAssertFalse(app.buttons["chooseModel"].exists)
+            XCTAssertEqual(composer.frame.height, compactHeight, accuracy: 1)
+            XCTAssertEqual(mute.frame.height, compactHeight, accuracy: 1)
+            XCTAssertEqual(end.frame.height, compactHeight, accuracy: 1)
+            XCTAssertEqual(composer.frame.midY, mute.frame.midY, accuracy: 1)
+            XCTAssertEqual(mute.frame.midY, end.frame.midY, accuracy: 1)
+            XCTAssertEqual(input.frame.midY, attachment.frame.midY, accuracy: 1)
+            XCTAssertLessThanOrEqual(input.frame.maxX, mute.frame.minX)
+            XCTAssertLessThanOrEqual(mute.frame.maxX, end.frame.minX)
+        }
+
+        start.tap()
+        waitForVoiceConnection(orb, minimumWidth: 180)
+        XCTAssertEqual(orb.value as? String, "Focus, Water")
+        checkCompactVoiceControls()
+        attachScreenshot(app, name: "GPT Live – compact Focus controls")
+        input.tap()
+        assertKeyboardVisible(app)
+        checkCompactVoiceControls(keyboardVisible: true)
+        orb.tap()
+        XCTAssertEqual(orb.value as? String, "Conversation, Water")
+        let draft = "Keep this written draft on a single line\nwhile the voice call is active."
+        input.typeText(draft)
+        checkCompactVoiceControls(keyboardVisible: true)
+        XCTAssertEqual(input.value as? String, draft)
+        attachScreenshot(app, name: "GPT Live – compact Conversation controls")
+        input.swipeRight(velocity: .slow)
+        checkCompactVoiceControls(keyboardVisible: true)
+        XCTAssertEqual(input.value as? String, draft)
+        attachScreenshot(app, name: "GPT Live – draft scrolled horizontally")
+        end.tap()
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+
+        input.tap()
+        assertKeyboardVisible(app)
+        XCTAssertEqual(input.value as? String, draft)
+        XCTAssertTrue(app.buttons["chooseModel"].exists)
+        XCTAssertLessThanOrEqual(input.frame.maxY, attachment.frame.minY)
+        start.tap()
+        waitForVoiceConnection(orb, minimumWidth: 180)
+        XCTAssertEqual(orb.value as? String, "Focus, Water")
+        checkCompactVoiceControls()
+        XCTAssertEqual(input.value as? String, draft)
+        end.tap()
     }
 
     func testWaterVoiceFocusSupportsLightAppearance() throws {
@@ -2491,7 +2646,7 @@ final class MainsUITests: XCTestCase {
         let app = makeApplication()
         app.launchArguments = ["--voice-preview", "--voice-preview-light"]
         app.launch()
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "voiceFocusStage").firstMatch.waitForExistence(timeout: 15))
+        waitForVoiceConnection(app.buttons["voiceOrb"], minimumWidth: 180)
         attachScreenshot(app, name: "GPT Live – water in light appearance")
         app.buttons["endVoice"].tap()
     }
@@ -2519,7 +2674,7 @@ final class MainsUITests: XCTestCase {
         app.launch()
         let orb = app.descendants(matching: .any).matching(identifier: "voiceOrb").firstMatch
         waitForVoiceConnection(orb, minimumWidth: 180)
-        XCTAssertEqual(orb.value as? String, name)
+        XCTAssertEqual(orb.value as? String, "Focus, " + name)
         func pixels() throws -> Data {
             let screenshot = try XCTUnwrap(app.screenshot().image.cgImage)
             let scale = CGFloat(screenshot.width) / app.frame.width
@@ -2823,11 +2978,28 @@ final class MainsUITests: XCTestCase {
         let input = app.textViews["homeMessageInput"]
         let mic = app.buttons["startDictation"]
         let cancel = app.buttons["cancelDictation"]
+        let preparing = app.buttons["preparingDictation"]
         let stop = app.buttons["stopDictation"]
         let send = app.buttons["startConversation"]
         XCTAssertTrue(mic.waitForExistence(timeout: 10))
         XCTAssertFalse(send.exists)
         attachScreenshot(app, name: "Dictation – empty composer")
+
+        let micFrame = mic.frame
+        mic.tap()
+        XCTAssertTrue(preparing.waitForExistence(timeout: 2))
+        XCTAssertFalse(preparing.isEnabled)
+        XCTAssertFalse(stop.exists)
+        XCTAssertEqual(preparing.frame.midX, micFrame.midX, accuracy: 1)
+        XCTAssertEqual(preparing.frame.midY, micFrame.midY, accuracy: 1)
+        attachScreenshot(app, name: "Dictation – preparing at the microphone position")
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        XCTAssertFalse(preparing.exists)
+        XCTAssertFalse(send.exists)
+        XCTAssertEqual(stop.frame.midX, micFrame.midX, accuracy: 1)
+        XCTAssertEqual(stop.frame.midY, micFrame.midY, accuracy: 1)
+        cancel.tap()
+        XCTAssertTrue(mic.waitForExistence(timeout: 5))
 
         input.tap()
         let keyboard = app.keyboards.firstMatch
@@ -2837,7 +3009,7 @@ final class MainsUITests: XCTestCase {
         let keyboardWasVisible = keyboard.frame.intersection(app.frame).height > 80
         mic.tap()
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
-        XCTAssertTrue(stop.exists)
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
         let preview = "Existing draft. This is a dictated message."
         func waitForText(_ text: String) {
             let value = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", text), object: input)
@@ -2854,6 +3026,7 @@ final class MainsUITests: XCTestCase {
         waitForText("Existing draft.")
 
         mic.tap()
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
         waitForText(preview)
         stop.tap()
         XCTAssertTrue(mic.waitForExistence(timeout: 5))
@@ -3132,7 +3305,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(table.staticTexts["Google Play"].exists)
     }
 
-    func testDemoCopyActionsShowTransientToastWithoutMovingChat() {
+    func testDemoAnswerOmitsCopyButtonAndCodeCopyShowsTransientToast() {
         continueAfterFailure = false
         let app = makeApplication()
         app.launchArguments += ["-appearancePreference", "dark", "-native-demo-enabled-v1", "NO"]
@@ -3147,25 +3320,23 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(consent.waitForExistence(timeout: 5))
         consent.tap()
 
-        let copyAnswer = app.buttons["copyAnswer"]
-        XCTAssertTrue(copyAnswer.waitForExistence(timeout: 15))
-        scrollTo(copyAnswer, in: app)
-        let answerPosition = copyAnswer.frame.minY
-        let toast = app.staticTexts["actionToast"]
-        copyAnswer.tap()
-        XCTAssertTrue(toast.waitForExistence(timeout: 3))
-        XCTAssertEqual(toast.label, "Message copied")
-        XCTAssertGreaterThanOrEqual(toast.frame.minY, app.navigationBars.firstMatch.frame.maxY)
-        XCTAssertEqual(copyAnswer.frame.minY, answerPosition, accuracy: 1)
-        attachScreenshot(app, name: "Message copied toast")
-        XCTAssertTrue(toast.waitForNonExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["forkFromLastResponse"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["copyAnswer"].exists)
 
         let copyCode = app.buttons["Copy code"]
         scrollTo(copyCode, in: app)
+        let codePosition = copyCode.frame.minY
+        let toast = app.staticTexts["actionToast"]
         copyCode.tap()
         XCTAssertTrue(toast.waitForExistence(timeout: 3))
         XCTAssertEqual(toast.label, "Code copied")
+        XCTAssertGreaterThanOrEqual(toast.frame.minY, app.navigationBars.firstMatch.frame.maxY)
+        XCTAssertEqual(copyCode.frame.minY, codePosition, accuracy: 1)
         XCTAssertTrue(toast.waitForNonExistence(timeout: 4))
+
+        app.buttons["conversationOptions"].tap()
+        XCTAssertTrue(app.buttons["renameConversation"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["forkConversation"].exists)
     }
 
     func testDemoAgentsOverlayDoesNotMoveTranscriptAndDetailsReturnToConversation() throws {
@@ -3230,7 +3401,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Binary file changes can be viewed on desktop."].waitForExistence(timeout: 10))
         app.buttons["closeFileDiff"].tap()
         XCTAssertTrue(binary.waitForExistence(timeout: 5), "Returning keeps the same conversation and expanded file list.")
-        app.buttons["newConversation"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         openSidebar(app); app.buttons["openSettings"].tap()
         let exit = app.buttons["exitDemo"]; scrollTo(exit, in: app); exit.tap()
         XCTAssertTrue(app.buttons["startDemo"].waitForExistence(timeout: 5))
@@ -3520,7 +3691,7 @@ final class MainsUITests: XCTestCase {
         scrollTo(next, in: app); next.tap()
         XCTAssertTrue(next.waitForNonExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Demo result"].waitForExistence(timeout: 15))
-        app.buttons["newConversation"].tap()
+        XCTAssertFalse(app.buttons["newConversation"].exists)
         openSidebar(app); app.buttons["openSettings"].tap()
         let exit = app.buttons["exitDemo"]
         scrollTo(exit, in: app); exit.tap()
@@ -3588,7 +3759,8 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(allow.waitForExistence(timeout: 5)); XCTAssertEqual(allow.label, "Continue Demo"); allow.tap()
         XCTAssertTrue(app.staticTexts["Demo result"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.buttons["stopReply"].waitForNonExistence(timeout: 15))
-        app.buttons["newConversation"].tap()
+        XCTAssertFalse(app.buttons["newConversation"].exists)
+        app.navigationBars.buttons["BackButton"].tap()
         XCTAssertTrue(app.buttons["demoSuggestedPrompt"].waitForExistence(timeout: 10))
         openSidebar(app); app.buttons["openSettings"].tap()
         let exit = app.buttons["exitDemo"]
@@ -4622,7 +4794,21 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
         XCTAssertFalse(list.exists)
         XCTAssertFalse(compactTitle.exists)
-        input.typeText(prompt)
+        let composer = app.descendants(matching: .any)["messageComposer"].firstMatch
+        let microphone = app.buttons["startDictation"]
+        let send = app.buttons["startConversation"]
+        XCTAssertTrue(microphone.exists)
+        XCTAssertFalse(send.exists)
+        let emptyComposer = composer.frame
+        let emptyInput = input.frame
+        input.typeText(String(prompt.prefix(1)))
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        XCTAssertEqual(send.frame.height, microphone.frame.height, accuracy: 0.5)
+        XCTAssertEqual(send.frame.width, microphone.frame.width, accuracy: 0.5)
+        XCTAssertEqual(composer.frame.height, emptyComposer.height, accuracy: 0.5)
+        XCTAssertEqual(composer.frame.minY, emptyComposer.minY, accuracy: 0.5)
+        XCTAssertEqual(input.frame.height, emptyInput.height, accuracy: 0.5)
+        input.typeText(String(prompt.dropFirst()))
         assertComposerAboveKeyboard(app)
         attachScreenshot(app, name: "Native workspace – composing with list hidden")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
@@ -4848,6 +5034,8 @@ final class MainsUITests: XCTestCase {
         app.launchArguments += ["-appearancePreference", "dark"]
         let conversation = pairFixture(app, code: "ios-test-design", search: true)
         conversation.tap()
+        XCTAssertTrue(app.buttons["conversationOptions"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["newConversation"].exists)
         let readers = ["conversationTranscript", "conversationWorkspace-conversation"]
         let transcript = app.scrollViews.matching(NSPredicate(format: "identifier IN %@", readers)).firstMatch
         XCTAssertTrue(transcript.waitForExistence(timeout: 10))
@@ -4908,7 +5096,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(settings["model"] as? String, "fixture-deep")
         XCTAssertEqual(config["modelReasoningEffort"] as? String, "xhigh")
         XCTAssertEqual(config["sandboxMode"] as? String, "read-only")
-        app.buttons["newConversation"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 5))
         openSidebar(app)
         XCTAssertTrue(app.buttons["sidebarMode-chat"].isSelected)
@@ -4933,6 +5121,8 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "Sidebar new chat and utilities")
         conversation.tap()
         XCTAssertTrue(app.textViews["messageInput"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["conversationOptions"].exists)
+        XCTAssertFalse(app.buttons["newConversation"].exists)
         let leadingEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.52))
         let trailingEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.52))
         leadingEdge.press(forDuration: 0.05, thenDragTo: trailingEdge)

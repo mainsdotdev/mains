@@ -88,7 +88,7 @@ struct AppShell: View {
                         NavigationStack(path: $path) {
                             Group {
                                 if let homeRunID {
-                                    ConversationView(session: session, runID: homeRunID, openComputer: showSettings, onNew: goHome,
+                                    ConversationView(session: session, runID: homeRunID, openComputer: showSettings,
                                                      onFork: { path.append(.conversation($0)) }, onNavigate: { path.append($0) })
                                         .id("\(session.ownership):\(homeRunID)")
                                         .toolbar {
@@ -113,18 +113,18 @@ struct AppShell: View {
                             .navigationDestination(for: AppRoute.self) { route in
                                 switch route {
                                 case .conversation(let id, let mate):
-                                    ConversationView(session: session, runID: id, openComputer: showSettings, onNew: { newConversation(from: id) },
+                                    ConversationView(session: session, runID: id, openComputer: showSettings,
                                                      onFork: { path.append(.conversation($0)) }, mateSource: mate, onNavigate: { path.append($0) })
                                     .id("\(session.ownership):\(id)")
                                 case .searchMessage(let id, let cursor): ConversationView(session: session, runID: id, openComputer: showSettings,
-                                    onNew: { newConversation(from: id) }, onFork: { path.append(.conversation($0)) }, initialCursor: cursor,
+                                    onFork: { path.append(.conversation($0)) }, initialCursor: cursor,
                                     onNavigate: { path.append($0) })
                                     .id("\(session.ownership):\(id):\(cursor.timestamp):\(cursor.id)")
                                 case .workspace(let id):
                                     if let workspaceChat, workspaceChat.workspaceID == id {
                                         let runID = workspaceChat.runID
                                         ConversationView(session: session, runID: runID, openComputer: showSettings,
-                                                         onNew: { self.workspaceChat = nil }, onFork: { path.append(.conversation($0)) },
+                                                         onFork: { path.append(.conversation($0)) },
                                                          onNavigate: { path.append($0) })
                                             .id("\(session.ownership):\(runID)")
                                     } else {
@@ -433,15 +433,6 @@ struct AppShell: View {
         if let mateID { open(.conversation(id, mate: .profile(mateID))); return }
         if let spaceID { session.selectSpace(spaceID) }
         open(.conversation(id))
-    }
-    private func newConversation(from runID: String) {
-        if let mateID = session.conversations.first(where: { $0.id == runID })?.assistantId {
-            if path.dropLast().last == .mate(mateID) { path.removeLast() }
-            else { open(.mate(mateID)) }
-        } else if case .workspace = path.dropLast().last {
-            workspaceChat = nil
-            path.removeLast()
-        } else { goHome() }
     }
     private func startSidebarConversation(in spaceID: String) {
         if session.selectedSpaceID != spaceID { session.selectSpace(spaceID) }

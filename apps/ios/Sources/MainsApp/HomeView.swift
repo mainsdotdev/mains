@@ -20,9 +20,8 @@ struct HomeView: View {
     @State private var composerFocused = false
     @State private var workspaceRequired = false
     #if MAINS_GPT_LIVE
-    @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
     private var preparingVoice: Bool {
-        session.voice.ownsCall && session.voice.runID == nil && session.voiceSpaceID == space?.id
+        session.voice.ownsCall && session.voice.runID == nil && session.voiceMate == nil && session.voiceSpaceID == space?.id
     }
     #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -31,15 +30,12 @@ struct HomeView: View {
     var body: some View {
         VStack(spacing: 0) {
             #if MAINS_GPT_LIVE
-            if !preparingVoice || voicePresentation != .focus { homeContent }
+            if !preparingVoice { homeContent }
             #else
             homeContent
             #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        #if MAINS_GPT_LIVE
-        .overlay { VoiceFocusStage(voice: session.voice, presented: preparingVoice && voicePresentation == .focus) }
-        #endif
         .background(alignment: .center) { KeyboardDismissBackground(color: Color(.systemBackground)) }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -54,9 +50,6 @@ struct HomeView: View {
                 }.sharedBackgroundVisibility(.hidden)
             }
             #if MAINS_GPT_LIVE
-            if preparingVoice {
-                ToolbarItem(placement: .topBarTrailing) { VoicePresentationMenu() }
-            }
             if let space {
                 ToolbarItem(placement: .topBarTrailing) {
                     VoiceStartButton(session: session, context: ComposerContext(space: space),
@@ -75,6 +68,9 @@ struct HomeView: View {
                     .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
             }
         }
+        #if MAINS_GPT_LIVE
+        .modifier(VoicePresentationLayer(voice: session.voice, presented: preparingVoice))
+        #endif
         .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: space != nil)
         .composerPickers(model: $modelSheet, options: $optionsSheet, target: $targetPicker, session: session,
                          context: space.map { ComposerContext(space: $0) })

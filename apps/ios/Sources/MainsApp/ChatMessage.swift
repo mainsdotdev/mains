@@ -20,8 +20,6 @@ struct ChatMessage: View {
     var readContent: ((Int) -> Void)? = nil
     var isMate = false
     var openSubagents: () -> Void = {}
-    var copyText: String? = nil
-    var copyIsPreview = false
     var forkRunID: String? = nil
     var fork: () -> Void = {}
     var fullText: String? = nil
@@ -91,8 +89,8 @@ struct ChatMessage: View {
                 Button("Read full message", systemImage: "text.alignleft") { readContent(id) }
                     .font(.subheadline.weight(.medium))
             }
-            if !isMate, row.kind == .response, !row.live, copyText != nil || forkRunID != nil {
-                ConversationMessageActions(session: session, copyText: copyText, copyIsPreview: copyIsPreview, forkRunID: forkRunID, fork: fork)
+            if !isMate, row.kind == .response, !row.live, let forkRunID {
+                ForkConversationButton(session: session, runID: forkRunID, fork: fork)
             }
         }
         .frame(maxWidth: .infinity, alignment: row.kind == .prompt ? .trailing : .leading)

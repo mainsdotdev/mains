@@ -35,7 +35,6 @@ struct ConversationView: View {
     let session: BackendSession
     let runID: String
     let openComputer: () -> Void
-    let onNew: () -> Void
     let onFork: (String) -> Void
     let initialCursor: HistoryCursor?
     let mateSource: MateConversationSource?
@@ -81,10 +80,12 @@ struct ConversationView: View {
     @State private var agentsExpanded = false
     @State private var selectedAgent: SubagentSelection?
     #if MAINS_GPT_LIVE
-    @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.voiceReduceMotionPreview) private var voiceReduceMotionPreview
     private var ownsVoice: Bool { session.voice.ownsCall && session.voice.runID == runID }
-    private var focusedVoice: Bool { ownsVoice && voicePresentation == .focus }
+    private var focusedVoice: Bool { ownsVoice && session.voice.presentation == .focus }
     #else
+    private var ownsVoice: Bool { false }
     private var focusedVoice: Bool { false }
     #endif
     private var agents: [SessionSubagent] { run?.assistantId == nil && session.viewingRunID == runID ? session.transcript.subagents : [] }
@@ -122,11 +123,11 @@ struct ConversationView: View {
         guard isMateConversation, !focusedVoice, session.isConnected else { return false }
         return !hasLoadedHistory || (mateID != nil && mateProfile == nil)
     }
-    private var usesMateHeader: Bool { isMateConversation && !focusedVoice && !showsConnectionPill }
+    private var usesMateHeader: Bool { isMateConversation && !showsConnectionPill }
     private var showsMateHeader: Bool { usesMateHeader && !waitsForMateConversation }
     private var navigationTitle: String {
-        if focusedVoice || showsConnectionPill || waitsForMateConversation { return "" }
         if showsMateHeader { return conversationMate?.name ?? "" }
+        if focusedVoice || showsConnectionPill || waitsForMateConversation { return "" }
         return run?.displayTitle ?? "Conversation"
     }
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
@@ -152,10 +153,6 @@ struct ConversationView: View {
     }
     private var uncertain: Bool { session.pendingMessage?.status == .uncertain }
     private var showsConnectionPill: Bool { session.pairing != nil && !session.isConnected }
-    private var forkTitle: String {
-        guard let pending = session.pendingFork, pending.sourceRunID == runID else { return "Fork chat" }
-        return pending.status == .sending ? "Forking…" : "Fork unconfirmed"
-    }
     private var usesQueue: Bool {
         run?.supportsSteering == true && (run?.isActive == true || !queue.messages.isEmpty || queue.editingID != nil)
     }
@@ -182,12 +179,11 @@ struct ConversationView: View {
                     artifacts: session.transcript.page?.artifacts.filter { ["document", "file", "image", "visualization"].contains($0.kind) }.map(\.id) ?? [])
     }
 
-    init(session: BackendSession, runID: String, openComputer: @escaping () -> Void, onNew: @escaping () -> Void,
+    init(session: BackendSession, runID: String, openComputer: @escaping () -> Void,
          onFork: @escaping (String) -> Void, initialCursor: HistoryCursor? = nil, mateSource: MateConversationSource? = nil,
          onNavigate: @escaping (AppRoute) -> Void = { _ in }) {
         self.session = session; self.runID = runID
         self.openComputer = openComputer
-        self.onNew = onNew
         self.onFork = onFork
         self.initialCursor = initialCursor
         self.mateSource = mateSource
@@ -291,7 +287,7 @@ struct ConversationView: View {
         let displayedOutputID = outputSelection?.id
         let viewport = CGRect(origin: .zero, size: geometry.size)
         let fillsViewport = plan.conversation == viewport && plan.output == viewport
-        return ConversationWorkspace(plan: plan, fillsViewport: fillsViewport, extendsConversationUnderHeader: !focusedVoice) {
+        return ConversationWorkspace(plan: plan, fillsViewport: fillsViewport, extendsConversationUnderHeader: true) {
             conversationContent.simultaneousGesture(TapGesture().onEnded {
                 if outputSelection?.id == displayedOutputID { companion.focusConversation() }
             })
@@ -428,17 +424,23 @@ struct ConversationView: View {
         }
     }
 
-    @ViewBuilder private var conversationContent: some View {
-        if waitsForMateConversation {
-            #if MAINS_GPT_LIVE
-            mateConversationLoading
-                .composerInset { editorExpanded in if ownsVoice { composerArea(editorExpanded: editorExpanded) } }
-                .environment(\.mateChatTint, composerMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
-            #else
-            mateConversationLoading
-            #endif
+    private var conversationContent: some View {
+        Group {
+            if waitsForMateConversation {
+                #if MAINS_GPT_LIVE
+                mateConversationLoading
+                    .composerInset { editorExpanded in if ownsVoice { composerArea(editorExpanded: editorExpanded) } }
+                    .environment(\.mateChatTint, composerMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
+                #else
+                mateConversationLoading
+                #endif
+            } else { conversationReader }
         }
-        else { conversationReader }
+        #if MAINS_GPT_LIVE
+        .modifier(VoicePresentationLayer(voice: session.voice, presented: ownsVoice))
+        #endif
+        .composerPickers(model: $modelSheet, options: $optionsSheet, session: session,
+                         context: waitsForMateConversation ? nil : run.map { ComposerContext(run: $0) }, withinPane: true)
     }
 
     @ViewBuilder private var mateConversationLoading: some View {
@@ -466,24 +468,27 @@ struct ConversationView: View {
         ZStack {
             ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", scroll: scroll, openFile: { turn, file in
                 selectedFile = TurnFileSelection(runID: runID, turnID: turn.id, file: file, owner: session.ownership)
-            }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor, mate: conversationMate) {
+            }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor,
+               mate: conversationMate, hidesEmptyPrompt: ownsVoice) {
                 content = ContentReference(id: $0)
             }
             .safeAreaPadding(.top, showsMateHeader ? archivedMate ? 46 : 32 : 0)
-            .opacity(focusedVoice ? 0 : 1)
+            #if MAINS_GPT_LIVE
+            .animation(ownsVoice && !reduceMotion && !voiceReduceMotionPreview ? VoicePresentation.animation : nil) { transcript in
+                transcript.visualEffect { [focusedVoice] content, viewport in
+                    // Move the whole viewport past the top edge without changing its scroll position.
+                    let distance = viewport.size.height + max(0, viewport.frame(in: .global).minY)
+                    return content.offset(y: focusedVoice ? -distance : 0)
+                }
+            }
             .allowsHitTesting(!focusedVoice)
             .accessibilityHidden(focusedVoice)
-            #if MAINS_GPT_LIVE
-            if focusedVoice { KeyboardDismissBackground(color: Color(.systemBackground)) }
-            VoiceFocusStage(voice: session.voice, presented: focusedVoice)
             #endif
         }
         .background(alignment: .center) { KeyboardDismissBackground(color: Color(.systemBackground)) }
         .composerInset(composerFocused: composerFocused) { composerArea(editorExpanded: $0) }
         .environment(\.mateChatTint, composerMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
         .environment(\.solidChatNotices, true)
-        .composerPickers(model: $modelSheet, options: $optionsSheet, session: session,
-                         context: run.map { ComposerContext(run: $0) }, withinPane: true)
     }
 
     @ToolbarContentBuilder private var standardConversationTitle: some ToolbarContent {
@@ -496,7 +501,8 @@ struct ConversationView: View {
 
     @ToolbarContentBuilder private func conversationToolbar(outputsAction: ConversationCompanionState.OutputsAction) -> some ToolbarContent {
             let hasOutputAction = (hasOutputs || companion.isOpen) && !focusedVoice && !waitsForMateConversation
-            let outputsInMenu = showsMateHeader && horizontalSizeClass != .regular
+            let outputsInMenu = hasOutputAction && showsMateHeader && horizontalSizeClass != .regular
+            let hasConversationActions = run.map { $0.isReplica != true } ?? false
             if showsConnectionPill {
                 ToolbarItem(placement: .principal) {
                     ConnectionPill(session: session, action: openComputer)
@@ -515,7 +521,6 @@ struct ConversationView: View {
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 #if MAINS_GPT_LIVE
-                if ownsVoice { VoicePresentationMenu() }
                 if let context = composerContext, !waitsForMateConversation {
                     VoiceStartButton(session: session, context: context)
                 }
@@ -523,18 +528,10 @@ struct ConversationView: View {
                 if hasOutputAction && !outputsInMenu {
                     outputsButton(outputsAction)
                 }
-                if !focusedVoice && !waitsForMateConversation {
-                    if !archivedMate {
-                        Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
-                    }
+                if (!focusedVoice || showsMateHeader) && !waitsForMateConversation && (outputsInMenu || hasConversationActions) {
                     Menu {
-                        if hasOutputAction && outputsInMenu {
+                        if outputsInMenu {
                             outputsButton(outputsAction)
-                        }
-                        if !archivedMate {
-                            Button(action: prepareFork) {
-                                Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
-                            }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
                         }
                         if let run {
                             ConversationMenuActions(session: session, run: run, request: $conversationAction)
@@ -644,7 +641,7 @@ struct ConversationView: View {
             if !editorExpanded {
             #if MAINS_GPT_LIVE
                 if focusedVoice && (session.waitingForDecision || session.pendingQuestions != nil) {
-                    Button { voicePresentation = .conversation } label: {
+                    Button { session.voice.presentation = .conversation } label: {
                         Label("Response needed", systemImage: "hand.raised")
                             .font(.footnote.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 40)
                             .background(Color(.secondarySystemBackground), in: .capsule)

@@ -2,6 +2,10 @@ import SwiftUI
 import UIKit
 import ImageIO
 
+private extension NSAttributedString.Key {
+    static let composerLineBreak = Self("composerLineBreak")
+}
+
 extension EnvironmentValues {
     @Entry var mateMentionAvatars: [String: MateAvatar] = [:]
 }
@@ -227,6 +231,8 @@ struct ContextTextEditor: View {
     var reservedTrailingWidth: CGFloat = 0
     var compactRowHeight: CGFloat? = nil
     var showsSingleLine = false
+    var scrollsHorizontally = false
+    var centersCompactPlaceholder = true
     var onOverflowChange: ((Bool) -> Void)? = nil
     var selection: ComposerEditorSelection? = nil
     var stagesDictation = false
@@ -237,11 +243,12 @@ struct ContextTextEditor: View {
         ContextTextInput(text: $text, skills: $skills, scope: scope, focused: $focused, placeholder: placeholder, identifier: identifier,
                          images: artwork.images, artworkRevision: artwork.revision, measuredWidth: measuredWidth,
                          fillsHeight: fillsHeight, reservedTrailingWidth: reservedTrailingWidth,
-                         compactRowHeight: compactRowHeight, showsSingleLine: showsSingleLine, onOverflowChange: onOverflowChange,
+                         compactRowHeight: compactRowHeight, showsSingleLine: showsSingleLine, scrollsHorizontally: scrollsHorizontally,
+                         onOverflowChange: onOverflowChange,
                          selection: selection, stagesDictation: stagesDictation)
             .overlay {
                 if compactRowHeight != nil && text.isEmpty {
-                    ComposerPlaceholderLayout(centered: showsSingleLine, topAligned: fillsHeight) {
+                    ComposerPlaceholderLayout(centered: showsSingleLine && centersCompactPlaceholder, topAligned: fillsHeight) {
                         Text(placeholder).font(.body).foregroundStyle(Color(.placeholderText)).lineLimit(1)
                     }
                     .allowsHitTesting(false)
@@ -300,6 +307,7 @@ private struct ContextTextInput: UIViewRepresentable {
     let reservedTrailingWidth: CGFloat
     let compactRowHeight: CGFloat?
     let showsSingleLine: Bool
+    let scrollsHorizontally: Bool
     let onOverflowChange: ((Bool) -> Void)?
     let selection: ComposerEditorSelection?
     let stagesDictation: Bool
@@ -329,16 +337,22 @@ private struct ContextTextInput: UIViewRepresentable {
             view.undoManager?.removeAllActions(); coordinator.scope = scope
         }
         let font = UIFont.preferredFont(forTextStyle: .body)
-        let drawsSingleLine = showsSingleLine && !text.isEmpty
+        let drawsSingleLine = scrollsHorizontally || showsSingleLine && !text.isEmpty
         let verticalInset = drawsSingleLine ? max(5, ((compactRowHeight ?? 0) - ceil(font.lineHeight)) / 2) : 0
         let horizontalInset: CGFloat = drawsSingleLine ? 4 : 0
         let insets = UIEdgeInsets(top: verticalInset, left: horizontalInset, bottom: verticalInset, right: horizontalInset)
         let lineLimit = drawsSingleLine ? 1 : 0
-        if view.textContainer.maximumNumberOfLines != lineLimit || view.textContainerInset != insets {
+        let scrollDirectionChanged = view.scrollsHorizontally != scrollsHorizontally
+        if scrollDirectionChanged || view.textContainer.maximumNumberOfLines != lineLimit || view.textContainerInset != insets {
+            view.scrollsHorizontally = scrollsHorizontally
+            view.textContainer.widthTracksTextView = !scrollsHorizontally
             view.textContainer.maximumNumberOfLines = lineLimit
-            view.textContainer.lineBreakMode = lineLimit == 1 ? .byTruncatingTail : .byWordWrapping
+            view.textContainer.lineBreakMode = scrollsHorizontally ? .byClipping : drawsSingleLine ? .byTruncatingTail : .byWordWrapping
             view.textContainerInset = insets
-            if drawsSingleLine { view.setContentOffset(.zero, animated: false) }
+            view.isDirectionalLockEnabled = scrollsHorizontally
+            view.keyboardDismissMode = scrollsHorizontally ? .none : .interactive
+            view.showsHorizontalScrollIndicator = !scrollsHorizontally
+            if scrollDirectionChanged || !scrollsHorizontally && drawsSingleLine { view.setContentOffset(.zero, animated: false) }
             view.invalidateTextMeasurement()
         }
         if view.font != font { view.font = font }
@@ -349,14 +363,21 @@ private struct ContextTextInput: UIViewRepresentable {
         view.accessibilityLabel = placeholder
         let signature = "\(font.pointSize):\(colorScheme):\(skills.isEmpty ? 0 : measuredWidth):\(artworkRevision)"
         let projection = ContextText(text, skills: skills)
-        if view.markedTextRange == nil, coordinator.source(view.attributedText) != text || coordinator.skills != skills || coordinator.signature != signature {
+        let source = coordinator.source(view.attributedText)
+        let typedLineBreak = scrollsHorizontally && view.attributedText.string.rangeOfCharacter(from: .newlines) != nil
+        let linePresentationChanged = coordinator.presentedHorizontally != scrollsHorizontally
+        if view.markedTextRange == nil, source != text || coordinator.skills != skills || coordinator.signature != signature
+            || linePresentationChanged || typedLineBreak {
             let selection = projection.selection(after: coordinator.projection, range: view.selectedRange)
             let value = NSMutableAttributedString(string: projection.display, attributes: [.font: font, .foregroundColor: UIColor.label])
             for mention in projection.mentions {
                 let token = ContextAttachment(skill: mention.skill, scope: scope, font: font, image: images[mention.skill.name], maxWidth: max(80, measuredWidth - 4))
                 value.addAttribute(.attachment, value: token, range: mention.displayRange)
             }
-            if view.attributedText.string != projection.display {
+            if scrollsHorizontally { presentLineBreaksAsSpaces(in: value) }
+            let onlyLinePresentationChanged = source == text && (linePresentationChanged || typedLineBreak)
+                && view.attributedText.length == value.length
+            if view.attributedText.string != value.string && !onlyLinePresentationChanged {
                 // Picker/scope/send changes can replace many source characters
                 // with one glyph. Old UIKit undo ranges belong to the old buffer.
                 view.undoManager?.removeAllActions()
@@ -368,6 +389,7 @@ private struct ContextTextInput: UIViewRepresentable {
             }
             view.selectedRange = selection
             coordinator.projection = projection; coordinator.skills = skills; coordinator.signature = signature
+            coordinator.presentedHorizontally = scrollsHorizontally
             view.invalidateTextMeasurement()
         }
         view.accessibilityValue = projection.readable
@@ -382,6 +404,22 @@ private struct ContextTextInput: UIViewRepresentable {
         if wantsFocus, !view.isFirstResponder { view.requestFocus() }
         else if !wantsFocus, view.isFirstResponder { view.resignFirstResponder() }
     }
+
+    private func presentLineBreaksAsSpaces(in value: NSMutableAttributedString) {
+        // Keep each break's UTF-16 position and restore it when reading the draft or selection.
+        let text = value.string as NSString
+        var start = 0
+        while start < text.length {
+            let searchRange = NSRange(location: start, length: text.length - start)
+            let range = text.rangeOfCharacter(from: .newlines, options: [], range: searchRange)
+            guard range.location != NSNotFound else { break }
+            let lineBreak = text.substring(with: range)
+            value.replaceCharacters(in: range, with: String(repeating: " ", count: range.length))
+            value.addAttribute(.composerLineBreak, value: lineBreak, range: range)
+            start = NSMaxRange(range)
+        }
+    }
+
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ComposerTextView, context: Context) -> CGSize? {
         guard let width = proposal.width else { return nil }
         let font = uiView.font ?? .preferredFont(forTextStyle: .body)
@@ -389,11 +427,11 @@ private struct ContextTextInput: UIViewRepresentable {
         if fillsHeight || compactRowHeight != nil, let height = proposal.height, height.isFinite {
             return CGSize(width: width, height: max(minimum, height))
         }
-        if text.isEmpty { return CGSize(width: width, height: minimum) }
         if showsSingleLine || uiView.textContainer.maximumNumberOfLines == 1 {
             // SwiftUI can ask for the new size before UIKit adopts the new line mode.
-            return CGSize(width: width, height: context.coordinator.multilineHeight ?? minimum)
+            return CGSize(width: width, height: text.isEmpty ? minimum : context.coordinator.multilineHeight ?? minimum)
         }
+        // Measure the empty line with TextKit too, so typing the first character keeps its height.
         let fitted = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
         let height = max(minimum, min(uiView.compactHeightLimit, fitted.height))
         if compactRowHeight != nil { context.coordinator.multilineHeight = height }
@@ -411,6 +449,7 @@ private struct ContextTextInput: UIViewRepresentable {
         var skills: [ContextSkill] = []
         var scope: ContextScope?
         var signature = ""
+        var presentedHorizontally = false
         var multilineHeight: CGFloat?
         private(set) var isEndingEditing = false
         init(_ parent: ContextTextInput) { self.parent = parent }
@@ -420,6 +459,8 @@ private struct ContextTextInput: UIViewRepresentable {
                 let string = value.attributedSubstring(from: range).string
                 if let token = attributes[.attachment] as? ContextAttachment {
                     result += string.replacingOccurrences(of: "\u{fffc}", with: token.scope == parent.scope ? ContextMentions.mention(token.skill) : token.skill.title)
+                } else if let lineBreak = attributes[.composerLineBreak] as? String {
+                    result += String(repeating: lineBreak, count: range.length / lineBreak.utf16.count)
                 } else { result += string }
             }
             return result
@@ -467,6 +508,7 @@ private struct ContextTextInput: UIViewRepresentable {
 final class ComposerTextView: UITextView {
     let placeholder = UILabel()
     var wantsFocus = false
+    var scrollsHorizontally = false
     var onCopy: (() -> Void)?
     var onOverflowChange: ((Bool) -> Void)?
     var reservedTrailingWidth: CGFloat = 0 {
@@ -494,14 +536,31 @@ final class ComposerTextView: UITextView {
     }
 
     override func layoutSubviews() {
-        super.layoutSubviews()
         let insets = textContainerInset
+        let resized = measuredViewport != bounds.size
+        let measure = bounds.width > 0 && bounds.height > 0 && (resized || needsTextMeasurement)
+        if scrollsHorizontally && measure {
+            let width = max(bounds.width - insets.left - insets.right, ceil(attributedText.size().width) + 4)
+            textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+            isScrollEnabled = true
+        }
+        super.layoutSubviews()
         placeholder.frame = CGRect(x: insets.left, y: insets.top, width: max(0, bounds.width - insets.left - insets.right),
                                    height: font?.lineHeight ?? 22)
-        let resized = measuredViewport != bounds.size
-        guard bounds.width > 0, bounds.height > 0, resized || needsTextMeasurement else { return }
+        if scrollsHorizontally {
+            // UITextView sizes its scroll area for the viewport even with a wider text container.
+            let size = CGSize(width: textContainer.size.width + insets.left + insets.right, height: bounds.height)
+            if bounds.width > 0, bounds.height > 0, contentSize != size { contentSize = size }
+        }
+        guard measure else { return }
         measuredViewport = bounds.size
         needsTextMeasurement = false
+        if scrollsHorizontally {
+            if isFirstResponder, let selection = selectedTextRange {
+                scrollRectToVisible(caretRect(for: selection.end).insetBy(dx: -4, dy: 0), animated: false)
+            }
+            return
+        }
         let empty = !hasText
         let fittedHeight = empty ? ceil((font ?? .preferredFont(forTextStyle: .body)).lineHeight)
             : sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height

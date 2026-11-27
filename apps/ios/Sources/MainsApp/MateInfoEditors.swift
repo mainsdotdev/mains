@@ -440,17 +440,12 @@ struct MateProfileEditor: View {
                 .padding(.horizontal, 20)
                 if let runtime {
                     VStack(spacing: 16) {
-                        MateInfoSection {
-                            Button {
-                                focusedField = nil
-                                showingSkills = true
-                            } label: {
-                                MateSkillsLinkLabel(count: skills.count)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!canEditRuntime)
-                            .accessibilityIdentifier("editMateSkills")
+                        MateSkillsLink(count: skills.count) {
+                            focusedField = nil
+                            showingSkills = true
                         }
+                        .disabled(!canEditRuntime)
+                        .accessibilityIdentifier("editMateSkills")
                         if provider == "codex" || provider == "claude_code" {
                             MatePermissionEditor(session: session, provider: provider, runtime: runtime,
                                                  enabled: canEditRuntime, permission: $permission, approval: $approval)

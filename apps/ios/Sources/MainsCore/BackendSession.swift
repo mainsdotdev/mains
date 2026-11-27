@@ -1720,6 +1720,15 @@ public final class BackendSession {
         restart()
     }
 
+    #if DEBUG && MAINS_GPT_LIVE
+    func makeEmptyVoicePreviewRun(copying sourceID: String) async throws -> Conversation {
+        guard let demoBackend else { throw MainsError.invalidReply }
+        let id = try demoBackend.addEmptyVoicePreviewRun(copying: sourceID)
+        guard let run = try await readQueuedRun(id) else { throw MainsError.invalidReply }
+        return run
+    }
+    #endif
+
     public func exitDemo() {
         guard isDemo else { return }
         pairingOwner += 1; pairing = nil; blocked = nil

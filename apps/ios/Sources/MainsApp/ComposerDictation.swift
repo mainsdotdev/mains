@@ -38,9 +38,11 @@ final class ComposerDictation {
 
         #if DEBUG && targetEnvironment(simulator)
         if preview {
-            phase = .listening
             operation = Task {
-                do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+                do { try await Task.sleep(for: .milliseconds(2500)) } catch { return }
+                guard self.attempt == attempt else { return }
+                phase = .listening
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 guard self.attempt == attempt else { return }
                 transcript = "This is a dictated message."
                 levels = [0.04, 0.12, 0.45, 0.66, 0.35, 0.24, 0.12, 0.03]

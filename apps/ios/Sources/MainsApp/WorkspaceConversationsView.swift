@@ -23,6 +23,12 @@ struct TargetConversationsView: View {
     @State private var consent: ConsentContext?
     @FocusState private var searching: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if MAINS_GPT_LIVE
+    private var preparingVoice: Bool {
+        guard let space = workspaceSpace, isCurrentWorkspace() else { return false }
+        return session.voice.ownsCall && session.voice.runID == nil && session.voiceMate == nil && session.voiceSpaceID == space.id
+    }
+    #endif
     private var workspace: Workspace? {
         guard case .workspace(let id) = target else { return nil }
         return session.workspaces.first { $0.id == id }
@@ -73,6 +79,11 @@ struct TargetConversationsView: View {
             if isWorkspace {
                 let space = workspaceSpace
                 listScreen
+                    #if MAINS_GPT_LIVE
+                    .opacity(preparingVoice ? 0 : 1)
+                    .allowsHitTesting(!preparingVoice)
+                    .accessibilityHidden(preparingVoice)
+                    #endif
                     .composerInset { editorExpanded in
                         if let workspace, let space {
                             let isCurrent = { visible && workspaceSpace?.id == space.id && isCurrentWorkspace() }
@@ -87,6 +98,9 @@ struct TargetConversationsView: View {
                             .onDisappear { composerFocused = false }
                         }
                     }
+                    #if MAINS_GPT_LIVE
+                    .modifier(VoicePresentationLayer(voice: session.voice, presented: preparingVoice))
+                    #endif
                     .composerPickers(model: $modelSheet, options: $optionsSheet, session: session,
                                      context: space.map { ComposerContext(space: $0, workspace: workspace) })
                     .task(id: "\(space?.providerId ?? ""):\(session.isConnected)") {

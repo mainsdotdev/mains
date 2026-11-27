@@ -327,7 +327,7 @@ func attachmentOnlyDraftsPreserveFilesAcrossRefusalRecoveryAndUncertainDelivery(
     let section = try #require(TranscriptSection.build(rows).last)
     let group = try #require(TranscriptGroup.build(section.previous).last)
     #expect(section.label == "1 message · 1 tool call")
-    #expect(section.responseText == "I’ll check mail access.\n\nApple Mail is closed.")
+    #expect(rows.filter { $0.kind == .response }.map(\.text) == ["I’ll check mail access.", "Apple Mail is closed."])
     #expect(group.id == "tool:7")
     #expect(group.browserActivity?.text == "Checked available mail access")
     #expect(group.rows.first?.toolPresentation?.detail == "Inspect mail sessions")

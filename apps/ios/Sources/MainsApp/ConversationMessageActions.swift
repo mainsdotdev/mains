@@ -30,54 +30,22 @@ enum ConversationActionIcons {
     }
 }
 
-struct ConversationMessageActions: View {
+struct ForkConversationButton: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
     let session: BackendSession
-    let copyText: String?
-    let copyIsPreview: Bool
-    let forkRunID: String?
+    let runID: String
     let fork: () -> Void
-    @Environment(ActionToast.self) private var actionToast: ActionToast?
-    @State private var copied = false
-    @State private var copyID: UUID?
 
     var body: some View {
-        HStack(spacing: 0) {
-            if let copyText, !copyText.isEmpty {
-                Button {
-                    UIPasteboard.general.string = copyText
-                    actionToast?.show(copyIsPreview ? "Message preview copied" : "Message copied")
-                    copied = true; copyID = UUID()
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                } label: {
-                    Image(systemName: copied ? "checkmark" : "square.on.square")
-                        .font(.system(size: 16)).frame(width: 16, height: 16)
-                        .frame(width: 32, height: 28, alignment: .leading).contentShape(.rect)
-                }
-                .accessibilityLabel(copyIsPreview ? "Copy answer preview" : "Copy answer")
-                .accessibilityValue(copied ? "Copied" : "")
-                .accessibilityIdentifier("copyAnswer")
-            }
-            if let forkRunID {
-                Button(action: fork) {
-                    ConversationActionIcons.fork.resizable().frame(width: 16, height: 16)
-                        .opacity(session.pendingFork?.sourceRunID == forkRunID && session.pendingFork?.status == .sending ? 0.5 : 1)
-                        .frame(width: 32, height: 28, alignment: .leading).contentShape(.rect)
-                }
-                .disabled(!session.canForkConversation(forkRunID))
-                .accessibilityLabel("Fork conversation").accessibilityIdentifier("forkFromLastResponse")
-            }
+        Button(action: fork) {
+            ConversationActionIcons.fork.resizable().frame(width: 16, height: 16)
+                .opacity(session.pendingFork?.sourceRunID == runID && session.pendingFork?.status == .sending ? 0.5 : 1)
+                .frame(width: 32, height: 28, alignment: .leading).contentShape(.rect)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .disabled(!session.canForkConversation(runID))
+        .accessibilityLabel("Fork conversation").accessibilityIdentifier("forkFromLastResponse")
         .buttonStyle(ChatPressStyle()).foregroundStyle(.secondary)
-        .task(id: copyID) {
-            guard copyID != nil else { return }
-            do { try await Task.sleep(for: .seconds(2)) } catch { return }
-            copied = false
-        }
-        .onChange(of: copyText) { _, _ in copied = false; copyID = nil }
-        .onDisappear { copied = false; copyID = nil }
     }
 }

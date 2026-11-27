@@ -108,19 +108,26 @@ struct MateSkillsEditor: View {
     }
 }
 
-struct MateSkillsLinkLabel: View {
+struct MateSkillsLink: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
     let count: Int
+    let action: () -> Void
 
     var body: some View {
-        LabeledContent {
-            HStack(spacing: 8) {
-                Text(count, format: .number).monospacedDigit()
-                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).accessibilityHidden(true)
+        Button(action: action) {
+            MateInfoSection {
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        Text(count, format: .number).monospacedDigit()
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).accessibilityHidden(true)
+                    }
+                } label: { Label("Skills", systemImage: "sparkles") }
             }
-        } label: { Label("Skills", systemImage: "sparkles") }
+            .contentShape(.rect(cornerRadius: 20))
+        }
+        .buttonStyle(.plain)
     }
 }
 

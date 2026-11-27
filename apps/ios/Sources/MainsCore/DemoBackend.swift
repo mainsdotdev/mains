@@ -184,6 +184,18 @@ final class DemoBackend {
         addActivitySamples()
     }
 
+    #if DEBUG && MAINS_GPT_LIVE
+    func addEmptyVoicePreviewRun(copying sourceID: String) throws -> String {
+        guard var run = runs.first(where: { $0["id"]?.string == sourceID }) else { throw MainsError.invalidReply }
+        let id = "demo-voice-preview-empty"
+        run["id"] = .string(id)
+        run["title"] = .string("Untitled chat")
+        run["updatedAt"] = Self.now
+        runs.append(run)
+        return id
+    }
+    #endif
+
     func attach(owner: UUID, emit: @escaping (String, JSONValue) -> Void) {
         for task in tasks.values { task.cancel() }
         tasks = [:]; self.owner = owner; self.emit = emit

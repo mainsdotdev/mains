@@ -117,6 +117,7 @@ struct MessageComposer: View {
     static let horizontalInset: CGFloat = 12
     static let standardVerticalInset: CGFloat = 8
     static let controlHeight: CGFloat = 44
+    private static let actionIconSize: CGFloat = 24
     private static let compactControlHeight: CGFloat = 50
     private static let compactCornerRadius: CGFloat = compactControlHeight / 2
     private static let editorSizeButtonWidth: CGFloat = 44
@@ -139,7 +140,10 @@ struct MessageComposer: View {
     let send: () -> Void
     var focusChanged: ((Bool) -> Void)? = nil
     #if MAINS_GPT_LIVE
-    @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
+    @Namespace private var voiceGlass
+    @State private var voiceControlsVisible = false
+    @State private var keyboardDismissal: KeyboardTransition?
+    @Environment(\.voiceReduceMotionPreview) private var voiceReduceMotionPreview
     #endif
     @State private var focused = false
     @State private var editorSelection = ComposerEditorSelection()
@@ -186,11 +190,10 @@ struct MessageComposer: View {
     @State private var attachmentError: String?
     private var settings: ComposerSettings { context.settings(session) }
     private var editorExpanded: Bool { expansion?.wrappedValue == true }
+    private var usesCompactLayout: Bool { collapsesWhenUnfocused || ownsVoice }
+    private var composerIsEditing: Bool { compactComposerEditing ?? focused }
     private var compactComposer: Bool {
-        #if MAINS_GPT_LIVE
-        if ownsVoice { return false }
-        #endif
-        return collapsesWhenUnfocused && !(compactComposerEditing ?? focused) && !editorExpanded && dictatedText == nil
+        ownsVoice || (collapsesWhenUnfocused && !composerIsEditing && !editorExpanded && dictatedText == nil)
     }
     private var selectedModel: ModelChoice? { context.model(session) }
     private var speed: ComposerSpeed? { ComposerSpeed(model: selectedModel, providerID: context.providerId) }
@@ -198,9 +201,12 @@ struct MessageComposer: View {
     private var ownsVoice: Bool {
         guard session.voice.ownsCall else { return false }
         if let id = context.runID { return session.voice.runID == id }
-        if let mate = context.mate { return session.voiceMate?.id == mate.id && session.voice.runID == nil }
+        guard session.voice.runID == nil else { return false }
+        if let mate = context.mate { return session.voiceMate?.id == mate.id }
         return session.voiceMate == nil && session.voiceSpaceID == context.spaceID
     }
+    #else
+    private var ownsVoice: Bool { false }
     #endif
     private var effort: String? {
         guard let selectedModel else { return nil }
@@ -231,13 +237,11 @@ struct MessageComposer: View {
     var body: some View {
         VStack(spacing: 0) {
             #if MAINS_GPT_LIVE
-            VoiceOrbSlot(voice: session.voice, size: 104, presented: ownsVoice && voicePresentation == .conversation,
-                         bottomInset: 12, orbIdentifier: "voiceComposerOrb")
+            VoiceComposerOrbSpace(voice: session.voice, presented: ownsVoice && session.voice.presentation == .conversation)
                 .frame(maxWidth: .infinity)
-            if ownsVoice && voicePresentation == .focus { focusComposer }
-            else { standardComposer }
+            voiceComposerRow
             #else
-            standardComposer
+            standardComposer.padding(.horizontal, Self.horizontalInset)
             #endif
         }
         .background(alignment: .center) {
@@ -289,8 +293,23 @@ struct MessageComposer: View {
             expansion?.wrappedValue = false
         }
     #if MAINS_GPT_LIVE
-        .onChange(of: ownsVoice && voicePresentation == .focus) { _, voiceFocused in
-            if voiceFocused { focused = false; expansion?.wrappedValue = false; textOverflows = false }
+        .onChange(of: ownsVoice ? session.voice.presentation : nil, initial: true) { _, presentation in
+            if presentation == nil { voiceControlsVisible = false }
+            if presentation == .focus { focused = false; expansion?.wrappedValue = false; textOverflows = false }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
+            if focused || composerIsEditing || ownsVoice { keyboardDismissal = KeyboardTransition(notification) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
+            keyboardDismissal = nil
+        }
+        .task(id: canRevealVoiceControls) {
+            guard canRevealVoiceControls else { return }
+            if let remaining = keyboardDismissal?.remainingDuration, remaining > 0 {
+                do { try await Task.sleep(for: .seconds(remaining)) } catch { return }
+            }
+            guard !Task.isCancelled, canRevealVoiceControls else { return }
+            voiceControlsVisible = true
         }
     #endif
         .fileImporter(isPresented: $file, allowedContentTypes: [.data]) { result in
@@ -315,7 +334,7 @@ struct MessageComposer: View {
         } message: { Text(dictation.error ?? "") }
     }
     private var standardComposer: some View {
-        let usesLegacyMateLayout = context.lockedProfile && !collapsesWhenUnfocused
+        let usesLegacyMateLayout = context.lockedProfile && !usesCompactLayout
         let stackedMate = usesLegacyMateLayout && (focused || !draft.text.isEmpty || editorExpanded || dictatedText != nil)
         let compactMate = usesLegacyMateLayout && !stackedMate
         return VStack(alignment: .leading, spacing: 4) {
@@ -335,9 +354,9 @@ struct MessageComposer: View {
                     withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { draft.attachments.removeAll { $0.id == id } }
                 }.padding(.horizontal, 8).padding(.top, 6).padding(.trailing, expandButtonSpace)
             }
-            if context.lockedProfile || collapsesWhenUnfocused {
+            if context.lockedProfile || usesCompactLayout {
                 MateComposerLayout(expanded: usesLegacyMateLayout ? stackedMate : !compactComposer, fillsHeight: editorExpanded,
-                                   compactRowHeight: collapsesWhenUnfocused ? Self.compactControlHeight : nil) {
+                                   compactRowHeight: usesCompactLayout ? Self.compactControlHeight : nil) {
                     textEditor(compact: compactComposer || compactMate)
                     composerLeadingAction
                     HStack(spacing: 0) {
@@ -347,7 +366,7 @@ struct MessageComposer: View {
                         if showsCollapseButtonInControls { editorSizeButton }
                         composerActions()
                     }
-                    .frame(minWidth: collapsesWhenUnfocused ? Self.controlHeight : nil, alignment: .trailing)
+                    .frame(minWidth: collapsesWhenUnfocused && !ownsVoice ? Self.controlHeight : nil, alignment: .trailing)
                 }
                 .buttonStyle(.plain)
             } else {
@@ -370,7 +389,6 @@ struct MessageComposer: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("messageComposer")
-        .padding(.horizontal, Self.horizontalInset)
         .animation(reduceMotion ? nil : MateComposerLayout.transition, value: stackedMate)
     }
 
@@ -389,11 +407,12 @@ struct MessageComposer: View {
         let showsMeter = compact && dictating
         return ContextTextEditor(text: Binding(get: { dictatedText ?? draft.text }, set: { if !dictating { draft.text = $0 } }),
             skills: $draft.contextSkills, scope: contextScope, focused: $focused,
-            placeholder: context.placeholder,
+            placeholder: ownsVoice ? "Ask Codex" : context.placeholder,
             identifier: context.runID == nil ? "homeMessageInput" : "messageInput",
             fillsHeight: editorExpanded, reservedTrailingWidth: expandButtonSpace,
-            compactRowHeight: collapsesWhenUnfocused ? Self.compactControlHeight : nil,
-            showsSingleLine: compactComposer, onOverflowChange: { textOverflows = $0 },
+            compactRowHeight: usesCompactLayout ? Self.compactControlHeight : nil,
+            showsSingleLine: compactComposer, scrollsHorizontally: ownsVoice, centersCompactPlaceholder: !ownsVoice,
+            onOverflowChange: { textOverflows = $0 },
             selection: editorSelection, stagesDictation: dictating)
             .opacity(showsMeter ? 0 : 1)
             .allowsHitTesting(!showsMeter)
@@ -469,7 +488,7 @@ struct MessageComposer: View {
     }
 
     private var sendMessageButton: some View {
-        ComposerSendButton(providerID: context.providerId, sending: draft.isSending) {
+        ComposerSendButton(providerID: context.providerId, sending: draft.isSending, diameter: Self.actionIconSize) {
             if dictating { finishDictation(sendAfter: true) }
             else { submitMessage() }
         }
@@ -498,18 +517,25 @@ struct MessageComposer: View {
     }
 
     @ViewBuilder private var dictationMeter: some View {
-        if dictation.phase == .listening {
+        switch dictation.phase {
+        case .preparing:
+            Color.clear.frame(height: Self.controlHeight).accessibilityHidden(true)
+        case .listening:
             ComposerDictationMeter(dictation: dictation)
-        } else {
+        case .finishing:
             ProgressView().controlSize(.small)
                 .frame(maxWidth: .infinity).frame(height: Self.controlHeight)
-                .accessibilityLabel(dictation.phase == .preparing ? "Preparing dictation" : "Finishing dictation")
+                .accessibilityLabel("Finishing dictation")
         }
     }
 
-    private func dictationControl(_ symbol: String, label: LocalizedStringKey, id: String, action: @escaping () -> Void) -> some View {
+    private func dictationControl(_ symbol: String, label: LocalizedStringKey, id: String, loading: Bool = false,
+                                  action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 16, weight: .semibold))
+            Group {
+                if loading { ProgressView().controlSize(.small).accessibilityHidden(true) }
+                else { Image(systemName: symbol).font(.system(size: 16, weight: .semibold)) }
+            }
                 .frame(width: 34, height: 34)
                 .background(.primary.opacity(0.09), in: .circle)
                 .frame(width: Self.controlHeight, height: Self.controlHeight)
@@ -524,7 +550,7 @@ struct MessageComposer: View {
         Button(action: startDictation) {
             Image("dictation-microphone")
                 .resizable()
-                .frame(width: 24, height: 24)
+                .frame(width: Self.actionIconSize, height: Self.actionIconSize)
                 .frame(width: Self.controlHeight, height: Self.controlHeight)
                 .contentShape(.rect)
         }
@@ -596,8 +622,8 @@ struct MessageComposer: View {
 
     private var composerAccent: Color { mateTint ?? Provider.accent(context.providerId) }
 
-    private func stopActionIcon(symbol: String = "stop.fill") -> some View {
-        Image(systemName: symbol).font(.callout.weight(.semibold))
+    private var stopActionIcon: some View {
+        Image(systemName: "stop.fill").font(.callout.weight(.semibold))
         .opacity(stopping ? 0.5 : 1)
         .frame(width: 36, height: 36).foregroundStyle(.white)
         .background(composerAccent, in: .circle)
@@ -607,22 +633,8 @@ struct MessageComposer: View {
     @ViewBuilder private func composerActions() -> some View {
         #if MAINS_GPT_LIVE
         if ownsVoice {
-            if session.voice.phase == .connected {
-                Button { session.voice.toggleMute() } label: {
-                    Image(systemName: session.voice.muted ? "mic.slash.fill" : "mic.fill").frame(width: 40, height: 44)
-                }.accessibilityLabel(session.voice.muted ? "Unmute microphone" : "Mute microphone").accessibilityIdentifier("muteVoice")
-            }
             if session.voice.phase == .connected && !stopping && active && canSendDuringRun && draft.hasContent {
                 sendMessageButton
-            } else {
-                Button {
-                    Task { await session.voice.stop() }
-                    if active { stop?() }
-                } label: {
-                    stopActionIcon(symbol: session.voice.phase == .stopFailed ? "arrow.clockwise" : "stop.fill")
-                }.buttonStyle(ChatPressStyle()).disabled(session.voice.phase == .ending)
-                    .accessibilityLabel(session.voice.phase == .stopFailed ? "Retry ending voice chat" : "End voice chat")
-                    .accessibilityIdentifier("endVoice")
             }
         } else {
             messageActions
@@ -634,13 +646,15 @@ struct MessageComposer: View {
 
     @ViewBuilder private var messageActions: some View {
         if dictating {
-            dictationControl("stop.fill", label: "Stop dictation", id: "stopDictation") { finishDictation() }
-                .disabled(dictation.phase == .finishing)
+            let preparing = dictation.phase == .preparing
+            dictationControl("stop.fill", label: preparing ? "Preparing dictation" : "Stop dictation",
+                             id: preparing ? "preparingDictation" : "stopDictation", loading: preparing) { finishDictation() }
+                .disabled(dictation.phase != .listening)
         } else {
             startDictationButton
         }
         if stopping || active {
-            Button { stop?() } label: { stopActionIcon() }
+            Button { stop?() } label: { stopActionIcon }
                 .buttonStyle(ChatPressStyle()).disabled(!session.isConnected || stopping)
                 .accessibilityLabel(stopping ? "Stopping reply" : "Stop reply")
                 .accessibilityIdentifier("stopReply")
@@ -653,58 +667,54 @@ struct MessageComposer: View {
     }
 
     #if MAINS_GPT_LIVE
-    private var focusComposer: some View {
-        VStack(spacing: 8) {
-            if let error = draft.storageError {
-                Text(error).font(.caption).foregroundStyle(.orange).accessibilityIdentifier("draftStorageError")
-            }
-            if !draft.attachments.isEmpty {
-                ComposerAttachmentStrip(attachments: draft.attachments) { id in draft.attachments.removeAll { $0.id == id } }
-            }
-            HStack(alignment: .bottom, spacing: 10) {
-                HStack(spacing: 0) {
-                    Button(action: openAttachments) {
-                        Image(systemName: "plus").font(.system(size: 21, weight: .light)).frame(width: 44, height: 52)
+    private var canRevealVoiceControls: Bool {
+        ownsVoice && !voiceControlsVisible && !focused && !composerIsEditing && !editorExpanded
+    }
+
+    private var voiceComposerRow: some View {
+        let showsControls = ownsVoice && voiceControlsVisible
+        let movesGlass = !reduceMotion && !voiceReduceMotionPreview
+        let diameter = MateComposerLayout.compactEditorHeight(minimum: Self.compactControlHeight)
+        let spacing: CGFloat = 10
+        return GlassEffectContainer(spacing: spacing) {
+            HStack(alignment: .bottom, spacing: spacing) {
+                standardComposer.glassEffectID("composer", in: voiceGlass)
+                if showsControls {
+                    Button { session.voice.toggleMute() } label: {
+                        Image(systemName: session.voice.muted ? "mic.slash.fill" : "mic.fill")
+                            .font(.system(size: 20)).frame(width: diameter, height: diameter)
+                            .contentShape(.circle)
                     }
-                    .background(GeometryReader { geometry in
-                        Color.clear.preference(key: AttachmentSourceFrameKey.self, value: geometry.frame(in: .global))
-                    })
-                    .disabled(draft.isSending).accessibilityLabel("Add attachment").accessibilityIdentifier("addAttachment")
-                    ContextTextEditor(text: $draft.text, skills: $draft.contextSkills, scope: contextScope, focused: $focused,
-                        placeholder: "Ask Codex", identifier: context.runID == nil ? "homeMessageInput" : "messageInput")
-                        .padding(.vertical, 13).padding(.trailing, 12)
-                    if draft.hasContent {
-                        Button(action: send) {
-                            Image(systemName: "arrow.up").font(.callout.weight(.semibold)).frame(width: 40, height: 44)
-                        }.disabled(!canSend || !active || session.voice.phase != .connected || draft.isSending || context.saving(session))
-                            .accessibilityLabel(sendLabel ?? "Send message").accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
+                    .modifier(GlassSurface(radius: diameter / 2))
+                    .glassEffectID("mute", in: voiceGlass)
+                    .glassEffectTransition(movesGlass ? .matchedGeometry : .identity)
+                    .disabled(session.voice.phase != .connected)
+                    .accessibilityLabel(session.voice.muted ? "Unmute microphone" : "Mute microphone")
+                    .accessibilityIdentifier("muteVoice")
+
+                    Button {
+                        Task { await session.voice.stop() }
+                        if active { stop?() }
+                    } label: {
+                        Image(systemName: session.voice.phase == .stopFailed ? "arrow.clockwise" : "xmark")
+                            .font(.system(size: 22, weight: .medium))
+                            .frame(width: diameter, height: diameter)
+                            .foregroundStyle(mateTint == nil ? Color(.systemBackground) : .white)
+                            .background(mateTint ?? .primary, in: .circle)
+                            .contentShape(.circle)
                     }
+                    .modifier(GlassSurface(radius: diameter / 2, tint: mateTint ?? .primary))
+                    .glassEffectID("end", in: voiceGlass)
+                    .glassEffectTransition(movesGlass ? .matchedGeometry : .identity)
+                    .disabled(session.voice.phase == .ending)
+                    .accessibilityLabel(session.voice.phase == .stopFailed ? "Retry ending voice chat" : "End voice chat")
+                    .accessibilityIdentifier("endVoice")
                 }
-                .padding(.horizontal, 4).modifier(GlassSurface(radius: 28, interactive: false))
-                Button { session.voice.toggleMute() } label: {
-                    Image(systemName: session.voice.muted ? "mic.slash.fill" : "mic.fill")
-                        .font(.system(size: 20)).frame(width: 52, height: 52)
-                }
-                .modifier(GlassSurface(radius: 26)).disabled(session.voice.phase != .connected)
-                .accessibilityLabel(session.voice.muted ? "Unmute microphone" : "Mute microphone").accessibilityIdentifier("muteVoice")
-                Button {
-                    Task { await session.voice.stop() }
-                    if active { stop?() }
-                } label: {
-                    Image(systemName: session.voice.phase == .stopFailed ? "arrow.clockwise" : "xmark")
-                    .font(.system(size: 22, weight: .medium)).opacity(session.voice.phase == .ending ? 0.5 : 1)
-                    .frame(width: 52, height: 52)
-                    .foregroundStyle(mateTint == nil ? Color(.systemBackground) : .white)
-                    .background(mateTint ?? .primary, in: .circle)
-                }
-                .disabled(session.voice.phase == .ending)
-                .accessibilityLabel(session.voice.phase == .stopFailed ? "Retry ending voice chat" : "End voice chat").accessibilityIdentifier("endVoice")
             }
             .buttonStyle(ChatPressStyle())
         }
-        .padding(.horizontal, 16).padding(.bottom, 4)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("voiceFocusComposer")
+        .padding(.horizontal, Self.horizontalInset)
+        .animation(movesGlass ? .spring(duration: 0.38, bounce: 0.1) : nil, value: showsControls)
     }
 
     #endif
@@ -790,17 +800,17 @@ struct ComposerSendButton: View {
     #endif
     let providerID: String
     var sending = false
+    var diameter: CGFloat = 36
     let action: () -> Void
     @Environment(\.mateChatTint) private var mateTint
 
     var body: some View {
-        let ink = Color.white
         Button(action: action) {
-            Image(systemName: "arrow.up").font(.system(size: 18, weight: .medium))
-            .opacity(sending ? 0.5 : 1)
-            .frame(width: 36, height: 36).foregroundStyle(ink)
-            .background(mateTint ?? Provider.accent(providerID), in: .circle)
-            .frame(width: 44, height: 44).contentShape(.circle)
+            Image(systemName: "arrow.up").font(.system(size: diameter / 2, weight: .medium))
+                .opacity(sending ? 0.5 : 1)
+                .frame(width: diameter, height: diameter).foregroundStyle(.white)
+                .background(mateTint ?? Provider.accent(providerID), in: .circle)
+                .frame(width: MessageComposer.controlHeight, height: MessageComposer.controlHeight).contentShape(.circle)
         }
         .buttonStyle(ChatPressStyle())
     }
@@ -809,6 +819,9 @@ struct ComposerSendButton: View {
 /// Repositions the same text input and controls so the keyboard and caret stay active throughout the transition.
 struct MateComposerLayout: Layout {
     static let transition = Animation.easeInOut(duration: 0.24)
+    static func compactEditorHeight(minimum: CGFloat) -> CGFloat {
+        max(minimum, ceil(UIFont.preferredFont(forTextStyle: .body).lineHeight) + 10)
+    }
     private let editorInset: CGFloat = 10
     private let fillsHeight: Bool
     private let compactRowHeight: CGFloat?
@@ -865,9 +878,7 @@ struct MateComposerLayout: Layout {
         let measurementWidth = compactRowHeight == nil ? editorWidth : max(0, width - 2 * editorInset)
         let expandedEditorHeight = subviews[0].sizeThatFits(
             ProposedViewSize(width: measurementWidth, height: proposedEditorHeight)).height
-        let compactEditorHeight = compactRowHeight.map {
-            max($0, ceil(UIFont.preferredFont(forTextStyle: .body).lineHeight) + 10)
-        } ?? expandedEditorHeight
+        let compactEditorHeight = compactRowHeight.map { Self.compactEditorHeight(minimum: $0) } ?? expandedEditorHeight
         let compactHeight = max(compactControlHeight, compactEditorHeight)
         let expandedHeight = 14 + expandedEditorHeight + controlHeight
         let layoutHeight = compactHeight + (expandedHeight - compactHeight) * progress

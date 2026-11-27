@@ -9,11 +9,20 @@ struct VoiceAppearancePreview: View {
     @State private var session = BackendSession(storage: VoicePreviewStorage())
     @State private var runID: String?
     private let preferences = UserDefaults(suiteName: "dev.mains.voice-preview")!
+    private let manualStart = CommandLine.arguments.contains("--voice-preview-manual-start")
     var body: some View {
         ZStack {
             if let runID {
                 NavigationStack {
-                    ConversationView(session: session, runID: runID, openComputer: {}, onNew: {}, onFork: { _ in })
+                    ConversationView(session: session, runID: runID, openComputer: {}, onFork: { _ in })
+                        .toolbar {
+                            if manualStart && !session.voice.ownsCall {
+                                ToolbarItem(placement: .topBarTrailing) {
+                                    Button("Start GPT Live", systemImage: "waveform") { Task { await startVoice(runID) } }
+                                        .accessibilityIdentifier("startVoice")
+                                }
+                            }
+                        }
                 }
             } else { ConversationSkeleton(isMate: false).padding(16).frame(maxHeight: .infinity, alignment: .top) }
         }
@@ -21,7 +30,6 @@ struct VoiceAppearancePreview: View {
         .environment(\.voiceReduceMotionPreview, CommandLine.arguments.contains("--voice-preview-reduced-motion"))
         .preferredColorScheme(CommandLine.arguments.contains("--voice-preview-light") ? .light : .dark)
         .task {
-            preferences.set(CommandLine.arguments.contains("--voice-preview-conversation") ? "conversation" : "focus", forKey: VoicePresentation.storageKey)
             let style = CommandLine.arguments.firstIndex(of: "--voice-preview-orb").flatMap { index in
                 CommandLine.arguments.dropFirst(index + 1).first.flatMap(VoiceOrbStyle.init(rawValue:))
             } ?? .water
@@ -30,20 +38,33 @@ struct VoiceAppearancePreview: View {
                 session.setActive(true); try session.startDemo()
                 let end = ContinuousClock.now + .seconds(5)
                 while !session.isConnected && ContinuousClock.now < end { try await Task.sleep(for: .milliseconds(10)) }
-                guard let run = session.conversations.first(where: { $0.providerId == "codex" && !$0.isActive }) else { return }
+                let sampleID = CommandLine.arguments.contains("--voice-preview-mate") ? DemoBackend.mateChatID : DemoBackend.tourID
+                guard let sample = session.conversations.first(where: { $0.id == sampleID }) else { return }
+                let run = if CommandLine.arguments.contains("--voice-preview-empty") {
+                    try await session.makeEmptyVoicePreviewRun(copying: sample.id)
+                } else { sample }
                 runID = run.id
                 session.voice.makeMedia = { VoicePreviewMedia() }
                 session.voice.onConnectedFeedback = VoiceCallSounds.playOpening
                 session.voice.onClosing = VoiceCallSounds.playClosing
-                await session.voice.start(label: run.displayTitle) {
-                    RealtimeVoiceSignaling(runID: run.id, start: { _, id in
-                        try await Task.sleep(for: .seconds(2))
-                        session.voice.receive(.object(["runId": .string(run.id), "connectionId": .string(id), "type": .string("started")]))
-                    }, stop: { _ in })
-                }
+                if !manualStart { await startVoice(run.id) }
             } catch { session.actionError = error.localizedDescription }
         }
         .onDisappear { session.exitDemo() }
+    }
+
+    private func startVoice(_ runID: String) async {
+        guard let run = session.conversations.first(where: { $0.id == runID }) else { return }
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        await session.voice.start(label: run.displayTitle) {
+            RealtimeVoiceSignaling(runID: run.id, start: { _, id in
+                if !manualStart && CommandLine.arguments.contains("--voice-preview-conversation") {
+                    session.voice.presentation = .conversation
+                }
+                try await Task.sleep(for: .seconds(2))
+                session.voice.receive(.object(["runId": .string(run.id), "connectionId": .string(id), "type": .string("started")]))
+            }, stop: { _ in })
+        }
     }
 }
 

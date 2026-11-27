@@ -25,6 +25,7 @@ const fixtureMate = {
   providerId: 'codex', model: 'fixture-balanced', needsSetup: false, welcome: null,
   details: { spaceName: 'Release Workspace', effort: 'high', instructions: 'Summarize release risks and link the checks.' },
 };
+const fixtureMateSkill = { id: 'a'.repeat(64), name: 'Release checks', description: 'Review the release checklist.' };
 const fixtureMateTeams = [
   { id: 'release-team', name: 'Release Team' },
   { id: 'planning-team', name: 'Planning Team' },
@@ -466,7 +467,7 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method === 'POST' && request.url === '/pair') {
     const body = JSON.parse(Buffer.concat(parts).toString());
-    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-mate-voice', 'ios-test-mate-pinning', 'ios-test-reply-interrupted', 'ios-test-goal-controls', 'ios-test-live-spacing', 'ios-test-empty-conversation', 'ios-test-large-sync'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
+    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-restore-mate', 'ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll', 'ios-test-mate-voice', 'ios-test-mate-pinning', 'ios-test-mate-skills', 'ios-test-reply-interrupted', 'ios-test-goal-controls', 'ios-test-live-spacing', 'ios-test-empty-conversation', 'ios-test-large-sync'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
       response.writeHead(403); response.end(JSON.stringify({ error: 'Invalid pairing code' })); return;
     }
     const paging = body.code.startsWith('ios-test-paging');
@@ -503,6 +504,7 @@ const server = http.createServer(async (request, response) => {
       ]);
     }
     if (['ios-test-mate-info', 'ios-test-mate-consent', 'ios-test-restore-mate', 'ios-test-mate-team', 'ios-test-mate-request', 'ios-test-mate-scroll'].includes(body.code)) descriptor.capabilities.push('mateInfo', 'mateModelEditing');
+    if (body.code === 'ios-test-mate-skills') descriptor.capabilities.push('mateInfo', 'mateRuntimeSettings');
     if (body.code === 'ios-test-mate-pinning') {
       descriptor.capabilities.push('mateInfo', 'matePinning');
       matePins.set('fixture-planner', new Date('2026-11-09T09:00:00Z'));
@@ -632,6 +634,11 @@ wss.on('connection', socket => {
             mates[index] = { ...mates[index], details: { ...fixtureMate.details, instructions } };
           }
           const [_, selected, archived = false] = args;
+          if (selected === fixtureMate.id && descriptor.capabilities.includes('mateRuntimeSettings')) {
+            const index = mates.findIndex(mate => mate.id === selected);
+            const runtime = { skills: [fixtureMateSkill], permissionMode: 'workspace-write' };
+            mates[index] = { ...mates[index], details: { ...mates[index].details, runtime } };
+          }
           result = {
             mates: selected ? mates.filter(mate => mate.id === selected).map(({ details, ...mate }) => details && (!mate.isArchived || archived) ? { ...mate, details } : mate)
               : mates.filter(mate => !!mate.isArchived === archived).map(({ details: _details, ...mate }) => mate),
@@ -642,6 +649,14 @@ wss.on('connection', socket => {
             later(delay, () => send(socket, { kind: 'response', id, result: { success: true, data: result } }));
             return;
           }
+          break;
+        }
+        case CHANNELS.assistants.mobileSkills: {
+          const [account, mateID] = args;
+          if (account !== 'fixture-account' || mateID !== fixtureMate.id || !descriptor.capabilities.includes('mateRuntimeSettings')) {
+            throw new Error('Mate skills are unavailable');
+          }
+          result = { items: [fixtureMateSkill], nextOffset: null, unavailableIds: [], pluginSkillIds: [] };
           break;
         }
         case CHANNELS.assistants.mobileAssignment: {

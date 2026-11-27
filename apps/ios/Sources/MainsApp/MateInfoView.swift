@@ -370,13 +370,8 @@ struct MateInfoView: View {
             MateInfoSection("Instructions") { MateInfoMarkdown(text: details.instructions) }
         }
         if let runtime = mate.details?.runtime {
-            MateInfoSection {
-                Button { sheet = .skills } label: {
-                    MateSkillsLinkLabel(count: runtime.skills.count)
-                }
-                .buttonStyle(.plain)
+            MateSkillsLink(count: runtime.skills.count) { sheet = .skills }
                 .accessibilityIdentifier("mateSkillsDetails")
-            }
             if mate.providerId == "codex" || mate.providerId == "claude_code" {
                 MateInfoSection("Permissions") {
                     LabeledContent(mate.providerId == "codex" ? "Sandbox or profile" : "Permission mode",

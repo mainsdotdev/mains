@@ -40,8 +40,8 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
 
 ## Chat organization
 
-The conversation's options menu keeps **Fork chat** and adds **Move to project**
-for Work/Chat, plus **Archive** and **Delete** in every mode. The project picker
+The conversation's options menu offers **Move to project** for Work/Chat,
+plus **Archive** and **Delete** in every mode. The project picker
 uses the account's active Projects (collections), with search and **No project**
 to detach a chat. Moving preserves the same conversation, provider, workspace,
 transcript, draft and selected space. Archive/Delete are disabled for live work,
@@ -115,12 +115,15 @@ prompt. The paired computer must run the updated backend and have working native
 Codex voice access through its existing account. Provider consent and the iPhone
 microphone permission still apply; no API key is stored on the phone.
 
-Calls open in **Focus** by default: a large water orb in the center, a compact
-composer and mute/end controls, with the transcript hidden. The sliders button
-switches to **Conversation**, which shows the same transcript and a larger orb
-above (outside) the normal composer. This local display preference is remembered;
-switching never reconnects audio, changes mute state or clears history. Ending
-the call restores the normal chat. Hidden speech still persists normally.
+Every new call opens in **Focus**, with a large orb in the center and the
+transcript hidden. Starting a call dismisses the keyboard. Once the composer is
+back to one line, the mute and end controls of the same height separate from its
+trailing edge. Tap the orb to switch to **Conversation**. The orb shrinks and
+moves above the composer while messages slide in from above. Tap the orb again
+to return to **Focus** and slide the messages out through the top. Mate chats
+show the avatar, name and options in both displays. The composer stays on one
+line even while typing during a call, and an empty chat stays blank. Switching
+preserves the call, mute state and chat history.
 
 **Settings → GPT Live** is available when paired with a computer outside Demo Mode.
 **Voice** opens the voice picker before or during a call.
@@ -147,7 +150,10 @@ install it with `xcodebuild -downloadComponent MetalToolchain` if missing.
 
 Debug builds of the opt-in v2 profile accept `--voice-preview` for an entirely in-memory visual fixture;
 `--voice-preview-conversation` and `--voice-preview-light` select its initial
-layout and appearance. Preview preferences use a separate UserDefaults suite;
+layout and appearance. `--voice-preview-empty` opens a chat without messages,
+and `--voice-preview-mate` opens the sample Mate chat.
+`--voice-preview-manual-start` enables the waveform button for testing call starts.
+Preview preferences use a separate UserDefaults suite;
 no pairing, drafts, microphone, files or external service is accessed.
 Use `--voice-preview-orb water|cloud|sphere|aurora` to set the initial orb style.
 `--voice-preview-reduced-motion` also freezes its material for accessibility QA.
@@ -528,7 +534,8 @@ underlying tooling.
   Stop to add the live transcript to the current draft, or cancel to restore the
   original text. Send appears when the composer has text or an attachment.
 - Shared two-row glass composer for home and conversations, with provider-coloured
-  prompt bubbles, a native title/Outputs/New/More toolbar and a circular Latest control.
+  prompt bubbles, a native title/Outputs/More toolbar and a circular Latest control.
+  Chats started in place from Home or a workspace also offer New in the toolbar.
 - Live model catalogues, model-specific effort and provider-specific permissions.
   All providers share model brand icons in the wheel and composer.
   Unknown models use their provider's logo; Copilot Auto uses Copilot
@@ -710,7 +717,7 @@ underlying tooling.
   Unfinished/invalid TeX stays readable; messages above the 128 KB math-rendering
   budget fall back to the native Markdown reader.
 - A floating material composer, expandable tool activity,
-  message/code copy actions and explicit sending/stopping/error states.
+  message copying from the context menu, code block copy buttons, and explicit sending/stopping/error states.
 - Sending clears the composer immediately. Acknowledgements preserve anything typed
   next; definite failures restore the original input or keep it available to copy.
   Unsent text survives navigation and app termination, independently per conversation
@@ -859,7 +866,7 @@ The effort UI test switches model capabilities, toggles Thinking, drags the scal
 checks persistence after relaunch and verifies all six Claude permissions fit initially.
 The conversation UI test checks the reference-style transcript and execution fold,
 native model/effort/permission sheets, output download/preview, the actual continuation
-payload, syncing and the New action without changing home’s selected experience.
+payload, syncing and returning to Home with its selected experience preserved.
 Use a dedicated simulator
 (for example **Mains Native QA**) so test pairing cannot replace a real computer.
 

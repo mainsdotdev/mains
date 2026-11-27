@@ -5,11 +5,10 @@ extension EnvironmentValues {
     @Entry var voiceReduceMotionPreview = false
 }
 
-enum VoicePresentation: String, CaseIterable {
-    case focus, conversation
-    static let storageKey = "voicePresentation"
-    var title: String { self == .focus ? "Focus" : "Conversation" }
-    var symbol: String { self == .focus ? "circle" : "text.bubble" }
+extension VoicePresentation {
+    static let animation = Animation.easeInOut(duration: 0.38)
+    var title: String { self == .focus ? String(localized: "Focus") : String(localized: "Conversation") }
+    var alternate: VoicePresentation { self == .focus ? .conversation : .focus }
 }
 
 enum VoiceOrbStyle: String, CaseIterable {
@@ -195,73 +194,91 @@ struct VoiceStartButton: View {
     }
 }
 
-struct VoicePresentationMenu: View {
-    #if DEBUG && targetEnvironment(simulator)
-    @ObserveHotReload private var hotReload
-    #endif
-    @AppStorage(VoicePresentation.storageKey) private var presentation = VoicePresentation.focus
-    var body: some View {
-        Menu {
-            Section("Voice display") {
-                ForEach(VoicePresentation.allCases, id: \.self) { mode in
-                    Button { presentation = mode } label: {
-                        Label(mode.title, systemImage: presentation == mode ? "checkmark" : mode.symbol)
-                    }.accessibilityIdentifier("voiceDisplay-" + mode.rawValue)
-                }
-            }
-        } label: { Image(systemName: "slider.horizontal.3") }
-        .accessibilityLabel("Voice display").accessibilityValue(presentation.title)
-        .accessibilityHint("Change the display without ending voice chat.")
-        .accessibilityIdentifier("voiceDisplayOptions")
+private struct VoiceComposerOrbBounds: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
     }
 }
 
-struct VoiceFocusStage: View {
+struct VoicePresentationLayer: ViewModifier {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
     let voice: RealtimeVoiceController
     let presented: Bool
-
-    var body: some View {
-        GeometryReader { geometry in
-            let size = max(80, min(geometry.size.width * 0.70, geometry.size.height * 0.72, 300))
-            VoiceOrbSlot(voice: voice, size: size, presented: presented)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .allowsHitTesting(false)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("voiceFocusStage", isEnabled: presented)
-        .accessibilityHidden(!presented)
-    }
-}
-
-struct VoiceOrbSlot: View {
-    #if DEBUG && targetEnvironment(simulator)
-    @ObserveHotReload private var hotReload
-    #endif
-    let voice: RealtimeVoiceController
-    let size: CGFloat
-    let presented: Bool
-    var bottomInset: CGFloat = 0
-    var orbIdentifier = "voiceOrb"
+    @AppStorage(VoiceOrbStyle.storageKey) private var style = VoiceOrbStyle.water
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.voiceReduceMotionPreview) private var reduceMotionPreview
+    @Environment(\.conversationPaneVisible) private var paneVisible
+    @Environment(\.voiceSurfaceVisible) private var surfaceVisible
+
+    func body(content: Content) -> some View {
+        let motionAllowed = !reduceMotion && !reduceMotionPreview
+        let showsOrb = presented && voice.showsOrb
+        let presentation = voice.presentation
+        content.overlayPreferenceValue(VoiceComposerOrbBounds.self) { bounds in
+            GeometryReader { geometry in
+                let focusedSize = max(80, min(geometry.size.width * 0.70, geometry.size.height * 0.72, 300))
+                let compactBounds = bounds.map { geometry[$0] }
+                let focused = presentation == .focus || compactBounds == nil
+                let size = focused ? focusedSize : VoiceComposerOrbSpace.diameter
+                let center = if !focused, let compactBounds {
+                    CGPoint(x: compactBounds.midX, y: compactBounds.midY)
+                } else { CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2) }
+                if showsOrb {
+                    Button { voice.presentation = voice.presentation.alternate } label: {
+                        VoiceOrb(voice: voice, size: focusedSize)
+                            .environment(\.voiceSurfaceVisible, surfaceVisible && paneVisible)
+                            .scaleEffect(size / focusedSize)
+                            .frame(width: size, height: size)
+                            .contentShape(.circle)
+                            .accessibilityHidden(true)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(voice.orbStatusLabel)
+                    .accessibilityValue(Text("\(presentation.title), \(style.title)"))
+                    .accessibilityHint(presentation == .focus ? Text("Show the conversation") : Text("Switch to Focus"))
+                    .accessibilityIdentifier("voiceOrb")
+                    .position(center)
+                    .animation(motionAllowed ? VoicePresentation.animation : nil, value: focused)
+                    .transition(.asymmetric(insertion: .identity, removal: motionAllowed ? .scale(scale: 0.16).combined(with: .opacity) : .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: motionAllowed ? 0.17 : 0.10), value: showsOrb)
+        }
+    }
+}
+
+struct VoiceComposerOrbSpace: View {
+    static let diameter: CGFloat = 104
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let voice: RealtimeVoiceController
+    let presented: Bool
 
     var body: some View {
-        let inCall = voice.phase == .connecting || voice.phase == .connected
-        let motionAllowed = !reduceMotion && !reduceMotionPreview
-        let disappearance: AnyTransition = motionAllowed ? .scale(scale: 0.16).combined(with: .opacity) : .opacity
-        // Keep the slot alive when the controller releases a call so its removal can finish.
-        VStack(spacing: 0) {
-            if presented && inCall {
-                VoiceOrb(voice: voice, size: size)
-                    .accessibilityIdentifier(orbIdentifier)
-                    .transition(.asymmetric(insertion: .identity, removal: disappearance))
-                    .padding(.bottom, bottomInset)
-            }
+        if presented && voice.showsOrb {
+            Color.clear.frame(width: Self.diameter, height: Self.diameter)
+                .anchorPreference(key: VoiceComposerOrbBounds.self, value: .bounds) { $0 }
+                .allowsHitTesting(false).accessibilityHidden(true)
+                .padding(.bottom, 12)
         }
-        .animation(.easeInOut(duration: motionAllowed ? 0.17 : 0.10), value: inCall)
+    }
+}
+
+private extension RealtimeVoiceController {
+    var showsOrb: Bool { phase == .connecting || phase == .connected }
+
+    var orbStatusLabel: LocalizedStringKey {
+        switch phase {
+        case .connecting: "Connecting voice chat"
+        case .connected: muted ? "Voice chat, microphone muted" : "Voice chat connected"
+        case .ending: "Ending voice chat"
+        case .stopFailed: "Ending voice chat could not be confirmed"
+        case .idle, .error: "Voice chat"
+        }
     }
 }
 
@@ -279,16 +296,6 @@ struct VoiceOrb: View {
     @Environment(\.voiceReduceMotionPreview) private var reduceMotionPreview
     @State private var visible = false
     @State private var envelope = VoiceOrbEnvelope()
-
-    private var statusLabel: LocalizedStringKey {
-        switch voice.phase {
-        case .connecting: "Connecting voice chat"
-        case .connected: voice.muted ? "Voice chat, microphone muted" : "Voice chat connected"
-        case .ending: "Ending voice chat"
-        case .stopFailed: "Ending voice chat could not be confirmed"
-        case .idle, .error: "Voice chat"
-        }
-    }
 
     var body: some View {
         let connecting = voice.phase == .connecting
@@ -327,7 +334,7 @@ struct VoiceOrb: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(statusLabel)
+        .accessibilityLabel(voice.orbStatusLabel)
         .accessibilityValue(style.title)
         .accessibilityIdentifier("voiceOrb")
         .onAppear { visible = true }.onDisappear { visible = false }
