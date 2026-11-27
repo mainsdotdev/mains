@@ -68,7 +68,7 @@ describe("robot assistant avatars", () => {
     }
     render(<Picker />);
     const styles = within(screen.getByRole("radiogroup", { name: "Robot style" }));
-    expect(styles.getAllByRole("radio").map(option => option.textContent)).toEqual(["Retro Terminal", "Clear Shell", "One-Eye Metal"]);
+    expect(styles.getAllByRole("radio").map(option => option.textContent)).toEqual(["Retro Terminal", "Clear Shell", "One-Eye Metal", "Specialists"]);
     expect(screen.queryByRole("radiogroup", { name: "Avatar color" })).toBeNull();
     expect(screen.getByRole("status").textContent).toBe("sphere rose");
     for (const name of ["Retro Terminal", "Clear Shell", "One-Eye Metal"]) {
@@ -81,6 +81,15 @@ describe("robot assistant avatars", () => {
     fireEvent.click(screen.getByRole("radio", { name: "Clear Shell" }));
     fireEvent.click(screen.getByRole("radio", { name: "One-Eye Metal" }));
     expect(screen.getByRole("radio", { name: "Bronze", checked: true })).toBeTruthy();
+    fireEvent.click(styles.getByRole("radio", { name: "Specialists" }));
+    const specialists = within(screen.getByRole("radiogroup", { name: "Robot variant" }));
+    expect(specialists.getAllByRole("radio")).toHaveLength(16);
+    expect(specialists.getByRole("radio", { name: "Travel Planner", checked: true })).toBeTruthy();
+    fireEvent.click(specialists.getByRole("radio", { name: "Beach Palm" }));
+    expect(screen.getByRole("status").textContent).toBe("specialist-beach-palm lime");
+    fireEvent.click(styles.getByRole("radio", { name: "Clear Shell" }));
+    fireEvent.click(styles.getByRole("radio", { name: "Specialists" }));
+    expect(specialists.getByRole("radio", { name: "Beach Palm", checked: true })).toBeTruthy();
     expect(screen.queryByRole("radio", { name: "Mosaic" })).toBeNull();
   });
 
@@ -117,6 +126,7 @@ describe("robot assistant avatars", () => {
     await showPreview("terminal-amber");
     advance(0);
     expect(advance(395)?.roll).toBeGreaterThan(.05);
+    expect(Math.abs(draw.mock.lastCall?.[0].accent ?? 0)).toBeGreaterThan(.5);
     expect(advance(425)?.roll).toBeLessThan(-.08);
     const preview = screen.getByRole("group", { name: "Amber robot preview" });
     for (let i = 0; i < 12; i++) fireEvent.keyDown(preview, { key: "ArrowRight" });

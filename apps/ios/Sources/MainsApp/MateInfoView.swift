@@ -30,10 +30,11 @@ struct MateInfoView: View {
     }
 
     private enum Sheet: Identifiable {
-        case memory(String?), newAssignment, task(String), routine(String?)
+        case skills, memory(String?), newAssignment, task(String), routine(String?)
 
         var id: String {
             switch self {
+            case .skills: "skills"
             case .memory(let id): "memory-\(id ?? "new")"
             case .newAssignment: "assignment-new"
             case .task(let id): "assignment-\(id)"
@@ -368,6 +369,24 @@ struct MateInfoView: View {
         if let details = mate.details, !details.instructions.isEmpty {
             MateInfoSection("Instructions") { MateInfoMarkdown(text: details.instructions) }
         }
+        if let runtime = mate.details?.runtime {
+            MateInfoSection {
+                Button { sheet = .skills } label: {
+                    MateSkillsLinkLabel(count: runtime.skills.count)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("mateSkillsDetails")
+            }
+            if mate.providerId == "codex" || mate.providerId == "claude_code" {
+                MateInfoSection("Permissions") {
+                    LabeledContent(mate.providerId == "codex" ? "Sandbox or profile" : "Permission mode",
+                                   value: matePermissionTitle(runtime.permissionMode, provider: mate.providerId))
+                    if mate.providerId == "codex" {
+                        LabeledContent("Approval policy", value: mateApprovalTitle(runtime.codexApprovalMode ?? runtime.providerApprovalMode ?? "on-request"))
+                    }
+                }
+            }
+        }
         if session.supportsMateInfo {
             if mate.isArchived == true {
                 MateInfoSection {
@@ -375,18 +394,17 @@ struct MateInfoView: View {
                         .disabled(!canWrite)
                 }
             } else {
-                let red = Color(uiColor: .systemRed)
                 Button(role: .destructive) { confirmArchive = true } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "archivebox").accessibilityHidden(true)
                         Text("Archive Mate")
                     }
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(red)
+                    .foregroundStyle(.white)
                     .padding(.horizontal, 20).padding(.vertical, 10)
                     .frame(minHeight: 48)
                     .contentShape(.capsule)
-                    .modifier(GlassSurface(radius: 24, tint: red.opacity(0.15)))
+                    .background(Color(red: 0.82, green: 0.13, blue: 0.17), in: Capsule())
                 }
                 .buttonStyle(ChatPressStyle())
                 .disabled(!canWrite)
@@ -591,6 +609,10 @@ struct MateInfoView: View {
     @ViewBuilder private func sheetContent(_ selection: Sheet, profile: MateInfoProfile) -> some View {
         let mate = profile.mate
         switch selection {
+        case .skills:
+            if let runtime = mate.details?.runtime {
+                MateSkillsEditor(session: session, mate: mate, selected: .constant(runtime.skills), editable: false)
+            }
         case .memory(let id):
             if let id {
                 MateRecordView(session: session, title: "Memory", load: { try await session.readMateMemory(id, mateID: mateID) }) { note in
@@ -717,7 +739,7 @@ struct MateInfoMarkdown: View {
     }
 }
 
-private struct MateInfoSection<Content: View>: View {
+struct MateInfoSection<Content: View>: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif

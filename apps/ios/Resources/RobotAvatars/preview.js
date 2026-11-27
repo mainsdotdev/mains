@@ -96,6 +96,7 @@ function draw(now) {
   robot.draw({
     yaw: yaw + (sample?.yaw ?? 0), pitch: pitch + (sample?.pitch ?? 0),
     roll: sample?.roll, lookX: lookX + (sample?.lookX ?? 0), lookY: lookY + (sample?.lookY ?? 0), blink: sample?.blink,
+    accent: sample?.accent,
     focus: motion === "thinking" ? MainsRobot.robotRestingPose("thinking").focus : 0,
   });
   if (!rendered) publishFrame(true);

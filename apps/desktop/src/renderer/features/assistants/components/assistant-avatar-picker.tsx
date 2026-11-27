@@ -20,17 +20,22 @@ export function AssistantAvatarPicker({ avatar, seed, onChange, nameField, compa
   const shapes = ROBOT_SHAPES_BY_STYLE[style];
   const previewSize = compact ? "size-20" : "size-32";
   const previousShapes = useRef<Partial<Record<RobotStyle, AssistantRobotShape>>>({});
+  const styleViewport = useRef<HTMLDivElement>(null);
   const variantViewport = useRef<HTMLDivElement>(null);
   const selectedButton = useRef<HTMLButtonElement>(null);
 
   useLayoutEffect(() => {
-    const viewport = variantViewport.current;
-    const button = selectedButton.current;
-    if (!viewport || !button || viewport.scrollWidth <= viewport.clientWidth) return;
-    const bounds = viewport.getBoundingClientRect();
-    const selectedBounds = button.getBoundingClientRect();
-    if (selectedBounds.left < bounds.left) viewport.scrollLeft += selectedBounds.left - bounds.left - 4;
-    if (selectedBounds.right > bounds.right) viewport.scrollLeft += selectedBounds.right - bounds.right + 4;
+    const viewport = styleViewport.current;
+    if (!viewport) return;
+    const reveal = () => revealOption(viewport, viewport.querySelector('[aria-checked="true"]'));
+    reveal();
+    const resize = new ResizeObserver(reveal);
+    resize.observe(viewport);
+    return () => resize.disconnect();
+  }, [style]);
+
+  useLayoutEffect(() => {
+    revealOption(variantViewport.current, selectedButton.current);
   }, [selectedShape, compact]);
 
   function selectShape(shape: AssistantRobotShape) {
@@ -52,7 +57,7 @@ export function AssistantAvatarPicker({ avatar, seed, onChange, nameField, compa
         : <AssistantAvatar avatar={avatar} seed={seed} className={previewSize} />}
       {nameField}
     </div>
-    <div className="max-w-full overflow-x-auto overscroll-x-contain">
+    <div ref={styleViewport} className="max-w-full overflow-x-auto overscroll-x-contain">
       <SegmentedTabs value={style} options={ROBOT_STYLE_OPTIONS} onChange={selectStyle}
         semantics="radiogroup" aria-label="Robot style" className="w-max" />
     </div>
@@ -74,6 +79,14 @@ export function AssistantAvatarPicker({ avatar, seed, onChange, nameField, compa
       </div>
     </div>
   </div>;
+}
+
+function revealOption(viewport: HTMLElement | null, button: HTMLElement | null) {
+  if (!viewport || !button || viewport.scrollWidth <= viewport.clientWidth) return;
+  const bounds = viewport.getBoundingClientRect();
+  const selected = button.getBoundingClientRect();
+  if (selected.left < bounds.left) viewport.scrollLeft += selected.left - bounds.left - 4;
+  if (selected.right > bounds.right) viewport.scrollLeft += selected.right - bounds.right + 4;
 }
 
 function cycleAvatar<T extends string>(event: KeyboardEvent<HTMLDivElement>, values: readonly T[], value: T, choose: (value: T) => void) {

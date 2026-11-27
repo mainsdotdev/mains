@@ -336,11 +336,16 @@ struct MateProfileEditor: View {
     @State private var profile: MateEditableProfile
     @State private var team: MateTeamSelection
     @State private var settings: ComposerSettings
+    @State private var skills: [MateSkill]
+    @State private var permission: String
+    @State private var approval: String?
     @State private var rememberedStyles: [String: String] = [:]
     @State private var showingTeamEditor = false
+    @State private var showingSkills = false
     @State private var previewActive = false
     private enum Field: Hashable { case name, description, instructions }
     @FocusState private var focusedField: Field?
+    @Environment(\.dismiss) private var dismiss
 
     init(session: BackendSession, mate: Mate, original: MateEditableProfile, teams: [MateTeam]) {
         self.session = session
@@ -352,6 +357,9 @@ struct MateProfileEditor: View {
         var settings = ComposerSettings(model: mate.model)
         settings.setEffort(mate.details?.effort ?? "", provider: mate.providerId)
         _settings = State(initialValue: settings)
+        _skills = State(initialValue: mate.details?.runtime?.skills ?? [])
+        _permission = State(initialValue: mate.details?.runtime?.permissionMode ?? "")
+        _approval = State(initialValue: mate.details?.runtime?.codexApprovalMode)
     }
 
     private var provider: String { mate.providerId }
@@ -359,6 +367,8 @@ struct MateProfileEditor: View {
     private var selectedModel: ModelChoice? { models.first { $0.id == settings.model } }
     private var originalEffort: String { mate.details?.effort ?? "" }
     private var canSelectModel: Bool { session.supportsMateModelEditing && !session.mateCommandPending }
+    private var runtime: MateRuntimeSettings? { mate.details?.runtime }
+    private var canEditRuntime: Bool { session.supportsMateRuntimeSettings && !session.mateCommandPending && session.isConnected }
 
     private var change: MateChange? {
         var edited = profile
@@ -370,11 +380,22 @@ struct MateProfileEditor: View {
         let modelChange = settingsChanged
             ? MateModelChange(model: settings.model, effort: effort, expectedModel: mate.model, expectedEffort: originalEffort)
             : nil
+        let skillChange = runtime.flatMap { original -> MateSkillChange? in
+            let ids = skills.map(\.id), expectedIds = original.skills.map(\.id)
+            return ids == expectedIds ? nil : MateSkillChange(ids: ids, expectedIds: expectedIds)
+        }
+        let permissionChange = runtime.flatMap { original -> MatePermissionChange? in
+            guard permission != original.permissionMode || approval != original.codexApprovalMode else { return nil }
+            return MatePermissionChange(mode: permission, expectedMode: original.permissionMode, codex: provider == "codex",
+                                        approvalMode: approval, expectedApprovalMode: original.codexApprovalMode)
+        }
         guard validText(edited.name, limit: 100), edited.description.utf16.count <= 1000,
               validText(edited.instructions, limit: 16_000),
               !settingsChanged || session.supportsMateModelEditing,
-              edited != original || team.id != mate.teamId || settingsChanged else { return nil }
-        return .updateProfile(edited, original: original, teamID: team.id, originalTeamID: mate.teamId, modelChange: modelChange)
+              skillChange == nil && permissionChange == nil || session.supportsMateRuntimeSettings,
+              edited != original || team.id != mate.teamId || settingsChanged || skillChange != nil || permissionChange != nil else { return nil }
+        return .updateProfile(edited, original: original, teamID: team.id, originalTeamID: mate.teamId,
+                              modelChange: modelChange, skillChange: skillChange, permissionChange: permissionChange)
     }
 
     var body: some View {
@@ -417,6 +438,26 @@ struct MateProfileEditor: View {
                         .accessibilityIdentifier("editMateInstructions")
                 }
                 .padding(.horizontal, 20)
+                if let runtime {
+                    VStack(spacing: 16) {
+                        MateInfoSection {
+                            Button {
+                                focusedField = nil
+                                showingSkills = true
+                            } label: {
+                                MateSkillsLinkLabel(count: skills.count)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!canEditRuntime)
+                            .accessibilityIdentifier("editMateSkills")
+                        }
+                        if provider == "codex" || provider == "claude_code" {
+                            MatePermissionEditor(session: session, provider: provider, runtime: runtime,
+                                                 enabled: canEditRuntime, permission: $permission, approval: $approval)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
             }
             .background(alignment: .center) {
                 MatePickerAppearance(isVisible: $previewActive)
@@ -429,6 +470,10 @@ struct MateProfileEditor: View {
         .sheet(isPresented: $showingTeamEditor) {
             MateTeamEditor(session: session) { team.select($0) }
         }
+        .sheet(isPresented: $showingSkills) {
+            MateSkillsEditor(session: session, mate: mate, selected: $skills, editable: true)
+        }
+        .onChange(of: session.ownership) { _, _ in dismiss() }
     }
 
     @ViewBuilder private var modelOptions: some View {
@@ -447,6 +492,100 @@ struct MateProfileEditor: View {
                 Text("Update Mains on your computer to change the model and effort.")
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
             }
+        }
+    }
+}
+
+func matePermissionTitle(_ mode: String, provider: String) -> String {
+    if provider == "codex", mode == "workspace-write" || mode == "profile::workspace" { return "Workspace Write" }
+    return PermissionChoice.shortTitle(for: mode, provider: provider) ?? mode
+}
+
+func mateApprovalTitle(_ mode: String) -> String {
+    switch mode {
+    case "on-request": "On request"
+    case "untrusted": "Untrusted"
+    case "never": "Never"
+    case "on-failure": "On failure"
+    default: mode
+    }
+}
+
+private struct MatePermissionEditor: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let provider: String
+    let runtime: MateRuntimeSettings
+    let enabled: Bool
+    @Binding var permission: String
+    @Binding var approval: String?
+    @State private var catalog: CodexPermissions?
+    @State private var failed = false
+    @State private var retry = 0
+    @State private var fullAccess: String?
+    @State private var confirmFullAccess = false
+
+    private var codex: Bool { provider == "codex" }
+    private var providerApproval: String { runtime.providerApprovalMode ?? "on-request" }
+    private var choices: [PermissionChoice] {
+        codex ? catalog?.choices(current: permission) ?? [] : PermissionChoice.choices(provider: provider)
+    }
+
+    var body: some View {
+        MateInfoSection("Permissions") {
+            Menu {
+                ForEach(choices) { option in
+                    Button {
+                        if ["danger-full-access", "profile::danger-full-access"].contains(option.id), option.id != permission {
+                            fullAccess = option.id
+                            confirmFullAccess = true
+                        } else { permission = option.id }
+                    } label: {
+                        if permission == option.id { Label(matePermissionTitle(option.id, provider: provider), systemImage: "checkmark") }
+                        else { Text(matePermissionTitle(option.id, provider: provider)) }
+                    }.disabled(option.disabledReason != nil)
+                }
+            } label: {
+                LabeledContent(codex ? "Sandbox or profile" : "Permission mode", value: matePermissionTitle(permission, provider: provider))
+            }.disabled(!enabled || choices.isEmpty).accessibilityIdentifier("editMatePermission")
+            if codex {
+                Menu {
+                    Button("Use provider setting") { approval = nil }
+                        .disabled(catalog?.allowedApprovalPolicies?.contains(providerApproval) == false)
+                    ForEach(["on-request", "untrusted", "never"], id: \.self) { mode in
+                        Button {
+                            approval = mode
+                        } label: {
+                            if approval == mode { Label(mateApprovalTitle(mode), systemImage: "checkmark") }
+                            else { Text(mateApprovalTitle(mode)) }
+                        }.disabled(catalog?.allowedApprovalPolicies?.contains(mode) == false)
+                    }
+                } label: {
+                    LabeledContent("Approval policy", value: approval.map(mateApprovalTitle) ?? "Provider · \(mateApprovalTitle(providerApproval))")
+                }.disabled(!enabled || catalog == nil).accessibilityIdentifier("editMateApprovalPolicy")
+                if failed { Button("Retry Loading Permissions") { retry += 1 }.disabled(!enabled) }
+            }
+        }
+        .task(id: "\(session.ownership):\(session.isConnected):\(retry)") {
+            guard codex, session.isConnected else { catalog = nil; return }
+            let owner = session.ownership
+            failed = false
+            do {
+                let result = try await session.codexPermissions(workspaceID: nil)
+                if !Task.isCancelled, owner == session.ownership { catalog = result }
+            } catch {
+                if !Task.isCancelled, owner == session.ownership { catalog = nil; failed = true }
+            }
+        }
+        .alert("Allow Full Access?", isPresented: $confirmFullAccess, presenting: fullAccess) { mode in
+            Button("Allow Full Access", role: .destructive) {
+                if enabled, choices.contains(where: { $0.id == mode && $0.disabledReason == nil }) { permission = mode }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { _ in
+            Text("This Mate can run commands outside the workspace sandbox on your computer.")
         }
     }
 }

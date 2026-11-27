@@ -117,7 +117,7 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
       {setup.saved ? <AssistantSetupMessage content={question.idleMessage} receivedAt={setup.savedAt ?? welcome.updatedAt} />
         : welcome.state === "failed" ? (
           <div className="space-y-2">
-            <p role="alert" className="whitespace-pre-wrap break-words text-danger">{welcome.error ? errorText(welcome.error) : "Could not draft the profile."}</p>
+            <p role="alert" className="whitespace-pre-wrap wrap-break-word text-danger">{welcome.error ? errorText(welcome.error) : "Could not draft the profile."}</p>
             <Button variant="secondary" disabled={disabled} onClick={() => { setFailure(""); void onRetry(); }}>Retry profile draft</Button>
           </div>
         ) : pendingAnswer || welcome.state !== "ready" || request.isLoading && !draft ? (
@@ -142,10 +142,10 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
                   <Textarea required maxLength={16000} value={edit.instructions} onChange={event => setEdit({ ...edit, instructions: event.target.value })} />
                 </label>
               </> : <>
-                <p className="whitespace-pre-wrap break-words">{draft.description}</p>
+                <p className="whitespace-pre-wrap wrap-break-word">{draft.description}</p>
                 <div className="space-y-1">
                   <h3 className="text-xs text-primary-600 dark:text-primary-400">Instructions</h3>
-                  <p className="whitespace-pre-wrap break-words">{draft.instructions}</p>
+                  <p className="whitespace-pre-wrap wrap-break-word">{draft.instructions}</p>
                 </div>
               </>}
               <div className="flex gap-2">
@@ -183,7 +183,7 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
               <Button variant="primary" type="submit" disabled={disabled || !answerText.trim()}
                 aria-keyshortcuts={usesCommand ? "Meta+Enter" : "Control+Enter"} className="inline-flex gap-2">
                 Send
-                <kbd aria-hidden="true" className="rounded-md border border-current/25 px-1.5 py-0.5 font-sans text-xxs leading-none opacity-80">
+                <kbd aria-hidden="true" className=" px-1.5 py-0.5 font-sans text-xxs leading-none opacity-80">
                   {keyboardShortcutLabel(usesCommand ? "Command+Enter" : "Control+Enter", platform)}
                 </kbd>
               </Button>

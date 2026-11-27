@@ -41,9 +41,15 @@ struct ConversationMenuActions: View {
             Button("Archive", systemImage: "archivebox") { perform(.archive) }
                 .disabled(!session.canManageConversation(run.id, action: .archive))
                 .accessibilityIdentifier("archiveConversation")
-            Button("Delete", systemImage: "trash", role: .destructive) { present(.delete) }
-                .disabled(!session.canManageConversation(run.id, action: .delete))
-                .accessibilityIdentifier("deleteConversation")
+            Button(role: .destructive) { present(.delete) } label: {
+                Label { Text("Delete") } icon: {
+                    Image(uiImage: (UIImage(systemName: "trash") ?? UIImage())
+                        .withTintColor(.systemRed, renderingMode: .alwaysOriginal))
+                        .renderingMode(.original)
+                }
+            }
+            .disabled(!session.canManageConversation(run.id, action: .delete))
+            .accessibilityIdentifier("deleteConversation")
         }
     }
 

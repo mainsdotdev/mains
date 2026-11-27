@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 public struct TextDraftKey: Codable, Hashable, Sendable {
-    public enum Owner: String, Codable, Sendable { case conversation, home }
+    public enum Owner: String, Codable, Sendable { case conversation, home, workspace }
     public let backendID: String
     public let deviceID: String
     public let owner: Owner

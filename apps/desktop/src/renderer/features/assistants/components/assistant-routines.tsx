@@ -1,13 +1,14 @@
 import { useState, type FormEvent } from "react";
 import type { Assistant } from "@mains/contracts/assistants";
 import { Alert, AsciiSpinner, Button, Input, Label, Select, Textarea, Toggle } from "@/components/ui";
-import { Edit, Plus, Trash } from "@/components/ui/icons";
+import { Edit, Trash } from "@/components/ui/icons";
 import { useListProjectsQuery, useListWorkspacesQuery } from "@/lib/redux/api";
 import { useCreateAssistantRoutineMutation, useDeletePulseMutation, useGetPulsesQuery, useRunPulseNowMutation, useTogglePulseMutation, useUpdatePulseMutation, type Pulse, type PulseFrequency } from "@/lib/redux/api/pulseApi";
 import { SchedulePicker } from "@/features/pulse/components/pulse-pickers";
 import { formatSchedule } from "@/features/pulse/lib/format-schedule";
 import { formatAbsoluteDate } from "@/lib/format-date";
 import { errorText } from "../lib/assistant-ui";
+import { AssistantPanelEmptyState, AssistantPanelSection } from "./assistant-panel-section";
 
 export function AssistantRoutines({ assistant, onOpenChat }: { assistant: Assistant; onOpenChat(runId: string): void }) {
   const { currentData, error, refetch } = useGetPulsesQuery(undefined, { pollingInterval: 15_000, skipPollingIfUnfocused: true });
@@ -16,25 +17,19 @@ export function AssistantRoutines({ assistant, onOpenChat }: { assistant: Assist
   const [deleting, setDeleting] = useState<Pulse | null>(null);
   const [failure, setFailure] = useState("");
   const [remove, removing] = useDeletePulseMutation();
-  return <section aria-label="Mate routines" className="space-y-5 pt-2">
-    <div>
-      <h3 className="text-lg font-medium">Routines</h3>
-      <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-400">Give this mate work on a schedule. Each run creates a task with its own chat.</p>
-      <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-400">You can also create or change routines by asking this mate in chat.</p>
-      {editing === undefined && <div className="mt-4 flex justify-end">
-        <Button variant="primary" className="gap-2" disabled={assistant.isArchived} onClick={() => setEditing(null)}><Plus className="size-4" />New routine</Button>
-      </div>}
-    </div>
+  return <AssistantPanelSection label="Mate routines" action={editing === undefined ? {
+    label: "New routine", disabled: assistant.isArchived, onClick: () => setEditing(null),
+  } : undefined}>
     {editing !== undefined && <RoutineForm key={editing?.id ?? "new"} assistant={assistant} pulse={editing} onClose={() => setEditing(undefined)} />}
     {!!error && <div role="alert" className="text-sm text-danger">{errorText(error)}<Button variant="ghost" onClick={() => void refetch()}>Retry</Button></div>}
     {failure && <p role="alert" className="text-sm text-danger">{failure}</p>}
     {!currentData && !error && <div role="status" className="flex items-center gap-2 text-sm text-primary-500"><AsciiSpinner variant="inherit" />Loading routines…</div>}
-    {routines?.length === 0 && !error && <p className="rounded-2xl glass-card px-4 py-8 text-center text-sm leading-relaxed text-primary-600 dark:text-primary-400">No routines yet. Schedule the first task for this mate.</p>}
+    {routines?.length === 0 && !error && <AssistantPanelEmptyState>No routines yet. Add one here or in chat.</AssistantPanelEmptyState>}
     {routines?.map(pulse => <RoutineRow key={pulse.id} pulse={pulse} disabled={assistant.isArchived} onEdit={() => setEditing(pulse)} onDelete={() => { setFailure(""); setDeleting(pulse); }} onOpenChat={onOpenChat} />)}
     <Alert isOpen={!!deleting} title="Delete routine?" description="Future scheduled runs stop. Tasks already queued or running continue; their chats stay in history."
       primaryButtonText="Delete" secondaryButtonText="Cancel" primaryButtonVariant="danger" isPrimaryLoading={removing.isLoading}
       onPrimary={() => { if (deleting) void remove(deleting.id).unwrap().then(() => setDeleting(null)).catch(e => { setFailure(errorText(e)); setDeleting(null); }); }} onSecondary={() => setDeleting(null)} />
-  </section>;
+  </AssistantPanelSection>;
 }
 
 function RoutineForm({ assistant, pulse, onClose }: { assistant: Assistant; pulse: Pulse | null; onClose(): void }) {

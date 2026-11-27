@@ -21,7 +21,7 @@ import WebSocket from "ws";
 import { buildSubprotocols } from "@mains/contracts/ws-protocol";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { PendingApproval } from "@mains/contracts/runs";
-import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_PINNING_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY, type MobileMateChange, type MobileMateDirectory, type MobileMateRoutines } from "@mains/contracts/assistants";
+import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_PINNING_CAPABILITY, MOBILE_MATE_RUNTIME_SETTINGS_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY, type AssistantSkill, type MobileMateChange, type MobileMateDirectory, type MobileMateRoutines } from "@mains/contracts/assistants";
 import { getDb } from "./db/client";
 import { providers as providerTable } from "./db/schema";
 import { eq } from "drizzle-orm";
@@ -80,6 +80,9 @@ describe("backend host acquisition and shutdown", () => {
     let id = 0;
     const invoke = (channel: string, args: unknown[], commandId?: string) => socketInvoke(socket, ++id, channel, args, commandId);
     const models = vi.spyOn(providers.providersService, "getModels").mockResolvedValue([{ id: "test-model", displayName: "Test model", supportedEffortLevels: ["high"] }]);
+    const skills = vi.spyOn(providers.providersService, "getSkills").mockResolvedValue([
+      { name: "staging-from-plugin", path: path.join(directory, "plugin", "SKILL.md"), scope: "plugin" },
+    ]);
     const driver = createFakeDriver();
     const workerReleased = deferred();
     const createSession = driver.driver.createSession;
@@ -106,7 +109,15 @@ describe("backend host acquisition and shutdown", () => {
       }
       return session;
     };
-    driver.driver.generateText = async () => JSON.stringify({ description: "Build checks", instructions: "Summarize the sample." });
+    const skillDraft = {
+      name: "release-checklist", title: "Release checklist", description: "Use during release review.",
+      markdown: "Check the staging build and summarize the results.",
+    };
+    const generateText = vi.fn<NonNullable<typeof driver.driver.generateText>>(async (_prompt, options) => JSON.stringify(
+      options?.system?.includes("Generate a draft for the editor.")
+        ? skillDraft : { description: "Build checks", instructions: "Summarize the sample." },
+    ));
+    driver.driver.generateText = generateText;
     const adapter = vi.spyOn(providerAdapters, "createWorkAdapter").mockReturnValue(createWorkRunAdapter(driver.driver));
     try {
       await once(socket, "open");
@@ -163,6 +174,9 @@ describe("backend host acquisition and shutdown", () => {
         id: mateId, description: profile.description, needsSetup: false,
         details: { spaceName: space.name, effort: "high", instructions: profile.instructions },
       }] } });
+      expect(saved.data.mates[0].details?.runtime).toEqual({
+        skills: [], permissionMode: "workspace-write", providerApprovalMode: "on-request",
+      });
       const welcomeRunId = saved.data.mates[0].welcome!.runId;
       const sent = await invoke(CHANNELS.assistants.send, [{
         accountId, assistantId: mateId, message: "Say hello", requestId: `welcome-${mateId}`, runId: welcomeRunId,
@@ -223,7 +237,9 @@ describe("backend host acquisition and shutdown", () => {
       });
       await vi.waitFor(() => expect(driver.calls.resumeSession.some(request => request.runId === runId && request.message.includes("Sample checked"))).toBe(true));
 
-      expect(await invoke(CHANNELS.backend.describe, [])).toMatchObject({ data: { capabilities: expect.arrayContaining([MOBILE_MATE_INFO_CAPABILITY]) } });
+      expect(await invoke(CHANNELS.backend.describe, [])).toMatchObject({
+        data: { capabilities: expect.arrayContaining([MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_RUNTIME_SETTINGS_CAPABILITY]) },
+      });
       expect(await invoke(CHANNELS.pulse.getAll, [])).toMatchObject({ success: false });
       const team = assistantsService.createTeam({ accountId, name: "Release team" });
       expect(await invokeHandler(CHANNELS.assistants.teamWork, [accountId, team.id])).toMatchObject({ success: true, data: { items: [] } });
@@ -279,6 +295,49 @@ describe("backend host acquisition and shutdown", () => {
       expect(await invoke(CHANNELS.assistants.mobileRoutines, [accountId, reviewer.id, routine.id])).toMatchObject({ success: true, data: { hour: 8, isActive: false } });
 
       const expectedProfile = { ...profile, name: reviewer.name, avatar: reviewer.avatar };
+      const workflow = "Review the release before shipping";
+      const generationArgs = [accountId, reviewer.id, workflow];
+      expect(await invoke(CHANNELS.assistants.saveSkill, [accountId, reviewer.id, { draft: skillDraft }], "desktop-save")).toMatchObject({ success: false });
+      expect(await invoke(CHANNELS.assistants.mobileSkills, ["foreign", reviewer.id, "", 0])).toMatchObject({ success: false });
+      expect(await invoke(CHANNELS.assistants.mobileGenerateSkill, ["foreign", reviewer.id, workflow], "foreign-generate")).toMatchObject({ success: false });
+      expect(await invoke(CHANNELS.assistants.mobileSaveSkill, ["foreign", reviewer.id, skillDraft], "foreign-save")).toMatchObject({ success: false });
+      expect(await invoke(CHANNELS.assistants.mobileGenerateSkill, generationArgs)).toMatchObject({
+        success: false, error: expect.stringContaining("commandId"),
+      });
+      const generated = { success: true, data: skillDraft };
+      expect(await invoke(CHANNELS.assistants.mobileGenerateSkill, generationArgs, "generate-skill")).toEqual(generated);
+      expect(await invoke(CHANNELS.assistants.mobileGenerateSkill, generationArgs, "generate-skill")).toEqual(generated);
+      expect(generateText.mock.calls.filter(([prompt]) => prompt.includes(workflow))).toEqual([
+        [expect.stringContaining(workflow), expect.objectContaining({ model: reviewer.model, effort: reviewer.effort })],
+      ]);
+      const draftArgs = [accountId, reviewer.id, { ...skillDraft, title: "Staging checklist" }];
+      const savedSkill = await invoke(CHANNELS.assistants.mobileSaveSkill, draftArgs, "save-skill") as { data: AssistantSkill };
+      expect(savedSkill).toMatchObject({ success: true, data: { id: expect.any(String), name: "Staging checklist", storage: "local" } });
+      expect(await invoke(CHANNELS.assistants.mobileSaveSkill, draftArgs, "save-skill")).toEqual(savedSkill);
+      expect(await invoke(CHANNELS.assistants.mobileSkills, [accountId, teammate.id, "staging", 0])).toMatchObject({
+        success: true, data: { items: [savedSkill.data], nextOffset: null, unavailableIds: [], pluginSkillIds: [] },
+      });
+      expect(await invoke(CHANNELS.assistants.mobileDirectory, [accountId, reviewer.id])).toMatchObject({
+        success: true, data: { mates: [{ details: { runtime: { skills: [], permissionMode: "workspace-write" } } }] },
+      });
+      const permissions = vi.spyOn(providers.providersService, "getCodexPermissions").mockResolvedValue({
+        profilesSupported: true, profiles: [], allowedSandboxModes: ["workspace-write", "read-only"],
+        allowedApprovalPolicies: ["on-request", "untrusted"], requiresNamedProfile: false,
+      });
+      try {
+        expect(await manage(reviewer.id, { action: "updateProfile", expectedProfile, profile: expectedProfile,
+          skillChange: { ids: [savedSkill.data.id], expectedIds: [] },
+          permissionChange: { mode: "read-only", expectedMode: "workspace-write", approvalMode: "untrusted", expectedApprovalMode: null },
+        }, "configure-mate-runtime")).toEqual(accepted);
+      } finally {
+        permissions.mockRestore();
+      }
+      expect(await invoke(CHANNELS.assistants.mobileDirectory, [accountId, reviewer.id])).toMatchObject({
+        success: true, data: { mates: [{ details: { runtime: { skills: [savedSkill.data], permissionMode: "read-only", codexApprovalMode: "untrusted" } } }] },
+      });
+      expect(await manage(reviewer.id, { action: "updateProfile", expectedProfile, profile: expectedProfile,
+        skillChange: { ids: [], expectedIds: [] },
+      }, "stale-mate-skills")).toMatchObject({ success: false, error: expect.stringContaining("skills changed") });
       expect(await manage(reviewer.id, { action: "updateProfile", expectedProfile, profile: { ...expectedProfile, name: "Release reviewer" } }, "edit-profile")).toEqual(accepted);
       expect(await manage(reviewer.id, { action: "archive", archived: true }, "archive-mate")).toEqual(accepted);
       expect(await invoke(CHANNELS.assistants.mobileDirectory, [accountId, null, true])).toMatchObject({ success: true, data: { mates: [{ id: reviewer.id, name: "Release reviewer", isArchived: true }] } });
@@ -293,6 +352,7 @@ describe("backend host acquisition and shutdown", () => {
       socket.close();
       await server.close();
       models.mockRestore();
+      skills.mockRestore();
       adapter.mockRestore();
     }
   });

@@ -16,9 +16,9 @@ struct ComposerContext {
         if runID == nil, let name { return "Start a run in \(name)" }
         return "Continue this run…"
     }
-    init(space: Space, runID: String? = nil) {
-        providerId = space.providerId; mode = space.mode; name = space.name
-        spaceID = space.id; self.runID = runID; workspaceID = nil; lockedProfile = false; mate = nil
+    init(space: Space, runID: String? = nil, workspace: Workspace? = nil) {
+        providerId = space.providerId; mode = space.mode; name = workspace?.name ?? space.name
+        spaceID = space.id; self.runID = runID; workspaceID = workspace?.id; lockedProfile = false; mate = nil
     }
     init(run: Conversation, mateName: String? = nil) {
         providerId = run.providerId; mode = run.mode; name = mateName

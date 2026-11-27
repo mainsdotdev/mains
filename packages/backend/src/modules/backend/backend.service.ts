@@ -1,7 +1,7 @@
 import { getLocalBackendId } from "../../db/backend-identity";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_MODEL_EDITING_CAPABILITY, MOBILE_MATE_PINNING_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY } from "@mains/contracts/assistants";
+import { MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_MODEL_EDITING_CAPABILITY, MOBILE_MATE_PINNING_CAPABILITY, MOBILE_MATE_RUNTIME_SETTINGS_CAPABILITY, MOBILE_MATE_TEAM_CREATION_CAPABILITY } from "@mains/contracts/assistants";
 import { CHANNELS } from "@mains/contracts/channels";
 import { MOBILE_GOAL_CONTROLS_CAPABILITY, MOBILE_GOAL_SUMMARY_CAPABILITY } from "@mains/contracts/provider-goals";
 import { MATE_REALTIME_CONVERSATION_CAPABILITY } from "@mains/contracts/realtime";
@@ -42,6 +42,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.assistants.mobileMemory,
   CHANNELS.assistants.mobileAssignments,
   CHANNELS.assistants.mobileRoutines,
+  CHANNELS.assistants.mobileSkills,
   CHANNELS.assistants.conversations,
   // Narrow Atlas readers return identities and bounded content, never host paths.
   CHANNELS.atlas.mobileLibrary,
@@ -129,6 +130,8 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   CHANNELS.assistants.respondWelcome,
   CHANNELS.assistants.send,
   CHANNELS.assistants.mobileManage,
+  CHANNELS.assistants.mobileGenerateSkill,
+  CHANNELS.assistants.mobileSaveSkill,
   CHANNELS.atlas.updateMobileItem,
   CHANNELS.atlas.setMobileTrash,
   CHANNELS.atlas.deleteMobileTrash,
@@ -314,6 +317,9 @@ export const backendService = {
       CHANNELS.assistants.mobileRoutines, CHANNELS.assistants.mobileManage];
     if (mateInfoChannels.every(channel => reachable.includes(channel))) {
       namespaces.push(MOBILE_MATE_INFO_CAPABILITY, MOBILE_MATE_MODEL_EDITING_CAPABILITY);
+      if ([CHANNELS.assistants.mobileSkills, CHANNELS.assistants.mobileGenerateSkill, CHANNELS.assistants.mobileSaveSkill].every(channel => reachable.includes(channel))) {
+        namespaces.push(MOBILE_MATE_RUNTIME_SETTINGS_CAPABILITY);
+      }
       if (reachable.includes(CHANNELS.assistants.mobileDirectory) && served.includes(CHANNELS.assistants.setPinned)) {
         namespaces.push(MOBILE_MATE_PINNING_CAPABILITY);
       }

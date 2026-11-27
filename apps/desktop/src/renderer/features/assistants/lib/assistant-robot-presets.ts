@@ -3,13 +3,14 @@ import type { AssistantAvatar, AssistantRobotShape } from "@mains/contracts/assi
 
 export const DEFAULT_ROBOT_AVATAR = { shape: "terminal-amber", color: ASSISTANT_ROBOT_AVATARS["terminal-amber"] } as const satisfies AssistantAvatar;
 
-export const ROBOT_STYLES = ["terminal", "clear", "metal"] as const;
+export const ROBOT_STYLES = ["terminal", "clear", "metal", "specialists"] as const;
 export type RobotStyle = typeof ROBOT_STYLES[number];
 
 export const ROBOT_STYLE_LABELS: Record<RobotStyle, string> = {
   terminal: "Retro Terminal",
   clear: "Clear Shell",
   metal: "One-Eye Metal",
+  specialists: "Specialists",
 };
 
 export const ROBOT_PRESETS = {
@@ -34,6 +35,22 @@ export const ROBOT_PRESETS = {
   "metal-copper": { style: "metal", label: "Copper" },
   "metal-ice": { style: "metal", label: "Ice Disc" },
   "metal-moss": { style: "metal", label: "Moss Shield" },
+  "specialist-travel": { style: "specialists", label: "Travel Planner" },
+  "specialist-kitchen": { style: "specialists", label: "Kitchen Mate" },
+  "specialist-cloud": { style: "specialists", label: "Cloud Specialist" },
+  "specialist-law": { style: "specialists", label: "Lawyer" },
+  "specialist-sports": { style: "specialists", label: "Sports Mate" },
+  "specialist-writer": { style: "specialists", label: "Writer" },
+  "specialist-research": { style: "specialists", label: "Researcher" },
+  "specialist-finance": { style: "specialists", label: "Finance Mate" },
+  "specialist-design": { style: "specialists", label: "Designer" },
+  "specialist-developer": { style: "specialists", label: "Developer" },
+  "specialist-photo": { style: "specialists", label: "Photographer" },
+  "specialist-garden": { style: "specialists", label: "Gardener" },
+  "specialist-music": { style: "specialists", label: "Music Mate" },
+  "specialist-language": { style: "specialists", label: "Language Mate" },
+  "specialist-projects": { style: "specialists", label: "Project Manager" },
+  "specialist-beach-palm": { style: "specialists", label: "Beach Palm" },
 } as const satisfies Record<AssistantRobotShape, { style: RobotStyle; label: string }>;
 
 const shapes = Object.keys(ROBOT_PRESETS) as AssistantRobotShape[];
@@ -41,4 +58,5 @@ export const ROBOT_SHAPES_BY_STYLE = {
   terminal: shapes.filter(shape => ROBOT_PRESETS[shape].style === "terminal"),
   clear: shapes.filter(shape => ROBOT_PRESETS[shape].style === "clear"),
   metal: shapes.filter(shape => ROBOT_PRESETS[shape].style === "metal"),
-};
+  specialists: shapes.filter(shape => ROBOT_PRESETS[shape].style === "specialists"),
+} satisfies Record<RobotStyle, AssistantRobotShape[]>;

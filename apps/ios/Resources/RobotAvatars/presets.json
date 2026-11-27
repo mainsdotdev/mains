@@ -123,6 +123,92 @@
           "color": "lime"
         }
       ]
+    },
+    {
+      "id": "specialists",
+      "label": "Specialists",
+      "presets": [
+        {
+          "id": "specialist-travel",
+          "label": "Travel Planner",
+          "color": "mint"
+        },
+        {
+          "id": "specialist-kitchen",
+          "label": "Kitchen Mate",
+          "color": "coral"
+        },
+        {
+          "id": "specialist-cloud",
+          "label": "Cloud Specialist",
+          "color": "cyan"
+        },
+        {
+          "id": "specialist-law",
+          "label": "Lawyer",
+          "color": "violet"
+        },
+        {
+          "id": "specialist-sports",
+          "label": "Sports Mate",
+          "color": "lime"
+        },
+        {
+          "id": "specialist-writer",
+          "label": "Writer",
+          "color": "blue"
+        },
+        {
+          "id": "specialist-research",
+          "label": "Researcher",
+          "color": "lime"
+        },
+        {
+          "id": "specialist-finance",
+          "label": "Finance Mate",
+          "color": "amber"
+        },
+        {
+          "id": "specialist-design",
+          "label": "Designer",
+          "color": "violet"
+        },
+        {
+          "id": "specialist-developer",
+          "label": "Developer",
+          "color": "mint"
+        },
+        {
+          "id": "specialist-photo",
+          "label": "Photographer",
+          "color": "amber"
+        },
+        {
+          "id": "specialist-garden",
+          "label": "Gardener",
+          "color": "mint"
+        },
+        {
+          "id": "specialist-music",
+          "label": "Music Mate",
+          "color": "coral"
+        },
+        {
+          "id": "specialist-language",
+          "label": "Language Mate",
+          "color": "blue"
+        },
+        {
+          "id": "specialist-projects",
+          "label": "Project Manager",
+          "color": "amber"
+        },
+        {
+          "id": "specialist-beach-palm",
+          "label": "Beach Palm",
+          "color": "lime"
+        }
+      ]
     }
   ]
 }

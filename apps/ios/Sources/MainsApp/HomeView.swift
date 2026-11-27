@@ -110,9 +110,10 @@ struct HomeView: View {
 
     private func welcomeGreeting(at date: Date) -> LocalizedStringKey {
         switch Calendar.autoupdatingCurrent.component(.hour, from: date) {
-        case 0..<12: "Morning"
+        case 6..<12: "Morning"
         case 12..<18: "Afternoon"
-        default: "Evening"
+        case 18..<22: "Evening"
+        default: "Night"
         }
     }
 
@@ -171,7 +172,7 @@ private struct UnpairedHomeArea: View {
     }
 }
 
-private struct HomeComposerArea: View {
+struct HomeComposerArea: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
@@ -182,25 +183,33 @@ private struct HomeComposerArea: View {
     @Binding var optionsSheet: Bool
     @Binding var consent: ConsentContext?
     let editorExpanded: Bool
+    let fixedWorkspace: Workspace?
+    let focusChanged: ((Bool) -> Void)?
+    let isCurrent: () -> Bool
     let onCreated: (String) -> Void
     @Bindable private var draft: ConversationDraft
     @State private var workspaceRequired = false
     private var target: HomeTarget { session.homeTargets[space.id] ?? HomeTarget() }
-    private var workspace: Workspace? { session.workspaces.first { $0.id == target.workspaceID && $0.isReplica != true } }
+    private var workspaceID: String? { fixedWorkspace?.id ?? target.workspaceID }
+    private var workspace: Workspace? { session.workspaces.first { $0.id == workspaceID && $0.isReplica != true } }
     private var workspaceIcon: String? { session.projects.first { $0.id == workspace?.projectId }?.icon }
     private var collection: ProjectCollection? { session.collections.first { $0.id == target.collectionID } }
     private var uncertain: Bool { session.pendingMessage?.status == .uncertain }
     private var ready: Bool { session.isConnected && !session.changingMode && !session.sending && !uncertain && session.pendingFork == nil && session.pendingConversationAction == nil }
     private var targetReady: Bool { space.mode != "developer" || workspace != nil && session.gitStates.first(where: { $0.workspaceId == workspace?.id })?.pathExists != false }
     init(session: BackendSession, space: Space, targetPicker: Binding<Bool>, modelSheet: Binding<Bool>, optionsSheet: Binding<Bool>,
-         consent: Binding<ConsentContext?>, editorExpanded: Bool, onCreated: @escaping (String) -> Void) {
+         consent: Binding<ConsentContext?>, editorExpanded: Bool, fixedWorkspace: Workspace? = nil,
+         focusChanged: ((Bool) -> Void)? = nil, isCurrent: @escaping () -> Bool = { true },
+         onCreated: @escaping (String) -> Void) {
         self.session = session; self.space = space; _targetPicker = targetPicker; _modelSheet = modelSheet; _optionsSheet = optionsSheet
-        _consent = consent; self.editorExpanded = editorExpanded; self.onCreated = onCreated; draft = session.homeDraft(for: space.id)
+        _consent = consent; self.editorExpanded = editorExpanded
+        self.fixedWorkspace = fixedWorkspace; self.focusChanged = focusChanged; self.isCurrent = isCurrent; self.onCreated = onCreated
+        draft = session.homeDraft(for: space.id, workspaceID: fixedWorkspace?.id)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if !editorExpanded {
-                if session.isDemo, draft.text.isEmpty {
+                if fixedWorkspace == nil, session.isDemo, draft.text.isEmpty {
                     Button {
                         draft.text = "Review this workspace and suggest the next steps"
                     } label: {
@@ -237,14 +246,7 @@ private struct HomeComposerArea: View {
                 if uncertain, let pending = session.pendingMessage {
                     ChatNotice(title: "Delivery unconfirmed", message: "“\(pending.text.prefix(160))”\nCheck this message before starting another conversation.", symbol: "exclamationmark.circle", warning: true) {
                         Button(session.sending ? "Checking…" : "Check delivery") {
-                            Task {
-                                let owner = session.pairing?.deviceId
-                                do {
-                                    let id = try await session.checkDelivery()
-                                    guard owner == session.pairing?.deviceId else { return }
-                                    draft.dismissFailure(); onCreated(id)
-                                } catch { draft.showFailure(error.localizedDescription) }
-                            }
+                            Task { await checkDelivery(pending) }
                         }.disabled(!session.isConnected || session.sending).accessibilityIdentifier("checkDelivery")
                     }
                 } else if workspaceRequired && !targetReady {
@@ -254,7 +256,9 @@ private struct HomeComposerArea: View {
                     }
                 } else if let failure = draft.failure {
                     ChatNotice(title: draft.failureTitle, message: failure, symbol: "exclamationmark.circle", warning: true) {
-                        if !targetReady { Button("Choose a workspace") { targetPicker = true }.accessibilityIdentifier("chooseRequiredWorkspace") }
+                        if fixedWorkspace == nil, !targetReady {
+                            Button("Choose a workspace") { targetPicker = true }.accessibilityIdentifier("chooseRequiredWorkspace")
+                        }
                         if let unsent = draft.unsentText {
                             Button("Copy unsent message") { UIPasteboard.general.string = unsent }
                             if !draft.unsentAttachments.isEmpty { Button("Use failed message and files") { draft.restoreUnsent() } }
@@ -262,25 +266,27 @@ private struct HomeComposerArea: View {
                         Button("Dismiss") { draft.dismissFailure() }
                     }
                 }
-                Button { targetPicker = true } label: {
-                    HStack(spacing: 8) {
-                        if space.mode == "developer" {
-                            RegistryIcon(token: workspaceIcon, size: 15)
+                if fixedWorkspace == nil {
+                    Button { targetPicker = true } label: {
+                        HStack(spacing: 8) {
+                            if space.mode == "developer" {
+                                RegistryIcon(token: workspaceIcon, size: 15)
+                            }
+                            else { RegistryIcon(token: collection?.icon, fallback: "tray", size: 15) }
+                            Text(space.mode == "developer" ? workspace?.name ?? "Choose a workspace" : collection?.name ?? "No project")
+                                .font(.footnote.weight(.semibold)).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.caption).foregroundStyle(.secondary)
                         }
-                        else { RegistryIcon(token: collection?.icon, fallback: "tray", size: 15) }
-                        Text(space.mode == "developer" ? workspace?.name ?? "Choose a workspace" : collection?.name ?? "No project")
-                            .font(.footnote.weight(.semibold)).lineLimit(1)
-                        Image(systemName: "chevron.down").font(.caption).foregroundStyle(.secondary)
+                        .foregroundStyle(.primary).padding(.horizontal, 14).frame(minHeight: 36)
                     }
-                    .foregroundStyle(.primary).padding(.horizontal, 14).frame(minHeight: 36)
+                    .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 20))
+                    .composerPickerSource(.target)
+                    .disabled(!ready).padding(.horizontal, 16).accessibilityIdentifier("chooseTarget")
                 }
-                .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 20))
-                .composerPickerSource(.target)
-                .disabled(!ready).padding(.horizontal, 16).accessibilityIdentifier("chooseTarget")
             }
-            MessageComposer(session: session, context: ComposerContext(space: space), draft: draft, canSend: ready,
+            MessageComposer(session: session, context: ComposerContext(space: space, workspace: fixedWorkspace), draft: draft, canSend: ready,
                          model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend,
-                         onVoiceWorkspaceRequired: showWorkspaceRequired, voiceCreated: onCreated)
+                         onVoiceWorkspaceRequired: showWorkspaceRequired, voiceCreated: onCreated, focusChanged: focusChanged)
         }.padding(.bottom, HomeView.composerBottomInset)
         .onChange(of: targetReady) { _, ready in
             if ready { workspaceRequired = false }
@@ -295,28 +301,48 @@ private struct HomeComposerArea: View {
         }
     }
     private func prepareSend() {
-        guard ready, let backendID = session.pairing?.descriptor.backendId else { return }
+        guard ready, isCurrent(), let backendID = session.pairing?.descriptor.backendId else { return }
         guard validateTarget() else { return }
         if !session.hasConsent(providerID: space.providerId) { consent = ConsentContext(backendID: backendID, providerID: space.providerId, isDemo: session.isDemo) }
         else { Task { await send() } }
     }
     private func send() async {
-        guard ready, session.selectedSpaceID == space.id, validateTarget(), let submission = draft.begin() else { return }
-        let owner = session.pairing?.deviceId
-        let target = target
+        guard ready, isCurrent(), session.selectedSpaceID == space.id, validateTarget(), let submission = draft.begin() else { return }
+        let owner = session.ownership
         let settings = session.settings(for: space)
         do {
-            let id = try await session.send(submission.text, spaceID: space.id, workspaceID: target.workspaceID,
+            let id = try await session.send(submission.text, spaceID: space.id, workspaceID: workspaceID,
                 collectionID: collection?.id, settings: settings, attachments: submission.attachments, contextSkills: submission.contextSkills, contextScope: submission.contextScope)
-            guard owner == session.pairing?.deviceId else { return }
+            guard owner == session.ownership else { return }
             draft.accept(submission)
-            if session.selectedSpaceID == space.id {
+            if isCurrent(), session.selectedSpaceID == space.id {
                 draft.transfer(to: session.draft(for: id))
                 onCreated(id)
             }
         } catch {
-            guard owner == session.pairing?.deviceId else { return }
+            guard owner == session.ownership else { return }
             draft.reject(submission, message: error.localizedDescription, uncertain: uncertain)
+        }
+    }
+    private func checkDelivery(_ pending: PendingMessage) async {
+        guard isCurrent(), session.pendingMessage?.id == pending.id else { return }
+        let owner = session.ownership
+        do {
+            if let inputID = pending.queueInputID, fixedWorkspace != nil {
+                _ = try await session.checkQueuedInput(inputID)
+                return
+            }
+            let id = try await session.checkDelivery()
+            guard owner == session.ownership else { return }
+            draft.dismissFailure()
+            guard isCurrent() else { return }
+            if let fixedWorkspace {
+                guard session.selectedSpaceID == space.id,
+                      pending.startsConversation(spaceID: space.id, workspaceID: fixedWorkspace.id) else { return }
+            }
+            onCreated(id)
+        } catch {
+            if owner == session.ownership { draft.showFailure(error.localizedDescription) }
         }
     }
     private func validateTarget() -> Bool {
@@ -325,7 +351,9 @@ private struct HomeComposerArea: View {
         return false
     }
     private func showWorkspaceRequired() {
-        workspaceRequired = true
+        if fixedWorkspace != nil {
+            draft.showFailure("This workspace’s folder is unavailable on your computer.", title: "Workspace unavailable")
+        } else { workspaceRequired = true }
     }
     private var workspaceRequiredMessage: String {
         workspace == nil ? "Choose a workspace before starting a conversation in Code mode." : "This workspace’s folder is unavailable on your computer. Choose another workspace or restore the folder."

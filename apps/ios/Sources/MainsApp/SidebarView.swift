@@ -286,7 +286,8 @@ struct SidebarView: View {
                                     setProvidersExpanded(false)
                                     startConversation(item.id)
                                 }
-                                .modifier(GlassSurface(radius: SpaceDisc.size / 2))
+                                // Keep the glass within the scroll mask during a press.
+                                .modifier(GlassSurface(radius: SpaceDisc.size / 2, interactive: false))
                             }
                         }.padding(.vertical, 2)
                     }
@@ -474,11 +475,17 @@ struct SidebarView: View {
         Button("Archive", systemImage: "archivebox") { manageWorkspace(workspace, .archive) }
             .disabled(!session.canManageWorkspace(workspace.id, action: .archive))
             .accessibilityIdentifier("archiveWorkspace")
-        Button("Delete", systemImage: "trash", role: .destructive) {
+        Button(role: .destructive) {
             workspaceToDelete = WorkspaceDeletion(workspace: workspace, owner: session.ownership)
+        } label: {
+            Label { Text("Delete") } icon: {
+                Image(uiImage: (UIImage(systemName: "trash") ?? UIImage())
+                    .withTintColor(.systemRed, renderingMode: .alwaysOriginal))
+                    .renderingMode(.original)
+            }
         }
-            .disabled(!session.canManageWorkspace(workspace.id, action: .delete))
-            .accessibilityIdentifier("deleteWorkspace")
+        .disabled(!session.canManageWorkspace(workspace.id, action: .delete))
+        .accessibilityIdentifier("deleteWorkspace")
     }
 
     private func manageWorkspace(_ workspace: Workspace, _ action: WorkspaceAction, owner: Int? = nil) {

@@ -2,7 +2,14 @@ export type Point = readonly [number, number];
 export type Vector = readonly [number, number, number];
 
 export type RobotFinish = "matte" | "metal" | "glass" | "light" | "shell";
-export type RobotMotion = "fixed" | "terminalEyes" | "clearFace" | "clearEyes" | "iris" | "lid";
+export type RobotMotion = "fixed" | "terminalEyes" | "clearFace" | "clearEyes" | "iris" | "lid" | "specialistEyes";
+
+export interface RobotPartGesture {
+  translate?: Vector;
+  roll?: number;
+  pivot?: Point;
+  oneWay?: boolean;
+}
 
 export interface RobotPart {
   vertices: Float32Array;
@@ -10,6 +17,7 @@ export interface RobotPart {
   color: string;
   finish: RobotFinish;
   motion: RobotMotion;
+  gesture?: RobotPartGesture;
 }
 
 /** All profiles run counterclockwise when seen from the front. */

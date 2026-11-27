@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { MAX_MATE_SKILLS, type Assistant, type AssistantSkill, type AssistantSkillDraft } from "@mains/contracts/assistants";
 import { Button, Input, Modal, ModalHeader, Select, Textarea } from "@/components/ui";
-import { Import, Maximize, Minimize, Plus, Skill, Sparkles } from "@/components/ui/icons";
+import { ChevronLeft, Import, Maximize, Minimize, Plus, Skill, Sparkles, Warning } from "@/components/ui/icons";
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 import { useAssistantSkillCatalogQuery, useGenerateAssistantSkillMutation, useSaveAssistantSkillMutation, useUpdateAssistantProfileMutation } from "@/lib/redux/api/assistantsApi";
 import { errorText } from "../lib/assistant-ui";
-import { AssistantSkillList, UnavailableAssistantSkills } from "./assistant-skill-list";
+import { AssistantSkillList } from "./assistant-skill-list";
 
 const SKILLS_VIEW_TRANSITION_NAME = "mate-skills";
+const skillSectionMotion = "motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-out motion-safe:starting:translate-y-1 motion-safe:starting:opacity-0";
 const emptyDraft: AssistantSkillDraft = { name: "", title: "", description: "", markdown: "" };
 
 interface SkillsViewTransition {
@@ -30,6 +31,7 @@ export function AssistantSkillsFields({ assistant, selectedIds, editingProfile, 
   const [save, { isLoading: saving }] = useSaveAssistantSkillMutation();
   const [updateProfile, { isLoading: savingSelection }] = useUpdateAssistantProfileMutation();
   const [expanded, setExpanded] = useState(false);
+  const [showingUnavailable, setShowingUnavailable] = useState(false);
   const [selection, setSelection] = useState<{ ids: string[]; expectedIds: string[] } | null>(null);
   const [created, setCreated] = useState<AssistantSkill[]>([]);
   const [draft, setDraft] = useState<AssistantSkillDraft | null>(null);
@@ -37,6 +39,8 @@ export function AssistantSkillsFields({ assistant, selectedIds, editingProfile, 
   const [failure, setFailure] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const expandButton = useRef<HTMLButtonElement>(null);
+  const unavailableButton = useRef<HTMLButtonElement>(null);
+  const skillHeading = useRef<HTMLHeadingElement>(null);
   const viewTransition = useRef<SkillsViewTransition | null>(null);
   const reducedMotion = usePrefersReducedMotion();
   // Declare the optional browser API for editors with older DOM typings.
@@ -64,11 +68,17 @@ export function AssistantSkillsFields({ assistant, selectedIds, editingProfile, 
   const unavailableSkills = selected.filter(inactive);
   const choices = [...available.values()].filter(skill => !localSelection.includes(skill.id));
   const full = localSelection.length >= MAX_MATE_SKILLS;
+  const hasUnavailable = unavailableSkills.length > 0;
+  const showNewSkill = canManage && selected.length > 0 && !draft;
+  const showDraft = canManage && draft && !showingUnavailable;
+  const section = showingUnavailable ? "unavailable" : "assigned";
+  const warningLabel = showingUnavailable ? "Back to Skills" : `Unavailable skills, ${unavailableSkills.length}`;
 
   function moveSkills(open: boolean, clearSelection = false) {
     viewTransition.current?.skipTransition();
     const update = () => {
       if (clearSelection) setSelection(null);
+      if (!open) setShowingUnavailable(false);
       setExpanded(open);
     };
     if (!startViewTransition) {
@@ -124,11 +134,21 @@ export function AssistantSkillsFields({ assistant, selectedIds, editingProfile, 
 
   function startDraft() {
     setFailure("");
+    setShowingUnavailable(false);
     setDraft(emptyDraft);
   }
 
   function removeSkill(id: string) {
     changeSelection(localSelection.filter(selectedId => selectedId !== id));
+    if (showingUnavailable && unavailableSkills.length === 1) {
+      flushSync(() => setShowingUnavailable(false));
+      skillHeading.current?.focus({ preventScroll: true });
+    }
+  }
+
+  function toggleUnavailable() {
+    flushSync(() => setShowingUnavailable(value => !value));
+    unavailableButton.current?.focus({ preventScroll: true });
   }
 
   const minimize = () => { if (!savingSelection) moveSkills(false); };
@@ -145,82 +165,97 @@ export function AssistantSkillsFields({ assistant, selectedIds, editingProfile, 
     </section>
     <Modal isOpen={expanded} onClose={minimize} returnFocusRef={expandButton} aria-label="Skills"
       motion={startViewTransition || reducedMotion ? "none" : "command"} viewTransitionName={SKILLS_VIEW_TRANSITION_NAME}
-      className="h-[min(38rem,calc(100dvh-3rem))] w-full max-w-2xl text-primary-900 dark:text-primary-100">
+      className="h-[min(27rem,calc(100dvh-3rem))] w-full max-w-2xl text-primary-900 dark:text-primary-100">
       <ModalHeader onClose={minimize} closeIcon={<Minimize aria-hidden="true" className="size-4.5 text-primary-500" />} closeLabel="Minimize Skills">
         <h3 className="font-medium text-primary-950 dark:text-primary-50">Skills</h3>
       </ModalHeader>
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 pt-1 pb-5 text-sm">
-        <div className="glass-card space-y-4 rounded-2xl p-4">
-          <div className="flex min-h-8 items-center justify-between gap-3">
-            <h4 className="min-w-0 wrap-break-word font-semibold">{assistant.name} Skills</h4>
-            {canManage && activeSkills.length > 0 && !draft && <Button variant="secondary" className="shrink-0" disabled={busy || full}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6 pt-1 pb-5 text-sm">
+        <div className="flex min-h-8 shrink-0 items-center gap-2">
+          <h4 ref={skillHeading} tabIndex={-1} aria-live="polite" className="min-w-0 flex-1 wrap-break-word font-semibold outline-none">
+            <span key={section} className={`block ${skillSectionMotion}`}>
+              {showingUnavailable ? "Unavailable skills" : `${assistant.name} Skills`}
+            </span>
+          </h4>
+          {(hasUnavailable || showingUnavailable || showNewSkill) && <div className="flex shrink-0 items-center gap-1">
+            {(hasUnavailable || showingUnavailable) && <Button ref={unavailableButton} variant="icon" iconSize="lg"
+              aria-label={warningLabel} tooltip={showingUnavailable ? warningLabel : `Unavailable skills (${unavailableSkills.length})`}
+              tooltipPosition="bottom-left" onClick={toggleUnavailable}>
+              {showingUnavailable ? <ChevronLeft aria-hidden="true" /> : <Warning aria-hidden="true" className="text-warning" />}
+            </Button>}
+            {showNewSkill && <Button variant="secondary" disabled={busy || full}
               leftIcon={<Plus aria-hidden="true" className="size-3.5" />} onClick={startDraft}>New skill</Button>}
-          </div>
-          {canManage && <div className="flex flex-wrap items-center gap-2">
-            <div className="min-w-0 flex-[1_1_16rem]">
-              <Select searchable size="s" aria-label="Add skills" value="" placeholder="Add from library" searchPlaceholder="Search skills"
-                disabled={busy || full} onChange={id => { if (id) changeSelection([...localSelection, id]); }}
-                options={choices.map(skill => ({
-                  value: skill.id, label: skill.name, description: skill.description,
-                  icon: <Skill aria-hidden="true" className="mr-1 size-4 shrink-0 text-primary-500" />,
-                }))}
-                emptyMessage={catalog.isFetching ? "Loading skills…" : "No additional skills"} />
-            </div>
-            <Button variant="ghost" disabled={busy || full} onClick={() => fileInput.current?.click()}
-              leftIcon={<Import aria-hidden="true" className="size-4" />}>Import SKILL.md</Button>
-            <Input ref={fileInput} type="file" accept=".md,text/markdown" hidden onChange={async event => {
-              const file = event.currentTarget.files?.[0];
-              event.currentTarget.value = "";
-              if (!file) return;
-              if (file.size > 64 * 1024) { setFailure("Choose a SKILL.md file up to 64 KB."); return; }
-              try { await saveDraft({ document: await file.text() }); }
-              catch (error) { setFailure(errorText(error)); }
-            }} />
           </div>}
-          {canManage && !!catalog.error && <div className="flex items-center justify-between gap-2 text-xs">
-            <span role="status">Couldn’t load the skill catalog.</span>
-            <Button variant="ghost" disabled={catalog.isFetching} onClick={() => void catalog.refetch()}>Retry</Button>
-          </div>}
-          {canManage && draft && <div className="space-y-3 rounded-xl bg-primary-950/5 p-3 dark:bg-primary/5">
-            <label className="flex flex-col gap-2">
-              <span className="font-medium ">Skill workflow</span>
-              <Textarea autoFocus placeholder="Describe what this skill should do" rows={2} maxLength={8000}
-                value={prompt} disabled={busy} onChange={event => setPrompt(event.target.value)} />
-            </label>
-            <div className="flex justify-end">
-              <Button variant="primary" disabled={busy || !prompt.trim()} isLoading={generating}
-                leftIcon={<Sparkles aria-hidden="true" className="size-3.5" />} onClick={() => void generateDraft()}>Generate draft</Button>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <Input aria-label="Skill title" placeholder="Title" value={draft.title} maxLength={100} disabled={busy}
-                onChange={event => setDraft({ ...draft, title: event.target.value })} />
-              <Input aria-label="Skill name" placeholder="skill-name" value={draft.name} maxLength={64} disabled={busy}
-                onChange={event => setDraft({ ...draft, name: event.target.value })} />
-            </div>
-            <Input aria-label="Skill description" placeholder="When to use this skill" value={draft.description} maxLength={1024} disabled={busy}
-              onChange={event => setDraft({ ...draft, description: event.target.value })} />
-            <Textarea aria-label="Skill Markdown" placeholder="Workflow instructions in Markdown" value={draft.markdown} rows={6} maxLength={65536}
-              disabled={busy} onChange={event => setDraft({ ...draft, markdown: event.target.value })} />
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" disabled={busy} onClick={() => { setDraft(null); setPrompt(""); setFailure(""); }}>Cancel</Button>
-              <Button variant="secondary" disabled={busy || full || ![draft.name, draft.title, draft.description, draft.markdown].every(field => field.trim())}
-                isLoading={saving} onClick={() => void saveDraft({ draft })}>Save skill</Button>
-            </div>
-          </div>}
-          {activeSkills.length > 0 ? <AssistantSkillList skills={activeSkills} disabled={busy} onRemove={canManage ? removeSkill : undefined} />
-            : (!draft || !canManage) && <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-primary-950/10 px-4 py-6 text-center dark:border-primary/12">
-              <div className="grid size-11 place-items-center rounded-full bg-primary-950/6 text-primary-600 dark:bg-primary/8 dark:text-primary-300">
-                <Skill aria-hidden="true" className="size-5" />
-              </div>
-              <p className="font-medium">{unavailableSkills.length > 0 ? "No active skills" : "No skills assigned"}</p>
-              {canManage && <Button variant="secondary" disabled={busy || full} leftIcon={<Sparkles aria-hidden="true" className="size-3.5" />}
-                onClick={startDraft}>Create with Mains</Button>}
-            </div>}
         </div>
-        {unavailableSkills.length > 0 && <UnavailableAssistantSkills skills={unavailableSkills} disabled={busy} onRemove={canManage ? removeSkill : undefined} />}
-        {!!failure && <p role="alert" className="text-xs text-danger">{failure}</p>}
+        <div key={section} className={`flex flex-col gap-3 ${showDraft ? "shrink-0" : "min-h-0"} ${skillSectionMotion}`}>
+          {showingUnavailable ? (
+            hasUnavailable ? <AssistantSkillList skills={unavailableSkills} unavailable disabled={busy} onRemove={canManage ? removeSkill : undefined} />
+              : <p className="text-primary-600 dark:text-primary-400">No unavailable skills</p>
+          ) : <>
+            {canManage && <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <div className="min-w-0 flex-[1_1_16rem]">
+                <Select searchable size="s" aria-label="Add skills" value="" placeholder="Add from library" searchPlaceholder="Search skills"
+                  disabled={busy || full} onChange={id => { if (id) changeSelection([...localSelection, id]); }}
+                  options={choices.map(skill => ({
+                    value: skill.id, label: skill.name, description: skill.description,
+                    icon: <Skill aria-hidden="true" className="mr-1 size-4 shrink-0 text-primary-500" />,
+                  }))}
+                  emptyMessage={catalog.isFetching ? "Loading skills…" : "No additional skills"} />
+              </div>
+              <Button variant="ghost" disabled={busy || full} onClick={() => fileInput.current?.click()}
+                leftIcon={<Import aria-hidden="true" className="size-4" />}>Import SKILL.md</Button>
+              <Input ref={fileInput} type="file" accept=".md,text/markdown" hidden onChange={async event => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                if (!file) return;
+                if (file.size > 64 * 1024) { setFailure("Choose a SKILL.md file up to 64 KB."); return; }
+                try { await saveDraft({ document: await file.text() }); }
+                catch (error) { setFailure(errorText(error)); }
+              }} />
+            </div>}
+            {canManage && !!catalog.error && <div className="flex shrink-0 items-center justify-between gap-2 text-xs">
+              <span role="status">Couldn’t load the skill catalog.</span>
+              <Button variant="ghost" disabled={catalog.isFetching} onClick={() => void catalog.refetch()}>Retry</Button>
+            </div>}
+            {showDraft && <div className="space-y-3 rounded-xl bg-primary-950/5 p-3 dark:bg-primary/5">
+              <label className="flex flex-col gap-2">
+                <span className="font-medium ">Skill workflow</span>
+                <Textarea autoFocus placeholder="Describe what this skill should do" rows={2} maxLength={8000}
+                  value={prompt} disabled={busy} onChange={event => setPrompt(event.target.value)} />
+              </label>
+              <div className="flex justify-end">
+                <Button variant="primary" disabled={busy || !prompt.trim()} isLoading={generating}
+                  leftIcon={<Sparkles aria-hidden="true" className="size-3.5" />} onClick={() => void generateDraft()}>Generate draft</Button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Input aria-label="Skill title" placeholder="Title" value={draft.title} maxLength={100} disabled={busy}
+                  onChange={event => setDraft({ ...draft, title: event.target.value })} />
+                <Input aria-label="Skill name" placeholder="skill-name" value={draft.name} maxLength={64} disabled={busy}
+                  onChange={event => setDraft({ ...draft, name: event.target.value })} />
+              </div>
+              <Input aria-label="Skill description" placeholder="When to use this skill" value={draft.description} maxLength={1024} disabled={busy}
+                onChange={event => setDraft({ ...draft, description: event.target.value })} />
+              <Textarea aria-label="Skill Markdown" placeholder="Workflow instructions in Markdown" value={draft.markdown} rows={6} maxLength={65536}
+                disabled={busy} onChange={event => setDraft({ ...draft, markdown: event.target.value })} />
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" disabled={busy} onClick={() => { setDraft(null); setPrompt(""); setFailure(""); }}>Cancel</Button>
+                <Button variant="secondary" disabled={busy || full || ![draft.name, draft.title, draft.description, draft.markdown].every(field => field.trim())}
+                  isLoading={saving} onClick={() => void saveDraft({ draft })}>Save skill</Button>
+              </div>
+            </div>}
+            {activeSkills.length > 0 ? <AssistantSkillList skills={activeSkills} disabled={busy} onRemove={canManage ? removeSkill : undefined} />
+              : (!draft || !canManage) && <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-primary-950/10 px-4 py-4 text-center dark:border-primary/12">
+                <div className="grid size-9 place-items-center rounded-full bg-primary-950/6 text-primary-600 dark:bg-primary/8 dark:text-primary-300">
+                  <Skill aria-hidden="true" className="size-5" />
+                </div>
+                <p className="font-medium">{hasUnavailable ? "No active skills" : "No skills assigned"}</p>
+                {canManage && !showNewSkill && <Button variant="secondary" disabled={busy || full} leftIcon={<Sparkles aria-hidden="true" className="size-3.5" />}
+                  onClick={startDraft}>Create with Mains</Button>}
+              </div>}
+          </>}
+        </div>
+        {!!failure && <p role="alert" className="shrink-0 text-xs text-danger">{failure}</p>}
       </div>
-      {canManage && selection && <div className="flex shrink-0 justify-end gap-2 border-t border-primary-200/70 px-6 py-4 dark:border-primary-800/60">
+      {canManage && selection && <div className="flex shrink-0 justify-end gap-2 border-t border-primary-200/70 px-6 py-3 dark:border-primary-800/60">
         <Button variant="ghost" disabled={busy} onClick={() => { setFailure(""); moveSkills(false, true); }}>Discard changes</Button>
         <Button variant="primary" disabled={busy} isLoading={savingSelection} onClick={() => void saveSelection()}>Save changes</Button>
       </div>}

@@ -5,10 +5,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantTeam } from "@mains/contracts/assistants";
 import { AssistantProfileForm } from "./assistant-profile-form";
 const mocks = vi.hoisted(() => ({ create: vi.fn(), createTeam: vi.fn(), teams: [] as AssistantTeam[] }));
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 vi.mock("@/lib/redux/api", () => ({
-  useGetProvidersQuery: () => ({ data: [{ id: "codex", isEnabled: true }] }),
-  useGetSpacesQuery: () => ({ data: [{ id: "codex", accountId: "account", providerId: "codex", mode: "developer", isArchived: false }] }),
-  useGetProviderModelsQuery: () => ({ currentData: [{ id: "model", displayName: "Test model", supportedEffortLevels: ["low", "medium", "high"] }], isFetching: false }),
+  useGetProvidersQuery: () => ({ data: [{ id: "codex", isEnabled: true }, { id: "claude_code", isEnabled: true }] }),
+  useGetSpacesQuery: () => ({ data: [
+    { id: "codex", accountId: "account", providerId: "codex", mode: "developer", isArchived: false },
+    { id: "claude", accountId: "account", providerId: "claude_code", mode: "work", isArchived: false },
+  ] }),
+  useGetProviderModelsQuery: (providerId: string) => ({
+    currentData: providerId === "claude_code" ? [
+      { id: "opus", displayName: "Opus", description: "Opus 5.5 · Complex work", supportedEffortLevels: ["medium"] },
+      { id: "fable", displayName: "Fable", description: "Fable 5.2 · Creative work", supportedEffortLevels: ["low", "high"] },
+    ] : [{ id: "model", displayName: "Test model", supportedEffortLevels: ["low", "medium", "high"] }],
+    isFetching: false,
+  }),
 }));
 vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useCreateAssistantMutation: () => [mocks.create, { isLoading: false }],
@@ -16,6 +26,7 @@ vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantOverviewQuery: () => ({ currentData: { teams: mocks.teams }, isFetching: false, refetch: vi.fn() }),
 }));
 beforeEach(() => {
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("matchMedia", vi.fn(() => ({
     matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -29,7 +40,13 @@ beforeEach(() => {
     { id: "website", accountId: "account", name: "Website", createdAt: new Date(0) },
   ];
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+  else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+});
 
 async function fillProfile(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText("Name"), "Trip planner");
@@ -66,6 +83,23 @@ describe("assistant creation", () => {
     await fillProfile(user);
     await user.click(screen.getByRole("button", { name: "Create mate" }));
     await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ teamId: "website" })));
+  });
+
+  it("shows Claude model versions in the picker and submits the selected model id", async () => {
+    const user = userEvent.setup();
+    render(<AssistantProfileForm accountId="account" onCreated={vi.fn()} onClose={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Mate provider" }));
+    await user.click(screen.getByRole("option", { name: "Claude" }));
+    await user.click(screen.getByRole("button", { name: /Opus 5\.5.*Medium/i }));
+    expect(screen.getByRole("menuitemradio", { name: "Opus 5.5", checked: true })).toBeTruthy();
+    await user.click(screen.getByRole("menuitemradio", { name: "Fable 5.2" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^high$/i }));
+    expect(screen.getByRole("button", { name: /Fable 5\.2.*High/i })).toBeTruthy();
+    await fillProfile(user);
+    await user.click(screen.getByRole("button", { name: "Create mate" }));
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({
+      spaceId: "claude", model: "fable", effort: "high",
+    })));
   });
 
   it("switches robot styles by keyboard and remembers the chosen variant in each style", async () => {

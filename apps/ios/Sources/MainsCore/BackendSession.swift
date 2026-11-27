@@ -102,6 +102,9 @@ public struct PendingMessage: Sendable {
     public var id: String { commandID }
     public var isSteering: Bool { channel == "runs:steer" }
     public var isQueueOwned: Bool { queueInputID != nil }
+    public func startsConversation(spaceID: String, workspaceID: String) -> Bool {
+        channel == "runs:execute" && payload["spaceId"].string == spaceID && payload["workspaceId"].string == workspaceID
+    }
     func matches(_ artifact: Artifact) -> Bool {
         guard let runID else { return false }
         guard artifact.runId == runID, artifact.kind == "user-prompt" else { return false }
@@ -186,6 +189,7 @@ public final class BackendSession {
     public var supportsMateInfo: Bool { supportsMates && connectedDescriptor?.capabilities.contains("mateInfo") == true }
     var supportsMateAssignments: Bool { supportsMateInfo || (isDemo && supportsMates) }
     public var supportsMateModelEditing: Bool { supportsMateInfo && connectedDescriptor?.capabilities.contains("mateModelEditing") == true }
+    public var supportsMateRuntimeSettings: Bool { supportsMateInfo && connectedDescriptor?.capabilities.contains("mateRuntimeSettings") == true }
     public var supportsMatePinning: Bool { supportsMateInfo && connectedDescriptor?.capabilities.contains("matePinning") == true }
     public var supportsMobileGoalSummary: Bool { connectedDescriptor?.capabilities.contains("mobileGoalSummary") == true }
     public var supportsMobileGoalControls: Bool { connectedDescriptor?.capabilities.contains("mobileGoalControls") == true }
@@ -251,7 +255,11 @@ public final class BackendSession {
     @ObservationIgnored private var endpointIndex = 0
     @ObservationIgnored private var blocked: ConnectionState?
     @ObservationIgnored private var drafts: [String: ConversationDraft] = [:]
-    @ObservationIgnored private var homeDrafts: [String: ConversationDraft] = [:]
+    private struct HomeDraftScope: Hashable {
+        let spaceID: String
+        let workspaceID: String?
+    }
+    @ObservationIgnored private var homeDrafts: [HomeDraftScope: ConversationDraft] = [:]
     @ObservationIgnored private lazy var runQueues = RunQueueController(session: self)
     @ObservationIgnored private var remoteQueueRead: Task<Void, Never>?
     @ObservationIgnored private var remoteQueuePoll: Task<Void, Never>?
@@ -372,7 +380,8 @@ public final class BackendSession {
         case unavailable, workspaceRequired, mateHostUpdateRequired, ready
     }
 
-    func voiceStartAvailability(runID: String? = nil, spaceID: String? = nil, mate: Mate? = nil) -> VoiceStartAvailability {
+    func voiceStartAvailability(runID: String? = nil, spaceID: String? = nil, mate: Mate? = nil,
+                                workspaceID: String? = nil) -> VoiceStartAvailability {
         guard isConnected, !isDemo, voice.makeMedia != nil, !voice.ownsCall, pendingVoiceConversation == nil,
               pendingFork == nil, pendingConversationAction == nil, pendingMessage == nil, voiceSelectionChange == nil, !sending, stoppingRunID == nil else { return .unavailable }
         if let runID {
@@ -386,23 +395,25 @@ public final class BackendSession {
             guard mate.ready, mate.providerId == "codex", supportsMates else { return .unavailable }
             return connectedDescriptor?.capabilities.contains("mateRealtimeConversation") == true ? .ready : .mateHostUpdateRequired
         }
-        guard let space = spaces.first(where: { $0.id == spaceID }), space.providerId == "codex", !changingMode else { return .unavailable }
+        guard let space = spaces.first(where: { $0.id == spaceID }), space.providerId == "codex", !changingMode,
+              workspaceID == nil || space.mode == "developer" else { return .unavailable }
         if space.mode == "developer" {
-            guard let workspaceID = homeTargets[space.id]?.workspaceID,
+            guard let workspaceID = workspaceID ?? homeTargets[space.id]?.workspaceID,
                   workspaces.contains(where: { $0.id == workspaceID && $0.isReplica != true }),
                   gitStates.first(where: { $0.workspaceId == workspaceID })?.pathExists != false else { return .workspaceRequired }
         }
         return .ready
     }
 
-    public func canStartVoice(runID: String? = nil, spaceID: String? = nil, mate: Mate? = nil) -> Bool {
-        voiceStartAvailability(runID: runID, spaceID: spaceID, mate: mate) == .ready
+    public func canStartVoice(runID: String? = nil, spaceID: String? = nil, mate: Mate? = nil, workspaceID: String? = nil) -> Bool {
+        voiceStartAvailability(runID: runID, spaceID: spaceID, mate: mate, workspaceID: workspaceID) == .ready
     }
 
     /// Creates an idle conversation only when the user explicitly starts voice.
     /// A new-chat draft and its attachments remain owned by the source composer.
-    public func startVoice(runID: String? = nil, spaceID: String? = nil, mate: Mate? = nil) async {
-        guard canStartVoice(runID: runID, spaceID: spaceID, mate: mate), let pairing, let accountID, let candidate = transport else { return }
+    public func startVoice(runID: String? = nil, spaceID: String? = nil, mate: Mate? = nil, workspaceID: String? = nil) async {
+        guard canStartVoice(runID: runID, spaceID: spaceID, mate: mate, workspaceID: workspaceID),
+              let pairing, let accountID, let candidate = transport else { return }
         guard hasConsent(providerID: "codex") else { actionError = "Allow data sharing with OpenAI before starting voice chat."; return }
         let owner = pairingOwner, current = generation
         let newMate = runID == nil ? mate : nil
@@ -417,7 +428,7 @@ public final class BackendSession {
             var payload: [String: JSONValue] = ["accountId": .string(accountID), "spaceId": .string(space.id)]
             do { payload["conversationSettings"] = try .encode(settings(for: space)) }
             catch { actionError = error.localizedDescription; return }
-            if space.mode == "developer", let workspaceID = target.workspaceID { payload["workspaceId"] = .string(workspaceID) }
+            if space.mode == "developer", let workspaceID = workspaceID ?? target.workspaceID { payload["workspaceId"] = .string(workspaceID) }
             if space.mode != "developer", let collectionID = target.collectionID { payload["collectionId"] = .string(collectionID) }
             creation = PendingVoiceConversation(commandID: UUID().uuidString, payload: .object(payload), owner: owner)
         }
@@ -555,9 +566,16 @@ public final class BackendSession {
         return draft
     }
 
-    public func homeDraft(for spaceID: String) -> ConversationDraft {
-        if let draft = homeDrafts[spaceID] { return draft }
-        let draft = makeDraft(owner: .home, id: spaceID); homeDrafts[spaceID] = draft; return draft
+    public func homeDraft(for spaceID: String, workspaceID: String? = nil) -> ConversationDraft {
+        let scope = HomeDraftScope(spaceID: spaceID, workspaceID: workspaceID)
+        if let draft = homeDrafts[scope] { return draft }
+        let draft = if let workspaceID {
+            makeDraft(owner: .workspace, id: "\(spaceID.utf8.count):\(spaceID)\(workspaceID)")
+        } else {
+            makeDraft(owner: .home, id: spaceID)
+        }
+        homeDrafts[scope] = draft
+        return draft
     }
 
     private func makeDraft(owner: TextDraftKey.Owner, id: String) -> ConversationDraft {
@@ -1055,6 +1073,50 @@ public final class BackendSession {
         return chats
     }
 
+    public func loadMateSkills(_ mateID: String, query: String = "", offset: Int = 0) async throws -> MateSkillPage {
+        guard supportsMateRuntimeSettings, query.utf16.count <= 100, offset >= 0, offset <= Int.max - 50 else { throw MainsError.invalidReply }
+        let page = try await mateRead("assistants:mobileSkills", args: [.string(mateID), .string(query), .number(Double(offset))], as: MateSkillPage.self)
+        guard page.items.count <= 50, page.items.allSatisfy(\.isValid), Set(page.items.map(\.id)).count == page.items.count,
+              page.unavailableIds.count <= 20, page.pluginSkillIds.count <= 20,
+              page.nextOffset == nil || (page.items.count == 50 && page.nextOffset == offset + 50) else { throw MainsError.invalidReply }
+        return page
+    }
+
+    public func generateMateSkill(_ mate: Mate, request: String) async throws -> MateSkillDraft {
+        guard let accountID, let backendID = pairing?.descriptor.backendId, supportsMateRuntimeSettings, mate.ready else { throw MainsError.disconnected }
+        guard hasConsent(providerID: mate.providerId) else {
+            throw MateConsentRequired(owner: pairingOwner, backendID: backendID, providerID: mate.providerId)
+        }
+        let result = try await writeMate("assistants:mobileGenerateSkill", args: [.string(accountID), .string(mate.id), .string(request)])
+        return try result.decode(MateSkillDraft.self)
+    }
+
+    public func saveMateSkill(_ mateID: String, draft: MateSkillDraft) async throws -> MateSkill {
+        guard let accountID, supportsMateRuntimeSettings, draft.isValid else { throw MainsError.invalidReply }
+        let result = try await writeMate("assistants:mobileSaveSkill", args: [.string(accountID), .string(mateID), try .encode(draft)])
+        return try decodedMateSkill(result)
+    }
+
+    public func checkMateSkillGeneration(_ mateID: String) async throws -> MateSkillDraft {
+        try await checkMateSkillCommand(mateID, channel: "assistants:mobileGenerateSkill").decode(MateSkillDraft.self)
+    }
+
+    public func checkMateSkillSave(_ mateID: String) async throws -> MateSkill {
+        try await decodedMateSkill(checkMateSkillCommand(mateID, channel: "assistants:mobileSaveSkill"))
+    }
+
+    private func decodedMateSkill(_ result: JSONValue) throws -> MateSkill {
+        let skill = try result.decode(MateSkill.self)
+        guard skill.isValid else { throw MainsError.invalidReply }
+        return skill
+    }
+
+    private func checkMateSkillCommand(_ mateID: String, channel: String) async throws -> JSONValue {
+        guard let attempt = pendingMateCommand, attempt.uncertain, attempt.channel == channel,
+              attempt.args.dropFirst().first?.string == mateID, isConnected else { throw MainsError.disconnected }
+        return try await deliverMate(attempt)
+    }
+
     public func savedMates(archived: Bool = false) async -> MateDirectory? {
         await offlineValues(MateDirectory.self, key: archived ? "mates:archived" : "mates:directory").first
     }
@@ -1161,8 +1223,10 @@ public final class BackendSession {
         let owner = pairingOwner, current = generation
         let recipientMateID: String?
         switch change {
-        case .updateProfile(_, _, _, _, .some) where !supportsMateModelEditing:
+        case .updateProfile(_, _, _, _, .some, _, _) where !supportsMateModelEditing:
             throw MainsError.server("Update Mains on your computer to change the model and effort.")
+        case let .updateProfile(_, _, _, _, _, skills, permissions) where (skills != nil || permissions != nil) && !supportsMateRuntimeSettings:
+            throw MainsError.server("Update Mains on your computer to change skills and permissions.")
         case .setPinned where !supportsMatePinning:
             throw MainsError.server("Update Mains on your computer to pin Mates.")
         case .assign, .runRoutine:
@@ -1258,7 +1322,8 @@ public final class BackendSession {
         pending.uncertain = false
         pendingMateCommand = pending
         do {
-            let result = try await command(attempt.channel, args: attempt.args, commandID: attempt.id, owner: attempt.owner)
+            let timeout = attempt.channel == "assistants:mobileGenerateSkill" ? 100 : 30
+            let result = try await command(attempt.channel, args: attempt.args, commandID: attempt.id, owner: attempt.owner, attemptTimeout: timeout)
             guard attempt.owner == pairingOwner else { throw MainsError.changedBackend }
             if attempt.channel == "assistants:create", result["id"].string?.isEmpty != false { throw MainsError.invalidReply }
             if attempt.channel == "assistants:createTeam" {
@@ -1269,7 +1334,7 @@ public final class BackendSession {
             }
             if attempt.channel == "assistants:mobileManage", !result["accepted"].bool { throw MainsError.invalidReply }
             pendingMateCommand = nil
-            matesRevision += 1
+            if attempt.channel != "assistants:mobileGenerateSkill" { matesRevision += 1 }
             return result
         } catch {
             if attempt.owner == pairingOwner {
@@ -2701,9 +2766,9 @@ public final class BackendSession {
     }
 
     private func command(_ channel: String, args: [JSONValue], commandID: String = UUID().uuidString,
-                         owner: Int? = nil, validate: (() throws -> Void)? = nil) async throws -> JSONValue {
+                         owner: Int? = nil, attemptTimeout: Int = 30, validate: (() throws -> Void)? = nil) async throws -> JSONValue {
         let owner = owner ?? pairingOwner
-        let deadline = ContinuousClock.now + .seconds(60)
+        let deadline = ContinuousClock.now + .seconds(max(60, attemptTimeout + 15))
         while ContinuousClock.now < deadline {
             try Task.checkCancellation()
             guard pairingOwner == owner else { throw MainsError.changedBackend }
@@ -2713,7 +2778,7 @@ public final class BackendSession {
             if isConnected, let transport {
                 do {
                     let remaining = ContinuousClock.now.duration(to: deadline).components
-                    let timeout = min(30, Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18)
+                    let timeout = min(Double(attemptTimeout), Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18)
                     let result = try await transport.invoke(channel, args: args, commandId: commandID, timeout: timeout)
                     guard pairingOwner == owner else { throw MainsError.changedBackend }
                     return result

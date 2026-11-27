@@ -4,6 +4,8 @@ import { useSaveAssistantMemoryMutation, useRemoveAssistantMemoryMutation } from
 import { Button, Checkbox, Input, Label, Select, Textarea } from "@/components/ui";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import { errorText } from "../lib/assistant-ui";
+import { AssistantPanelEmptyState, AssistantPanelSection } from "./assistant-panel-section";
+
 export function AssistantMemoryPanel({ assistant, memories }: {
     assistant: Assistant;
     memories: AssistantMemory[];
@@ -54,14 +56,7 @@ export function AssistantMemoryPanel({ assistant, memories }: {
             setFailure(errorText(error));
         }
     }
-    return <section className="space-y-5" aria-label="Mate memory">
-    <div>
-      <h2 className="text-lg font-medium">{assistant.teamId ? "What the team knows" : `What ${assistant.name} remembers`}</h2>
-      {assistant.teamId && <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-300">Shared decisions and this mate’s private notes, with their sources.</p>}
-      <div className="mt-4 flex justify-end">
-        <Button variant="primary" className="whitespace-nowrap" onClick={() => open(null)}>Add memory</Button>
-      </div>
-    </div>
+    return <AssistantPanelSection label="Mate memory" action={{ label: "Add memory", onClick: () => open(null) }}>
     {(creating || editing) && <form onSubmit={submit} className="glass-card space-y-3.5 rounded-2xl p-3.5">
       <label className="flex flex-col gap-1.5">
         <Label as="span">Title</Label>
@@ -83,11 +78,11 @@ export function AssistantMemoryPanel({ assistant, memories }: {
       <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => { setCreating(false); setEditing(null); }}>Cancel</Button><Button type="submit" variant="primary" isLoading={saving.isLoading}>Save memory</Button></div>
     </form>}
     {failure && <p role="alert" className="text-sm text-danger">{failure}</p>}
-    {!visible.length && !creating && <div className="rounded-2xl border border-dashed border-primary-300 px-6 py-12 text-center text-sm text-primary-500 dark:border-primary-700">Save something you want {assistant.teamId ? "this team" : assistant.name} to remember.</div>}
+    {!visible.length && !creating && <AssistantPanelEmptyState>Save something you want {assistant.teamId ? "this team" : assistant.name} to remember.</AssistantPanelEmptyState>}
     {visible.map(memory => <article key={memory.id} className="glass-card rounded-2xl p-5">
       <div className="mb-3 flex items-start justify-between gap-4"><div><div className="mb-1 text-xs text-primary-500">{memory.assistantId ? "Private note" : "Team memory"}{memory.pinned ? " · Kept in context" : ""}</div><h3 className="font-medium">{memory.title}</h3></div><div className="flex gap-1"><Button variant="ghost" onClick={() => open(memory)}>Edit</Button><Button variant="ghost" disabled={removing.isLoading} onClick={() => void forget(memory)}>Remove</Button></div></div>
       <AgentMarkdown>{memory.content}</AgentMarkdown>
       <p className="mt-4 text-xs text-primary-500">Revision {memory.revision} · {memory.updatedAt.toLocaleDateString()}{memory.sourceRunId ? ` · Source conversation ${memory.sourceRunId.slice(0, 8)}` : " · Added by you"}</p>
     </article>)}
-  </section>;
+  </AssistantPanelSection>;
 }

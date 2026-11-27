@@ -190,7 +190,9 @@ describe("backendService", () => {
       expect([...PAIRED_DEVICE_COMMANDS].sort()).toEqual([
         "assistants:create",
         "assistants:createTeam",
+        "assistants:mobileGenerateSkill",
         "assistants:mobileManage",
+        "assistants:mobileSaveSkill",
         "assistants:prepareWelcome",
         "assistants:respondWelcome",
         "assistants:send",

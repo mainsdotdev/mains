@@ -182,6 +182,7 @@ export function AssistantRobotPreview({ shape, state = "idle", presentation = "i
         lookX: pose.lookX + (autonomousGaze ? sample?.lookX ?? 0 : 0),
         lookY: pose.lookY + (autonomousGaze ? rest.lookY + (sample?.lookY ?? 0) : 0),
         blink: sample?.blink,
+        accent: sample?.accent,
         focus: rest.focus,
       });
       if (!ready && element) {

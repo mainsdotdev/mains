@@ -115,7 +115,8 @@ struct MessageComposer: View {
     }
     private var voiceStartAvailability: BackendSession.VoiceStartAvailability {
         guard AppFeatures.gptLiveEnabled, !context.saving(session) else { return .unavailable }
-        return session.voiceStartAvailability(runID: context.runID, spaceID: context.spaceID, mate: context.mate)
+        return session.voiceStartAvailability(runID: context.runID, spaceID: context.spaceID, mate: context.mate,
+                                              workspaceID: context.workspaceID)
     }
     #endif
     private var effort: String? {
@@ -534,7 +535,7 @@ struct MessageComposer: View {
         Task {
             guard owner == session.ownership, validateVoiceStart() else { return }
             focused = false; voiceStartOwner = owner
-            await session.startVoice(runID: context.runID, spaceID: context.spaceID, mate: context.mate)
+            await session.startVoice(runID: context.runID, spaceID: context.spaceID, mate: context.mate, workspaceID: context.workspaceID)
         }
     }
     #endif

@@ -68,7 +68,7 @@ function readSkillIds(input: unknown): string[] {
     return ids;
 }
 
-function savedPermission(assistant: Assistant) {
+export function savedPermission(assistant: Assistant) {
     const config = assistant.conversationSettings.config;
     return assistant.providerId === "codex" ? codexPermissionValue(config) : config.permissionMode ?? DEFAULT_CLAUDE_PERMISSION_MODE;
 }

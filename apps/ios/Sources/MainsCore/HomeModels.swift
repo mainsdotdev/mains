@@ -295,6 +295,7 @@ public struct CodexPermissions: Decodable, Sendable {
     public let profilesSupported: Bool
     public let profiles: [Profile]
     public let allowedSandboxModes: [String]?
+    public let allowedApprovalPolicies: [String]?
     public let requiresNamedProfile: Bool
     public func choices(current: String) -> [PermissionChoice] {
         let builtins = Self.builtinProfiles

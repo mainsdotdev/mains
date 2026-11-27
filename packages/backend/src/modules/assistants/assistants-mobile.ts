@@ -3,16 +3,17 @@ import {
     canAccessAssistantAssignment, type Assistant, type AssistantMemory, type AssistantWelcomeQuestion,
     type MobileMateAssignment, type MobileMateChange, type MobileMateChat, type MobileMateDirectory,
     type MobileMateIdentity, type MobileMateMemory, type MobileMateRoutine, type MobileMateRoutines,
-    type MobileMateSchedule, type MobileMateTask, type MobileMateTasks,
+    type MobileMateSchedule, type MobileMateSkillPage, type MobileMateTask, type MobileMateTasks,
 } from "@mains/contracts/assistants";
 import { accountService } from "../account";
 import { assertOwnedRecord } from "../bridge/bridge.ownership";
+import { providersService } from "../providers";
 import { pulseService } from "../pulse/pulse.service";
 import type { Pulse } from "../pulse/pulse.dto";
 import { assistantWelcome } from "./assistant-welcome";
 import { assistantWork } from "./assistant-work";
 import { assistantsRepo } from "./assistants.repo";
-import { assistantsService } from "./assistants.service";
+import { assistantsService, savedPermission } from "./assistants.service";
 import { object, onlyKeys, text } from "./assistants.validation";
 
 async function assertAccount(accountId: string) {
@@ -91,6 +92,9 @@ export const assistantsMobile = {
         if (typeof archived !== "boolean") throw new Error("Choose a valid Mate directory");
         const selected = selectedId == null ? null : assistantsService.get(text(selectedId, "Mate"), accountId);
         if (selectedId != null && !selected) throw new Error("Assistant is unavailable");
+        const includeDetails = selected && (!selected.isArchived || archived);
+        const providerApproval = includeDetails && selected.providerId === "codex"
+            ? (await providersService.getById(selected.providerId))?.config?.approvalMode : undefined;
         const profiles = selected ? [selected] : assistantsRepo.list(accountId).filter(mate => mate.isArchived === archived);
         const welcomes = new Map(assistantsRepo.welcomes(accountId).filter(row => row.state !== "started").map(row => [row.assistantId, row]));
         return {
@@ -103,9 +107,35 @@ export const assistantsMobile = {
                 const welcome = row && selected ? { runId: row.runId, state: row.state, question, error: row.error } : null;
                 const mate = { ...mateIdentity(profile), description, teamId, providerId, model, pinnedAt, needsSetup, welcome };
                 if (!selected || (isArchived && !archived)) return mate;
-                return { ...mate, details: { spaceName: spaceSnapshot.name, effort, instructions } };
+                return { ...mate, details: { spaceName: spaceSnapshot.name, effort, instructions, runtime: {
+                    skills: profile.skills ?? [], permissionMode: savedPermission(profile),
+                    ...(profile.codexApprovalMode && { codexApprovalMode: profile.codexApprovalMode }),
+                    ...(providerId === "codex" && { providerApprovalMode: typeof providerApproval === "string" ? providerApproval : "on-request" }),
+                } } };
             }),
         };
+    },
+    async skills(accountId: string, mateId: string, search: unknown, selection: unknown): Promise<MobileMateSkillPage> {
+        const mate = await ownedMate(accountId, mateId);
+        const query = text(search, "Search skills", 100, true).toLowerCase();
+        const start = offset(selection);
+        const catalog = await assistantsService.skillCatalog(mate.id, accountId);
+        const available = new Set(catalog.skills.map(skill => skill.id));
+        const pluginIds = new Set(catalog.pluginSkillIds);
+        const assigned = (assistantsService.requireForWork(mate.id, accountId).skills ?? []).map(skill => skill.id);
+        const matches = catalog.skills.filter(skill => `${skill.name}\n${skill.description}`.toLowerCase().includes(query));
+        const end = start + 50;
+        return { items: matches.slice(start, end), nextOffset: matches.length > end ? end : null,
+            unavailableIds: assigned.filter(id => !available.has(id) && !pluginIds.has(id)),
+            pluginSkillIds: assigned.filter(id => pluginIds.has(id)) };
+    },
+    async generateSkill(accountId: string, mateId: string, request: unknown) {
+        const mate = await ownedMate(accountId, mateId);
+        return assistantsService.generateSkill(mate.id, accountId, request, assistantWork.guard());
+    },
+    async saveSkill(accountId: string, mateId: string, draft: unknown) {
+        const mate = await ownedMate(accountId, mateId);
+        return assistantsService.saveSkill(mate.id, accountId, { draft }, false, assistantWork.guard());
     },
     async chats(accountId: string, mateId: string): Promise<MobileMateChat[]> {
         await assertAccount(accountId);
@@ -180,7 +210,7 @@ export const assistantsMobile = {
         assistantsService.requireForWork(mate.id, accountId);
         switch (action) {
             case "updateProfile": {
-                onlyKeys(value, ["action", "profile", "expectedProfile", "teamChange", "modelChange"]);
+                onlyKeys(value, ["action", "profile", "expectedProfile", "teamChange", "modelChange", "skillChange", "permissionChange"]);
                 const { action: _action, ...profile } = value;
                 await assistantsService.updateProfile({ ...profile, accountId, id: mate.id }, assistantWork.guard());
                 return;

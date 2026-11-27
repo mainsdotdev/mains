@@ -45,6 +45,7 @@
 		46ABE46975997046A283B62EA471CC68 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F483CCE0A437F5348C463265CFA1F48B /* Models.swift */; };
 		48BD84AC2AF4247C5D562B75A91337AF /* AtlasSaveControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67EC3237D2AAAC51FED8CADDCF53020A /* AtlasSaveControls.swift */; };
 		4E9E091D63A4E59EB0E05775B58B4399 /* MateInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6AB8DB8C8DBFF7AF2B87F0A8007B662 /* MateInfoView.swift */; };
+		45EFE4DD07A756231F04AF77464CF9EF /* MateSkillsEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A996B69F75B8CD0D7AB8C043D401D76B /* MateSkillsEditor.swift */; };
 		4EC78FAF02B306E8F91D4DB1ADFBB6C1 /* VoicePreviews in Resources */ = {isa = PBXBuildFile; fileRef = BD5F7B35AB8E980F14D3AA7BDCA2BD58 /* VoicePreviews */; };
 		E958B4E78DC53B6D33D97F22C60E11DD /* VoiceSounds in Resources */ = {isa = PBXBuildFile; fileRef = 9A4A7B3AC84038F0F76C8BB92D4A68CD /* VoiceSounds */; };
 		4EF5CF2AE4762FCCA7B55E414B8E459C /* WebRTC-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = A8EDF4622E441471133DBF427C22D146 /* WebRTC-LICENSE.txt */; };
@@ -274,6 +275,7 @@
 		F483CCE0A437F5348C463265CFA1F48B /* Models.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		F4F3C4053FC366ED4F9839028864F7F3 /* ApprovalToolPreview.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ApprovalToolPreview.swift; sourceTree = "<group>"; };
 		F6AB8DB8C8DBFF7AF2B87F0A8007B662 /* MateInfoView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MateInfoView.swift; sourceTree = "<group>"; };
+		A996B69F75B8CD0D7AB8C043D401D76B /* MateSkillsEditor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MateSkillsEditor.swift; sourceTree = "<group>"; };
 		FCBC830B5DF2D9CD71689BDA9949619B /* RunFileLinkHost.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RunFileLinkHost.swift; sourceTree = "<group>"; };
 		FF1716CBFC9927E40222FC6D19B922C7 /* ConversationPaneLayout.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationPaneLayout.swift; sourceTree = "<group>"; };
 		FF9CE8352E16B429CC6E2E6FAF27DBA8 /* LaunchIntro */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; path = LaunchIntro; sourceTree = "<group>"; };
@@ -343,6 +345,7 @@
 				4C77076B799EF2D3926E9437A76279A2 /* MainsApp.swift */,
 				745DA9227112F4934C502771260A4531 /* MateInfoEditors.swift */,
 				F6AB8DB8C8DBFF7AF2B87F0A8007B662 /* MateInfoView.swift */,
+				A996B69F75B8CD0D7AB8C043D401D76B /* MateSkillsEditor.swift */,
 				7E01FAD53C91FDBF5D8C91B2A077F726 /* MatesView.swift */,
 				AEE43A78B667585EF29CB3F6714AF86D /* MathMarkdownView.swift */,
 				71CA7D3D156CDE0E5C069315F3F22333 /* MessageComposer.swift */,
@@ -713,6 +716,7 @@
 				1CD7F24C355E7C075C490526E905FA1B /* MainsApp.swift in Sources */,
 				8380845B49B80B11A777DE2D64EDF154 /* MateInfoEditors.swift in Sources */,
 				4E9E091D63A4E59EB0E05775B58B4399 /* MateInfoView.swift in Sources */,
+				45EFE4DD07A756231F04AF77464CF9EF /* MateSkillsEditor.swift in Sources */,
 				679743F2686E4D933C4D670D8F9E5C6D /* MatesView.swift in Sources */,
 				0AC503AF1D8CFD8FF0232F98C88205BA /* MathMarkdownView.swift in Sources */,
 				B95F8249E5F3CE2F1DCE895A8FCB32B4 /* MessageComposer.swift in Sources */,

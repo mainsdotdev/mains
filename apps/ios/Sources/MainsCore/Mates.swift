@@ -38,10 +38,10 @@ struct MateRobotCatalogue: Decodable, Sendable {
     var defaultPreset: Preset? { styles.lazy.flatMap(\.presets).first { $0.id == defaultShape } }
 
     func preset(for avatar: MateAvatar?, mateID: String) -> Preset? {
-        let presets = styles.flatMap(\.presets)
-        if let avatar, let exact = presets.first(where: { $0.id == avatar.shape }) { return exact }
-        guard !presets.isEmpty else { return nil }
+        if let avatar, let exact = styles.lazy.flatMap(\.presets).first(where: { $0.id == avatar.shape }) { return exact }
         // Keep a legacy profile's display stable across relaunches and navigation.
+        let presets = styles.filter { ["terminal", "clear", "metal"].contains($0.id) }.flatMap(\.presets)
+        guard !presets.isEmpty else { return defaultPreset }
         let hash = mateID.utf8.reduce(UInt32(2_166_136_261)) { ($0 ^ UInt32($1)) &* 16_777_619 }
         return presets[Int(hash % UInt32(presets.count))]
     }
@@ -76,6 +76,87 @@ public struct MateDetails: Codable, Sendable {
     public let spaceName: String
     public let effort: String
     public let instructions: String
+    public let runtime: MateRuntimeSettings?
+}
+
+public struct MateRuntimeSettings: Codable, Sendable {
+    public let skills: [MateSkill]
+    public let permissionMode: String
+    public let codexApprovalMode: String?
+    public let providerApprovalMode: String?
+
+    private enum CodingKeys: String, CodingKey { case skills, permissionMode, codexApprovalMode, providerApprovalMode }
+
+    public init(from decoder: any Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        skills = try fields.decode([MateSkill].self, forKey: .skills)
+        permissionMode = try fields.decode(String.self, forKey: .permissionMode)
+        codexApprovalMode = try fields.decodeWireIfPresent(String.self, forKey: .codexApprovalMode)
+        providerApprovalMode = try fields.decodeWireIfPresent(String.self, forKey: .providerApprovalMode)
+    }
+}
+
+public struct MateSkill: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String
+
+    var isValid: Bool {
+        id.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil &&
+            !name.isEmpty && name.utf16.count <= 200 && description.utf16.count <= 1024
+    }
+}
+
+public struct MateSkillPage: Decodable, Sendable {
+    public let items: [MateSkill]
+    public let nextOffset: Int?
+    public let unavailableIds: [String]
+    public let pluginSkillIds: [String]
+}
+
+public struct MateSkillDraft: Codable, Sendable {
+    public var name: String
+    public var title: String
+    public var description: String
+    public var markdown: String
+    public var examplePrompt: String?
+
+    public var isValid: Bool {
+        let slug = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return slug.utf16.count <= 64 && slug.range(of: "^[a-z0-9]+(?:-[a-z0-9]+)*$", options: .regularExpression) != nil &&
+            !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && title.utf16.count <= 100 &&
+            !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && description.utf16.count <= 1024 &&
+            !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && markdown.utf8.count <= 64 * 1024 &&
+            (examplePrompt?.utf16.count ?? 0) <= 1000
+    }
+}
+
+public struct MateSkillChange: Encodable, Sendable {
+    let ids: [String]
+    let expectedIds: [String]
+    public init(ids: [String], expectedIds: [String]) { self.ids = ids; self.expectedIds = expectedIds }
+}
+
+public struct MatePermissionChange: Sendable {
+    let mode: String
+    let expectedMode: String
+    let codex: Bool
+    let approvalMode: String?
+    let expectedApprovalMode: String?
+
+    public init(mode: String, expectedMode: String, codex: Bool, approvalMode: String?, expectedApprovalMode: String?) {
+        self.mode = mode; self.expectedMode = expectedMode; self.codex = codex
+        self.approvalMode = approvalMode; self.expectedApprovalMode = expectedApprovalMode
+    }
+
+    var payload: JSONValue {
+        var fields: [String: JSONValue] = ["mode": .string(mode), "expectedMode": .string(expectedMode)]
+        if codex {
+            fields["approvalMode"] = approvalMode.map(JSONValue.string) ?? .null
+            fields["expectedApprovalMode"] = expectedApprovalMode.map(JSONValue.string) ?? .null
+        }
+        return .object(fields)
+    }
 }
 
 public struct MateWelcome: Codable, Sendable {
@@ -267,7 +348,8 @@ public struct MateConsentRequired: LocalizedError, Equatable, Sendable {
 
 public enum MateChange: Sendable {
     case updateProfile(MateEditableProfile, original: MateEditableProfile, teamID: String?, originalTeamID: String?,
-                       modelChange: MateModelChange? = nil)
+                       modelChange: MateModelChange? = nil, skillChange: MateSkillChange? = nil,
+                       permissionChange: MatePermissionChange? = nil)
     case archive(Bool)
     case setPinned(Bool)
     case saveMemory(MateMemoryNote, expectedTeamID: String?)
@@ -282,13 +364,15 @@ public enum MateChange: Sendable {
     func payload() throws -> JSONValue {
         var fields: [String: JSONValue]
         switch self {
-        case let .updateProfile(profile, original, teamID, originalTeamID, modelChange):
+        case let .updateProfile(profile, original, teamID, originalTeamID, modelChange, skillChange, permissionChange):
             fields = ["action": .string("updateProfile"), "profile": try .encode(profile), "expectedProfile": try .encode(original)]
             if teamID != originalTeamID {
                 fields["teamChange"] = .object(["teamId": teamID.map(JSONValue.string) ?? .null,
                                                  "expectedTeamId": originalTeamID.map(JSONValue.string) ?? .null])
             }
             if let modelChange { fields["modelChange"] = try .encode(modelChange) }
+            if let skillChange { fields["skillChange"] = try .encode(skillChange) }
+            if let permissionChange { fields["permissionChange"] = permissionChange.payload }
         case .archive(let archived):
             fields = ["action": .string("archive"), "archived": .bool(archived)]
         case .setPinned(let pinned):

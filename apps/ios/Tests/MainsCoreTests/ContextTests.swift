@@ -86,17 +86,22 @@ import Testing
         let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let data = try Data(contentsOf: app.appendingPathComponent("Resources/RobotAvatars/presets.json"))
         let catalogue = try JSONDecoder().decode(MateRobotCatalogue.self, from: data)
-        #expect(catalogue.styles.map(\.presets.count) == [7, 7, 7])
+        #expect(catalogue.styles.map(\.id) == ["terminal", "clear", "metal", "specialists"])
+        #expect(catalogue.styles.map(\.presets.count) == [7, 7, 7, 16])
         #expect(catalogue.defaultPreset?.avatar == MateAvatar(shape: "terminal-amber", color: "amber"))
         let saved = MateAvatar(shape: "metal-silver", color: "mint")
         #expect(catalogue.preset(for: saved, mateID: "one")?.avatar == saved)
         #expect(catalogue.preset(for: saved, mateID: "two")?.avatar == saved)
+        let specialist = MateAvatar(shape: "specialist-finance", color: "amber")
+        #expect(catalogue.preset(for: specialist, mateID: "one")?.avatar == specialist)
+        let beachPalm = MateAvatar(shape: "specialist-beach-palm", color: "lime")
+        #expect(catalogue.preset(for: beachPalm, mateID: "two")?.avatar == beachPalm)
 
         let legacy = MateAvatar(shape: "sphere", color: "blue")
         let identities = (0..<30).map { "legacy-mate-\($0)" }
         let selected = identities.compactMap { catalogue.preset(for: legacy, mateID: $0)?.id }
-        let reopened = try JSONDecoder().decode(MateRobotCatalogue.self, from: data)
-        #expect(selected == identities.compactMap { reopened.preset(for: legacy, mateID: $0)?.id })
+        let original = MateRobotCatalogue(defaultShape: catalogue.defaultShape, styles: Array(catalogue.styles.prefix(3)))
+        #expect(selected == identities.compactMap { original.preset(for: legacy, mateID: $0)?.id })
         #expect(Set(selected).count > 7)
     }
 

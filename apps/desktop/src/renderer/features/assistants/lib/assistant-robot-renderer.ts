@@ -9,6 +9,7 @@ attribute vec3 aNormal;
 uniform vec3 uPosition;
 uniform vec3 uOrbit;
 uniform vec2 uTurn;
+uniform vec2 uPartRoll;
 uniform vec2 uLook;
 uniform vec2 uScale;
 
@@ -34,9 +35,11 @@ vec3 orient(vec3 point) {
 void main() {
   vec3 point = aPosition;
   point.xy *= uScale;
+  mat2 roll = mat2(uPartRoll.y, uPartRoll.x, -uPartRoll.x, uPartRoll.y);
+  point.xy = roll * point.xy;
   point = rotate(point, uTurn) + uPosition + vec3(uLook, 0.0);
   vec3 view = orient(point);
-  vNormal = orient(rotate(aNormal, uTurn));
+  vNormal = orient(rotate(vec3(roll * aNormal.xy, aNormal.z), uTurn));
   vSurface = point;
   gl_Position = vec4(view.xy * 0.99, -view.z * 0.30, 1.0 - view.z * 0.09);
 }
@@ -93,6 +96,7 @@ type RobotPose = {
   lookY?: number;
   blink?: number;
   focus?: number;
+  accent?: number;
 };
 
 function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader {
@@ -136,7 +140,7 @@ export function createRobotRenderer(canvas: HTMLCanvasElement, shape: AssistantR
   const positionAttr = gl.getAttribLocation(program, "aPosition");
   const normalAttr = gl.getAttribLocation(program, "aNormal");
   const uniform = (name: string) => gl.getUniformLocation(program, name);
-  const position = uniform("uPosition"), orbit = uniform("uOrbit"), turn = uniform("uTurn");
+  const position = uniform("uPosition"), orbit = uniform("uOrbit"), turn = uniform("uTurn"), partRoll = uniform("uPartRoll");
   const look = uniform("uLook"), scale = uniform("uScale"), color = uniform("uColor"), finish = uniform("uFinish");
   const lidEdge = uniform("uLidEdge");
   const parts: Array<RobotPart & { buffer: WebGLBuffer; tint: [number, number, number] }> = [];
@@ -164,7 +168,7 @@ export function createRobotRenderer(canvas: HTMLCanvasElement, shape: AssistantR
 
   return {
     dispose,
-    draw({ yaw, pitch, roll = 0, lookX = 0, lookY = 0, blink = 0, focus = 0 }: RobotPose) {
+    draw({ yaw, pitch, roll = 0, lookX = 0, lookY = 0, blink = 0, focus = 0, accent = 0 }: RobotPose) {
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(0, 0, 0, 0);
       gl.depthMask(true);
@@ -180,8 +184,26 @@ export function createRobotRenderer(canvas: HTMLCanvasElement, shape: AssistantR
       gl.uniform3f(orbit, yaw, pitch + focus * 0.036, roll);
 
       function drawPart(part: typeof parts[number]) {
-        const [x, y, z] = part.position;
+        let [x, y, z] = part.position;
         let gazeX = 0, gazeY = 0, tilt = 0, width = 1, height = 1, lowerEdge = -2;
+        let sin = 0, cos = 1;
+        if (part.gesture && accent) {
+          const { translate, roll: angle = 0, pivot, oneWay } = part.gesture;
+          const drive = oneWay ? Math.abs(accent) : accent;
+          sin = Math.sin(angle * drive);
+          cos = Math.cos(angle * drive);
+          if (pivot) {
+            const [px, py] = pivot;
+            const dx = x - px, dy = y - py;
+            x = px + dx * cos - dy * sin;
+            y = py + dx * sin + dy * cos;
+          }
+          if (translate) {
+            x += translate[0] * drive;
+            y += translate[1] * drive;
+            z += translate[2] * drive;
+          }
+        }
         switch (part.motion) {
           case "terminalEyes":
             gazeX = lookX * 0.045;
@@ -204,10 +226,16 @@ export function createRobotRenderer(canvas: HTMLCanvasElement, shape: AssistantR
             // Reveal the upper lid down to its moving edge, keeping the rim fixed inside the lens.
             lowerEdge = y + 0.082 - blink * 0.43 - focus * 0.018;
             break;
+          case "specialistEyes":
+            gazeX = Math.max(-1, Math.min(1, lookX)) * .049;
+            gazeY = Math.max(-1, Math.min(1, lookY)) * .044;
+            height = Math.max(.08, 1 - blink * .92 - focus * .24);
+            break;
         }
         gl.uniform3f(position, x, y, z);
         gl.uniform2f(look, gazeX, gazeY);
         gl.uniform2f(turn, 0, tilt);
+        gl.uniform2f(partRoll, sin, cos);
         gl.uniform2f(scale, width, height);
         gl.uniform3fv(color, part.tint);
         gl.uniform1f(finish, finishes[part.finish]);

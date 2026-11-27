@@ -1,7 +1,7 @@
-import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { isAssistantRobotShape, type Assistant, type AssistantConversation, type AssistantOverview, type AssistantProfile, type AssistantTeam } from "@mains/contracts/assistants";
 import { Button, Input, Label, Select, SegmentedTabs, Textarea } from "@/components/ui";
-import { Close } from "@/components/ui/icons";
+import { Close, Edit, Undo } from "@/components/ui/icons";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { ResizeHandle } from "@/components/layout/resize-handle";
@@ -11,7 +11,7 @@ import { useGetProviderModelsQuery } from "@/lib/redux/api";
 import { useUpdateAssistantProfileMutation } from "@/lib/redux/api/assistantsApi";
 import { ASSISTANT_INFO_PANEL_WIDTH_DEFAULT, ASSISTANT_INFO_PANEL_WIDTH_MIN, ASSISTANT_INFO_PANEL_WIDTH_MAX, clamp } from "@/lib/layout";
 import { formatEffortLevel } from "@/lib/format";
-import { formatModelDisplayName } from "@/lib/model-display";
+import { formatModelDisplayName, getModelPrettyName } from "@/lib/model-display";
 import { getProviderVariantById, pickDefaultEffort } from "@/lib/provider-variants";
 import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantAvatarPicker } from "./assistant-avatar-picker";
@@ -19,6 +19,7 @@ import { AssistantRobotPreview } from "./assistant-robot-avatar";
 import { AssistantMemoryPanel } from "./assistant-memory";
 import { AssistantAssignments } from "./assistant-assignments";
 import { AssistantChatsPanel } from "./assistant-chats-panel";
+import { AssistantPanelSection } from "./assistant-panel-section";
 import { AssistantRoutines } from "./assistant-routines";
 import { AssistantTeamEditor } from "./assistant-team-editor";
 import { AssistantRuntimeFields, assistantRuntimeDraft, type AssistantRuntimeDraft } from "./assistant-runtime-fields";
@@ -54,7 +55,13 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
   const provider = getProviderVariantById(assistant.providerId);
   const {
     currentData: models = [], isFetching: loadingModels, error: modelError, refetch: reloadModels,
-  } = useGetProviderModelsQuery(assistant.providerId, { skip: !draft || !canEdit });
+  } = useGetProviderModelsQuery(assistant.providerId);
+  const modelOptions = models.map(model => ({
+    value: model.id,
+    label: formatModelDisplayName(getModelPrettyName(model, provider?.variant) || model.id, provider?.variant),
+  }));
+  const savedModelLabel = modelOptions.find(option => option.value === assistant.model)?.label
+    ?? formatModelDisplayName(assistant.model, provider?.variant);
   const selectedModel = models.find(model => model.id === draft?.model);
   const efforts = selectedModel?.supportedEffortLevels ?? [];
   const modelChanged = !!edit && (edit.draft.model !== edit.original.model || edit.draft.effort !== edit.original.effort);
@@ -71,8 +78,7 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
     }
   }, [edit]);
 
-  function beginEdit(event: MouseEvent<HTMLButtonElement>) {
-    event.preventDefault();
+  function beginEdit() {
     const { name, description, instructions, avatar, teamId, model, effort } = assistant;
     const original = { name, description, instructions, avatar, teamId, model, effort, ...assistantRuntimeDraft(assistant) };
     setFailure("");
@@ -131,10 +137,10 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
   const detailRows = [
     { label: "Space", value: assistant.spaceSnapshot.name },
     {
-      label: "Model", value: formatModelDisplayName(assistant.model, provider?.variant),
+      label: "Model", value: savedModelLabel,
       control: draft && <Select aria-label="Model" size="sm" searchable value={draft.model}
         placeholder={formatModelDisplayName(draft.model, provider?.variant)}
-        options={models.map(model => ({ value: model.id, label: formatModelDisplayName(model.displayName || model.id, provider?.variant) }))}
+        options={modelOptions}
         disabled={isLoading || creatingTeam || !models.length} onChange={selectModel} />,
     },
     {
@@ -146,78 +152,81 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
     },
   ];
 
-  return <form aria-label={draft ? "Edit mate profile" : undefined} onSubmit={save} className="space-y-4 pt-2">
-    {!draft && isAssistantRobotShape(assistant.avatar.shape) && <div className="flex justify-center">
-      <AssistantRobotPreview shape={assistant.avatar.shape} state={avatarState} className="size-24" />
-    </div>}
-    {draft && <fieldset disabled={isLoading} className="glass-card min-w-0 space-y-3.5 rounded-2xl p-3.5">
-      <AssistantAvatarPicker avatar={draft.avatar} seed={assistant.id} compact onChange={avatar => changeDraft({ avatar })} />
-      <label className="flex flex-col gap-1.5 text-sm">
-        <span>Name</span>
-        <Input value={draft.name} onChange={event => changeDraft({ name: event.target.value })} autoComplete="off" autoFocus required maxLength={100} />
-      </label>
-      <label className="flex flex-col gap-1.5 text-sm">
-        <span>Description</span>
-        <Textarea value={draft.description} onChange={event => changeDraft({ description: event.target.value })} rows={2} maxLength={1000} />
-      </label>
-    </fieldset>}
-    {draft ? <div className="rounded-2xl glass-card p-3.5">
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <Label id={teamLabelId} as="span" className="shrink-0" size="xs" tone="secondary">Team</Label>
-        <div className="ml-auto flex min-w-0 flex-wrap items-stretch justify-end gap-2">
-          <Button className="inline-flex shrink-0 whitespace-nowrap" type="button" variant="secondary"
-            disabled={isLoading || creatingTeam} aria-expanded={creatingTeam} onClick={() => setCreatingTeam(true)}>New team</Button>
-          <div className="min-w-0">
-            <Select aria-labelledby={teamLabelId} value={draft.teamId ?? ""} disabled={isLoading || creatingTeam}
-              options={[{ value: "", label: "No team" }, ...Array.from(teams, ([value, label]) => ({ value, label }))]}
-              placeholder="Unavailable team" onChange={teamId => changeDraft({ teamId: teamId || null })} />
+  const action = assistant.isArchived
+    ? { label: "Restore mate", icon: Undo, isLoading: archiving, onClick: onToggleArchive }
+    : canEdit ? { label: "Edit", icon: Edit, disabled: archiving, onClick: beginEdit } : undefined;
+
+  return <AssistantPanelSection action={draft ? undefined : action} actionRef={canEdit ? editButton : undefined}>
+    <form aria-label={draft ? "Edit mate profile" : undefined} onSubmit={save} className="space-y-4">
+      {!draft && isAssistantRobotShape(assistant.avatar.shape) && <div className="flex justify-center">
+        <AssistantRobotPreview shape={assistant.avatar.shape} state={avatarState} className="size-24" />
+      </div>}
+      {draft && <fieldset disabled={isLoading} className="glass-card min-w-0 space-y-3.5 rounded-2xl p-3.5">
+        <AssistantAvatarPicker avatar={draft.avatar} seed={assistant.id} compact onChange={avatar => changeDraft({ avatar })} />
+        <label className="flex flex-col gap-1.5 text-sm">
+          <span>Name</span>
+          <Input value={draft.name} onChange={event => changeDraft({ name: event.target.value })} autoComplete="off" autoFocus required maxLength={100} />
+        </label>
+        <label className="flex flex-col gap-1.5 text-sm">
+          <span>Description</span>
+          <Textarea value={draft.description} onChange={event => changeDraft({ description: event.target.value })} rows={2} maxLength={1000} />
+        </label>
+      </fieldset>}
+      {draft ? <div className="rounded-2xl glass-card p-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <Label id={teamLabelId} as="span" className="shrink-0" size="xs" tone="secondary">Team</Label>
+          <div className="ml-auto flex min-w-0 flex-wrap items-stretch justify-end gap-2">
+            <Button className="inline-flex shrink-0 whitespace-nowrap" type="button" variant="secondary"
+              disabled={isLoading || creatingTeam} aria-expanded={creatingTeam} onClick={() => setCreatingTeam(true)}>New team</Button>
+            <div className="min-w-0">
+              <Select aria-labelledby={teamLabelId} value={draft.teamId ?? ""} disabled={isLoading || creatingTeam}
+                options={[{ value: "", label: "No team" }, ...Array.from(teams, ([value, label]) => ({ value, label }))]}
+                placeholder="Unavailable team" onChange={teamId => changeDraft({ teamId: teamId || null })} />
+            </div>
           </div>
         </div>
+        {creatingTeam && <AssistantTeamEditor inline accountId={assistant.accountId}
+          onCancel={() => setCreatingTeam(false)} onCreated={onTeamCreated} />}
+      </div> : <dl className="flex items-baseline justify-between gap-4 rounded-2xl glass-card p-3.5">
+        <dt className="shrink-0 text-xs font-medium text-primary-600 dark:text-primary-300">Team</dt>
+        <dd className="min-w-0 break-words text-right text-sm font-medium leading-6 text-primary-950 dark:text-primary-50">{teamName}</dd>
+      </dl>}
+      <div className="rounded-2xl glass-card px-3.5 text-sm">
+        <dl>
+          {detailRows.map(({ label, value, control }) => <div key={label}
+            className="flex items-center justify-between gap-4 border-b border-primary-200/70 py-3.5 last:border-b-0 dark:border-primary-800/60">
+            <dt className="shrink-0 text-xs font-medium text-primary-600 dark:text-primary-300">{label}</dt>
+            <dd className={`min-w-0 max-w-[70%] break-words text-right font-medium leading-6 text-primary-950 dark:text-primary-50 ${control ? "w-52" : ""} ${label === "Effort" ? "capitalize" : ""}`}>{control || value}</dd>
+          </div>)}
+        </dl>
+        {draft && (modelError ? <div className="flex items-center justify-between gap-2 pb-3.5 text-xs">
+          <span role="status" className="text-primary-600 dark:text-primary-300">Couldn’t load models.</span>
+          <Button type="button" variant="ghost" disabled={loadingModels || isLoading} onClick={() => void reloadModels()}>Retry</Button>
+        </div> : !models.length && <p role="status" className="pb-3.5 text-xs text-primary-600 dark:text-primary-300">
+          {loadingModels ? "Loading models…" : "No models available."}
+        </p>)}
       </div>
-      {creatingTeam && <AssistantTeamEditor inline accountId={assistant.accountId}
-        onCancel={() => setCreatingTeam(false)} onCreated={onTeamCreated} />}
-    </div> : <dl className="flex items-baseline justify-between gap-4 rounded-2xl glass-card p-3.5">
-      <dt className="shrink-0 text-xs font-medium text-primary-600 dark:text-primary-300">Team</dt>
-      <dd className="min-w-0 break-words text-right text-sm font-medium leading-6 text-primary-950 dark:text-primary-50">{teamName}</dd>
-    </dl>}
-    <div className="rounded-2xl glass-card px-3.5 text-sm">
-      <dl>
-        {detailRows.map(({ label, value, control }) => <div key={label}
-          className="flex items-center justify-between gap-4 border-b border-primary-200/70 py-3.5 last:border-b-0 dark:border-primary-800/60">
-          <dt className="shrink-0 text-xs font-medium text-primary-600 dark:text-primary-300">{label}</dt>
-          <dd className={`min-w-0 max-w-[70%] break-words text-right font-medium leading-6 text-primary-950 dark:text-primary-50 ${control ? "w-52" : ""} ${label === "Effort" ? "capitalize" : ""}`}>{control || value}</dd>
-        </div>)}
-      </dl>
-      {draft && (modelError ? <div className="flex items-center justify-between gap-2 pb-3.5 text-xs">
-        <span role="status" className="text-primary-600 dark:text-primary-300">Couldn’t load models.</span>
-        <Button type="button" variant="ghost" disabled={loadingModels || isLoading} onClick={() => void reloadModels()}>Retry</Button>
-      </div> : !models.length && <p role="status" className="pb-3.5 text-xs text-primary-600 dark:text-primary-300">
-        {loadingModels ? "Loading models…" : "No models available."}
-      </p>)}
-    </div>
-    <div className="rounded-2xl glass-card p-3.5">
-      {draft ? <label className="flex flex-col gap-1.5 text-sm">
-        <span className="font-semibold text-primary-950 dark:text-primary-50">Instructions</span>
-        <Textarea value={draft.instructions} onChange={event => changeDraft({ instructions: event.target.value })}
-          rows={6} maxLength={16000} required disabled={isLoading} />
-      </label> : <>
-        <h3 className="mb-3 text-sm font-semibold text-primary-950 dark:text-primary-50">Instructions</h3>
-        <AgentMarkdown className="leading-6 [&_p]:my-2 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">{assistant.instructions}</AgentMarkdown>
-      </>}
-    </div>
-    <AssistantRuntimeFields assistant={assistant} draft={draft} canManageSkills={canEdit && !archiving} disabled={isLoading} onChange={changeDraft} />
-    {!!(failure || error) && <p role="alert" className="text-sm text-danger">{failure || error}</p>}
-    <div className="flex justify-end gap-2">
-      {draft ? <Fragment key="editing">
+      <div className="rounded-2xl glass-card p-3.5">
+        {draft ? <label className="flex flex-col gap-1.5 text-sm">
+          <span className="font-semibold text-primary-950 dark:text-primary-50">Instructions</span>
+          <Textarea value={draft.instructions} onChange={event => changeDraft({ instructions: event.target.value })}
+            rows={6} maxLength={16000} required disabled={isLoading} />
+        </label> : <>
+          <h3 className="mb-3 text-sm font-semibold text-primary-950 dark:text-primary-50">Instructions</h3>
+          <AgentMarkdown className="leading-6 [&_p]:my-2 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">{assistant.instructions}</AgentMarkdown>
+        </>}
+      </div>
+      <AssistantRuntimeFields assistant={assistant} draft={draft} canManageSkills={canEdit && !archiving} disabled={isLoading} onChange={changeDraft} />
+      {!!(failure || error) && <p role="alert" className="text-sm text-danger">{failure || error}</p>}
+      {draft ? <div className="flex justify-end gap-2">
         <Button variant="ghost" className="inline-flex min-h-9" disabled={isLoading} onClick={closeEditor}>Cancel</Button>
         <Button type="submit" variant="primary" className="inline-flex min-h-9" isLoading={isLoading}
           disabled={!canEdit || !canSaveModel || archiving || creatingTeam || !draft.name.trim() || !draft.instructions.trim()}>Save</Button>
-      </Fragment> : <Fragment key="viewing">
-        <Button variant={assistant.isArchived ? "primary" : "danger"} className="inline-flex min-h-9" disabled={archiving} isLoading={archiving} onClick={onToggleArchive}>{assistant.isArchived ? "Restore mate" : "Archive mate"}</Button>
-        {canEdit && <Button ref={editButton} variant="secondary" className="inline-flex min-h-9" disabled={archiving} onClick={beginEdit}>Edit</Button>}
-      </Fragment>}
-    </div>
-  </form>;
+      </div> : !assistant.isArchived && <div className="flex justify-end">
+        <Button variant="danger" className="inline-flex min-h-9" isLoading={archiving} onClick={onToggleArchive}>Archive mate</Button>
+      </div>}
+    </form>
+  </AssistantPanelSection>;
 }
 
 export function AssistantInfoPanel({ assistant, overview, avatarState, chats, selectedRunId, chatsError, onSelectChat, onRetryChats, isOpen, tab, onTabChange, onClose, onToggleArchive, archiving, error, openAssistant }: {
@@ -268,12 +277,12 @@ export function AssistantInfoPanel({ assistant, overview, avatarState, chats, se
         <Button ref={closeRef} variant="icon" aria-label="Close mate panel" tooltip="Close mate panel"
           tooltipPosition="bottom-left" onClick={onClose}><Close className="size-4" /></Button>
       </div>
-      <div className={`shrink-0 overflow-x-auto px-4 noscrollbar ${tab === "tasks" ? "pb-4" : "pb-1"}`}>
+      <div className="shrink-0 overflow-x-auto px-4 pb-3 noscrollbar">
         <SegmentedTabs aria-label="Mate information" variant="plain" panelId="assistant-info-content" value={tab} onChange={onTabChange}
           options={[{ value: "profile", label: "Details" }, { value: "chats", label: "Chats" }, { value: "memory", label: "Memory" }, { value: "tasks", label: activeTasks ? `Assignments · ${activeTasks}` : "Assignments" }, { value: "routines", label: "Routines" }]} />
       </div>
       <div id="assistant-info-content" role="tabpanel" aria-label={tab === "routines" ? "Routines" : tab === "chats" ? "Chats" : tab === "memory" ? "Memory" : tab === "tasks" ? "Assignments" : "Details"}
-        className={`min-h-0 flex-1 ${tab === "tasks" ? "flex flex-col" : "scroll-bounce overflow-y-auto scroll-pt-3 px-5 pt-3 pb-[calc(25dvh_+_1.5rem)] [mask-image:linear-gradient(to_bottom,transparent,black_0.75rem)]"}`}>
+        className="flex min-h-0 flex-1 flex-col">
         {tab === "routines" ? <AssistantRoutines assistant={assistant} onOpenChat={onSelectChat} />
           : tab === "chats" ? <AssistantChatsPanel chats={chats} selectedRunId={selectedRunId} error={chatsError} disabled={assistant.isArchived} onSelect={onSelectChat} onRetry={onRetryChats} />
           : tab === "memory" ? <AssistantMemoryPanel key={assistant.id} assistant={assistant} memories={overview.memories} />

@@ -1,9 +1,10 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { AssistantAvatar as Avatar, AssistantTeam } from "@mains/contracts/assistants";
-import type { EffortLevel } from "@mains/contracts/effort-levels";
 import { useGetSpacesQuery, useGetProviderModelsQuery, useGetProvidersQuery } from "@/lib/redux/api";
+import type { ModelInfo } from "@/lib/redux/api/providersApi";
 import { useAssistantOverviewQuery, useCreateAssistantMutation } from "@/lib/redux/api/assistantsApi";
 import { Button, Input, Label, Select, ModelSelectDropdown } from "@/components/ui";
+import { getModelPrettyName } from "@/lib/model-display";
 import { AssistantAvatarPicker } from "./assistant-avatar-picker";
 import { AssistantCreationHeader } from "./assistant-profile-header";
 import { AssistantTeamEditor } from "./assistant-team-editor";
@@ -20,6 +21,7 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
   const hasProvider = (id: string) => accountSpaces.some(s => s.providerId === id) &&
     (!providers || providers.some(provider => provider.id === id && provider.isEnabled));
   const providerId = providerChoice ?? (!hasProvider("codex") && hasProvider("claude_code") ? "claude_code" : "codex");
+  const variant = providerId === "codex" ? "codex" : "claude";
   const availableProvider = hasProvider(providerId);
   const available = accountSpaces.filter(s => s.providerId === providerId);
   const space = available.find(s => s.id === (providerId === "claude_code" ? "claude" : providerId)) ?? available[0];
@@ -49,9 +51,13 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
   const sending = useRef(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const names = models.map(m => m.displayName || m.id);
-  const modelName = model?.displayName || model?.id || "Choose a model";
-  const levels = Object.fromEntries(models.map(m => [m.displayName || m.id, m.supportedEffortLevels as EffortLevel[] | undefined]));
+  const modelsByName = new Map<string, ModelInfo>();
+  for (const candidate of models) {
+    const label = getModelPrettyName(candidate, variant) || candidate.id;
+    if (!modelsByName.has(label)) modelsByName.set(label, candidate);
+  }
+  const modelName = model ? getModelPrettyName(model, variant) || model.id : "Choose a model";
+  const levels = Object.fromEntries(Array.from(modelsByName, ([label, candidate]) => [label, candidate.supportedEffortLevels]));
   function onTeamCreated(team: AssistantTeam) {
     setCreatedTeams(current => [...current.filter(value => value.id !== team.id), team]);
     setTeamChoice(team.id);
@@ -88,8 +94,8 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
       </div>
       <div className="glass-outline space-y-3 rounded-2xl p-4">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2"><span className="text-sm">Provider</span><Select aria-label="Mate provider" value={providerId} onChange={value => { setProviderId(value); setModelId(""); setModelMenu(false); }} options={[{ value: "codex", label: "Codex" }, { value: "claude_code", label: "Claude" }]} /></div>
-        <div className="flex items-center justify-between gap-3"><span className="shrink-0 text-sm">Model & effort</span><ModelSelectDropdown model={modelName} models={names} modelEffortLevelsByModel={levels} onModelChange={value => setModelId(models.find(m => (m.displayName || m.id) === value)?.id ?? "")}
-          thinkingMode={!!effort} effortLevel={effort} onEffortLevelChange={value => { setEffortChoice(value); setThinking(true); }} onThinkingModeToggle={() => setThinking(!thinking)} allowUltracode={false} openUpward maxMenuHeight={224} isOpen={modelMenu} onToggle={() => setModelMenu(!modelMenu)} onClose={() => setModelMenu(false)} dropdownRef={modelRef} isLoading={isFetching} variant={providerId === "codex" ? "codex" : "claude"} /></div>
+        <div className="flex items-center justify-between gap-3"><span className="shrink-0 text-sm">Model & effort</span><ModelSelectDropdown model={modelName} models={Array.from(modelsByName.keys())} modelEffortLevelsByModel={levels} onModelChange={value => setModelId(modelsByName.get(value)?.id ?? "")}
+          thinkingMode={!!effort} effortLevel={effort} onEffortLevelChange={value => { setEffortChoice(value); setThinking(true); }} onThinkingModeToggle={() => setThinking(!thinking)} allowUltracode={false} openUpward maxMenuHeight={224} isOpen={modelMenu} onToggle={() => setModelMenu(!modelMenu)} onClose={() => setModelMenu(false)} dropdownRef={modelRef} isLoading={isFetching} variant={variant} /></div>
       </div>
       {!!(failure || catalogError || !loadingProviders && !availableProvider) && <p role="alert" className="text-sm text-danger">{failure || (catalogError ? errorText(catalogError) : "Enable a provider to create a mate.")}</p>}
     </div>

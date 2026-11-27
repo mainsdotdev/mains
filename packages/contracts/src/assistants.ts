@@ -11,6 +11,12 @@ export const ASSISTANT_ROBOT_AVATARS = {
     "clear-honey": "amber", "clear-lime": "lime", "clear-coral": "coral",
     "metal-silver": "mint", "metal-bronze": "amber", "metal-graphite": "blue", "metal-titanium": "violet",
     "metal-copper": "coral", "metal-ice": "cyan", "metal-moss": "lime",
+    "specialist-travel": "mint", "specialist-kitchen": "coral", "specialist-cloud": "cyan",
+    "specialist-law": "violet", "specialist-sports": "lime", "specialist-writer": "blue",
+    "specialist-research": "lime", "specialist-finance": "amber", "specialist-design": "violet",
+    "specialist-developer": "mint", "specialist-photo": "amber", "specialist-garden": "mint",
+    "specialist-music": "coral", "specialist-language": "blue", "specialist-projects": "amber",
+    "specialist-beach-palm": "lime",
 } as const satisfies Record<string, typeof ASSISTANT_AVATAR_COLORS[number]>;
 export type AssistantRobotShape = keyof typeof ASSISTANT_ROBOT_AVATARS;
 
@@ -351,7 +357,7 @@ export interface MobileMateDirectory {
     mates: Array<MobileMateIdentity & Pick<Assistant, "description" | "teamId" | "providerId" | "model" | "pinnedAt"> & {
         needsSetup: boolean;
         welcome: Pick<AssistantWelcome, "runId" | "state" | "question" | "error"> | null;
-        details?: Pick<Assistant, "effort" | "instructions"> & { spaceName: string };
+        details?: Pick<Assistant, "effort" | "instructions"> & { spaceName: string; runtime?: MobileMateRuntimeSettings };
     }>;
     teams: Array<Pick<AssistantTeam, "id" | "name">>;
 }
@@ -365,6 +371,21 @@ export const MOBILE_MATE_INFO_CAPABILITY = "mateInfo";
 export const MOBILE_MATE_TEAM_CREATION_CAPABILITY = "mateTeamCreation";
 export const MOBILE_MATE_MODEL_EDITING_CAPABILITY = "mateModelEditing";
 export const MOBILE_MATE_PINNING_CAPABILITY = "matePinning";
+export const MOBILE_MATE_RUNTIME_SETTINGS_CAPABILITY = "mateRuntimeSettings";
+
+export interface MobileMateRuntimeSettings {
+    skills: AssistantSkill[];
+    permissionMode: string;
+    codexApprovalMode?: MateCodexApprovalMode;
+    providerApprovalMode?: string;
+}
+
+export interface MobileMateSkillPage {
+    items: AssistantSkill[];
+    nextOffset: number | null;
+    unavailableIds: string[];
+    pluginSkillIds: string[];
+}
 
 /** List responses carry a content preview. A selected id returns the entire note. */
 export type MobileMateMemory = Pick<AssistantMemory, "id" | "title" | "content" | "pinned" | "revision"> & { shared: boolean };
@@ -408,7 +429,7 @@ export interface MobileMateRoutines {
 }
 
 export type MobileMateChange =
-    | ({ action: "updateProfile" } & Pick<UpdateAssistantProfile, "profile" | "expectedProfile" | "teamChange" | "modelChange">)
+    | ({ action: "updateProfile" } & Pick<UpdateAssistantProfile, "profile" | "expectedProfile" | "teamChange" | "modelChange" | "skillChange" | "permissionChange">)
     | { action: "archive"; archived: boolean }
     | { action: "setPinned"; pinned: boolean }
     | { action: "saveMemory"; note: MobileMateMemory; expectedTeamId: string | null }

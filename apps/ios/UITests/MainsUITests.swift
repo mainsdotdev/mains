@@ -842,7 +842,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(welcome.label, "What’s on your mind?")
         let greeting = app.staticTexts["homeGreeting"]
         XCTAssertTrue(greeting.exists)
-        XCTAssertTrue(["Morning", "Afternoon", "Evening"].contains(greeting.label))
+        XCTAssertTrue(["Morning", "Afternoon", "Evening", "Night"].contains(greeting.label))
         XCTAssertLessThan(greeting.frame.maxY, welcome.frame.minY)
         attachScreenshot(app, name: "Expanded Chat welcome title")
         let inputPosition = app.coordinate(withNormalizedOffset: .zero).withOffset(
@@ -2348,8 +2348,21 @@ final class MainsUITests: XCTestCase {
         app.buttons["mate-avatar-style-metal"].tap()
         checkAvatar("Silver")
         attachScreenshot(app, name: "New Mate – One-Eye Metal")
+        app.buttons["mate-avatar-style-specialists"].tap()
+        checkAvatar("Travel Planner")
+        attachScreenshot(app, name: "New Mate – Specialists")
+        let specialistMidpoint = CGPoint(x: app.frame.midX, y: carousel.frame.midY)
+        drag(from: specialistMidpoint, dx: -145)
+        checkAvatar("Kitchen Mate")
         app.buttons["mate-avatar-style-terminal"].tap()
         checkAvatar("Frost")
+        app.buttons["mate-avatar-style-specialists"].tap()
+        checkAvatar("Kitchen Mate")
+        drag(from: specialistMidpoint, dx: 145)
+        checkAvatar("Travel Planner")
+        drag(from: specialistMidpoint, dx: 145)
+        checkAvatar("Beach Palm")
+        attachScreenshot(app, name: "New Mate – Beach Palm")
 
         app.navigationBars["New Mate"].buttons["BackButton"].tap()
         XCTAssertTrue(mate.waitForExistence(timeout: 5))
@@ -4287,7 +4300,7 @@ final class MainsUITests: XCTestCase {
         let workspace = app.buttons["search-workspace-fixture-workspace"]
         XCTAssertTrue(workspace.exists)
         workspace.tap()
-        XCTAssertTrue(app.textFields["workspaceSearch"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 5))
         app.navigationBars.buttons.element(boundBy: 0).tap()
 
         openSidebar(app)
@@ -4409,15 +4422,16 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
-    func testWorkspaceListSearchOpenAndNewConversation() throws {
+    func testWorkspaceListOpensExistingChatsAndStartsNewOnesInPlace() async throws {
         continueAfterFailure = false
         let app = makeApplication()
         _ = pairFixture(app, code: "ios-test-workspace")
         chooseSidebarSpace("fixture-code", in: app)
         openSidebar(app)
         app.buttons["workspace-fixture-workspace"].tap()
-        let input = app.textFields["workspaceSearch"]
+        let input = app.textViews["homeMessageInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.textFields["workspaceSearch"].exists)
         let title = app.staticTexts["pageTitle"]
         XCTAssertTrue(title.exists)
         XCTAssertEqual(title.label, "mains")
@@ -4438,23 +4452,46 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "Native workspace – scrolled title")
         list.swipeDown()
         XCTAssertTrue(compactTitle.waitForNonExistence(timeout: 5))
-        input.tap(); input.typeText("Homepage")
-        XCTAssertTrue(app.buttons["conversation-workspace-third"].exists)
-        XCTAssertFalse(app.buttons["conversation-workspace-first"].exists)
-        app.buttons["closeWorkspaceSearch"].tap()
-        input.tap(); input.typeText("No matching title")
-        XCTAssertTrue(app.staticTexts["No runs match."].exists)
-        app.buttons["closeWorkspaceSearch"].tap()
         app.buttons["conversation-workspace-first"].tap()
         XCTAssertTrue(app.staticTexts["Hello from this workspace."].waitForExistence(timeout: 10))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(input.waitForExistence(timeout: 5))
-        app.buttons["newConversation"].tap()
-        XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["chooseTarget"].label.contains("mains"))
-        openSidebar(app)
-        XCTAssertTrue(app.buttons["sidebarMode-developer"].isSelected)
-        app.buttons["closeSidebar"].tap()
+
+        let prompt = "Review this workspace from its chat list"
+        input.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(list.exists)
+        XCTAssertFalse(compactTitle.exists)
+        input.typeText(prompt)
+        assertComposerAboveKeyboard(app)
+        attachScreenshot(app, name: "Native workspace – composing with list hidden")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["conversation-workspace-first"].exists)
+        XCTAssertEqual(input.value as? String, prompt)
+
+        input.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        app.buttons["startConversation"].tap()
+        let consent = app.buttons["allowDataSharing"]
+        if consent.waitForExistence(timeout: 3) { consent.tap() }
+        XCTAssertTrue(app.textViews["messageInput"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts[prompt].waitForExistence(timeout: 10))
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["openSidebar"].exists)
+        attachScreenshot(app, name: "Native workspace – chat started in place")
+        let url = try XCTUnwrap(URL(string: "http://127.0.0.1:18787/observations"))
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let calls = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let starts = calls.filter { $0["channel"] as? String == "runs:execute" }
+        XCTAssertEqual(starts.count, 1)
+        let arguments = try XCTUnwrap(starts.first?["args"] as? [[String: Any]])
+        XCTAssertEqual(arguments.first?["workspaceId"] as? String, "fixture-workspace")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["openSidebar"].waitForExistence(timeout: 5), "One Back tap returns from the workspace to Home.")
         forgetFixture(app)
     }
 
@@ -4825,8 +4862,10 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["main"].exists)
         attachScreenshot(app, name: "Native sidebar – Code tabs")
         app.buttons["workspace-fixture-workspace"].tap()
-        XCTAssertTrue(app.buttons["newConversation"].waitForExistence(timeout: 5))
-        app.buttons["newConversation"].tap()
+        XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["chooseTarget"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["chooseTarget"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["chooseTarget"].label.contains("mains"))
         app.buttons["chooseTarget"].tap()
         _ = targetWheel("mains", in: app)

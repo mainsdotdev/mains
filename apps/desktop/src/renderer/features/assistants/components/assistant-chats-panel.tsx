@@ -1,8 +1,8 @@
 import type { AssistantConversation } from "@mains/contracts/assistants";
 import { AsciiSpinner, Button, Text } from "@/components/ui";
-import { New } from "@/components/ui/icons";
 import { formatAbsoluteDate, formatCompactRelativeDate } from "@/lib/format-date";
 import { errorText } from "../lib/assistant-ui";
+import { AssistantPanelEmptyState, AssistantPanelSection } from "./assistant-panel-section";
 
 export function AssistantChatsPanel({ chats, selectedRunId, error, disabled, onSelect, onRetry }: {
   chats?: AssistantConversation[];
@@ -12,16 +12,13 @@ export function AssistantChatsPanel({ chats, selectedRunId, error, disabled, onS
   onSelect(runId: string): void;
   onRetry(): void;
 }) {
-  return <div className="space-y-3 pt-2">
-    <div className="flex justify-end">
-      <Button variant="primary" className="inline-flex shrink-0 gap-2" disabled={disabled} onClick={() => onSelect("new")}><New className="size-3.5" />New task</Button>
-    </div>
+  return <AssistantPanelSection action={{ label: "New task", disabled, onClick: () => onSelect("new") }}>
     {!!error && <div role="alert" className="rounded-2xl glass-card p-4">
       <p className="text-sm text-danger">{errorText(error)}</p>
       <Button variant="ghost" className="mt-2" onClick={onRetry}>Retry</Button>
     </div>}
     {!chats && !error && <div role="status" className="flex items-center gap-2 py-6 text-sm text-primary-600 dark:text-primary-400"><AsciiSpinner variant="inherit" />Loading chats…</div>}
-    {chats?.length === 0 && !error && <p className="rounded-2xl glass-card px-4 py-8 text-center text-sm leading-relaxed text-primary-600 dark:text-primary-400">No conversations yet. Start a new task to begin.</p>}
+    {chats?.length === 0 && !error && <AssistantPanelEmptyState>No conversations yet. Start a new task to begin.</AssistantPanelEmptyState>}
     {!!chats?.length && <ul aria-label="Mate chats" className="space-y-0.5">
       {chats.map(chat => {
         const active = chat.id === selectedRunId;
@@ -41,5 +38,5 @@ export function AssistantChatsPanel({ chats, selectedRunId, error, disabled, onS
       })}
     </ul>}
     {chats && chats.length >= 100 && <p className="text-xs text-primary-500">Showing the 100 most recently active chats.</p>}
-  </div>;
+  </AssistantPanelSection>;
 }

@@ -23,6 +23,10 @@ export function registerAssistantsIpc() {
     ipcMain.handle(CHANNELS.assistants.mobileMemory, handle(assistantsMobile.memory));
     ipcMain.handle(CHANNELS.assistants.mobileAssignments, handle(assistantsMobile.assignments));
     ipcMain.handle(CHANNELS.assistants.mobileRoutines, handle(assistantsMobile.routines));
+    ipcMain.handle(CHANNELS.assistants.mobileSkills, handle(assistantsMobile.skills));
+    ipcMain.handle(CHANNELS.assistants.mobileGenerateSkill, handle(assistantsMobile.generateSkill));
+    ipcMain.handle(CHANNELS.assistants.mobileSaveSkill, handle((accountId: string, id: string, draft: unknown) =>
+        changed(() => assistantsMobile.saveSkill(accountId, id, draft))));
     ipcMain.handle(CHANNELS.assistants.mobileManage, handle(async (accountId: string, mateId: string, change: unknown, requestId: string) => {
         await changed(() => assistantsMobile.manage(accountId, mateId, change, requestId));
         return { accepted: true };

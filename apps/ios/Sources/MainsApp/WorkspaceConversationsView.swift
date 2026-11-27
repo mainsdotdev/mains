@@ -11,10 +11,18 @@ struct TargetConversationsView: View {
     }
     let target: Target
     let openConversation: (String) -> Void
-    let startConversation: () -> Void
+    var startConversation: () -> Void = {}
+    var onWorkspaceChatCreated: ((String) -> Void)? = nil
+    var isCurrentWorkspace: () -> Bool = { false }
     @State private var query = ""
     @State private var chatAction: ConversationActionRequest?
+    @State private var composerFocused = false
+    @State private var visible = false
+    @State private var modelSheet = false
+    @State private var optionsSheet = false
+    @State private var consent: ConsentContext?
     @FocusState private var searching: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var workspace: Workspace? {
         guard case .workspace(let id) = target else { return nil }
         return session.workspaces.first { $0.id == id }
@@ -48,20 +56,75 @@ struct TargetConversationsView: View {
         case .project(let id): run.collectionId == id
         }
     }
-    private var canStart: Bool {
-        guard let mode = session.selectedSpace?.mode else { return false }
-        switch target {
-        case .workspace: return workspace != nil && workspace?.isReplica != true && mode == "developer" && gitState?.pathExists != false
-        case .project: return project != nil && (mode == "work" || mode == "chat")
-        }
+    private var workspaceSpace: Space? {
+        guard let workspace, workspace.isReplica != true,
+              let space = session.selectedSpace, space.mode == "developer" else { return nil }
+        return space
+    }
+    private var canStartProjectChat: Bool {
+        project != nil && (session.selectedSpace?.mode == "work" || session.selectedSpace?.mode == "chat")
     }
     private var emptyMessage: LocalizedStringKey {
-        if isWorkspace { return query.isEmpty ? "No runs in this workspace yet." : "No runs match." }
+        if isWorkspace { return "No runs in this workspace yet." }
         return query.isEmpty ? "No chats in this project yet." : "No chats match."
     }
     var body: some View {
-        let runs = self.runs
         Group {
+            if isWorkspace {
+                let space = workspaceSpace
+                listScreen
+                    .composerInset { editorExpanded in
+                        if let workspace, let space {
+                            let isCurrent = { visible && workspaceSpace?.id == space.id && isCurrentWorkspace() }
+                            HomeComposerArea(session: session, space: space, targetPicker: .constant(false),
+                                             modelSheet: $modelSheet, optionsSheet: $optionsSheet, consent: $consent,
+                                             editorExpanded: editorExpanded, fixedWorkspace: workspace,
+                                             focusChanged: { composerFocused = $0 }, isCurrent: isCurrent,
+                                             onCreated: { id in
+                                if isCurrent() { onWorkspaceChatCreated?(id) }
+                            })
+                            .id(space.id)
+                            .onDisappear { composerFocused = false }
+                        }
+                    }
+                    .composerPickers(model: $modelSheet, options: $optionsSheet, session: session,
+                                     context: space.map { ComposerContext(space: $0, workspace: workspace) })
+                    .task(id: "\(space?.providerId ?? ""):\(session.isConnected)") {
+                        if let space { await session.loadModels(space.providerId) }
+                    }
+            } else {
+                listScreen.safeAreaInset(edge: .bottom, spacing: 0) { projectBottomBar }
+            }
+        }
+        .onAppear { visible = true }
+        .onDisappear { visible = false; composerFocused = false }
+        .modifier(ConversationActionPrompts(session: session, request: $chatAction))
+    }
+
+    private var listScreen: some View {
+        ZStack {
+            if !composerFocused {
+                conversationReader
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -8)))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.easeInOut(duration: 0.2), value: composerFocused)
+        .allowsHitTesting(!composerFocused)
+        .accessibilityHidden(composerFocused)
+        .overlay {
+            if composerFocused { KeyboardDismissBackground() }
+        }
+        .background(Color(.systemBackground))
+        .navigationHeaderFade()
+        .scrollDismissesKeyboard(.interactively)
+        .scrollingNavigationTitle(title, hidden: composerFocused)
+        .toolbar(.visible, for: .navigationBar)
+    }
+
+    private var conversationReader: some View {
+        let runs = self.runs
+        return Group {
             if runs.isEmpty {
                 EmptyStateLayout {
                     targetHeader.padding(.horizontal, 16).padding(.top, 8)
@@ -74,14 +137,7 @@ struct TargetConversationsView: View {
             }
         }
         .accessibilityIdentifier("targetConversationList")
-        .background(Color(.systemBackground))
-        .navigationHeaderFade()
-        .scrollDismissesKeyboard(.interactively)
-        .scrollingNavigationTitle(title)
-        .toolbar(.visible, for: .navigationBar)
-        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         .pullToRefresh { await session.refresh() }
-        .modifier(ConversationActionPrompts(session: session, request: $chatAction))
     }
 
     private var targetHeader: some View {
@@ -121,32 +177,29 @@ struct TargetConversationsView: View {
             }
         }
     }
-    private var bottomBar: some View {
+    private var projectBottomBar: some View {
         HStack(spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").font(.system(size: 18)).foregroundStyle(.secondary)
-                TextField(isWorkspace ? "Search runs" : "Search chats", text: $query)
+                TextField("Search chats", text: $query)
                     .font(.body).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .submitLabel(.search).focused($searching).accessibilityIdentifier(isWorkspace ? "workspaceSearch" : "projectSearch")
+                    .submitLabel(.search).focused($searching).accessibilityIdentifier("projectSearch")
             }.padding(.horizontal, 16).frame(height: 52).modifier(GlassSurface(radius: 26))
             if searching || !query.isEmpty {
                 RoundControl(symbol: "xmark", label: "Close search", size: 52) { query = ""; searching = false }
-                    .accessibilityIdentifier(isWorkspace ? "closeWorkspaceSearch" : "closeProjectSearch")
-            } else if workspace?.isReplica != true {
+                    .accessibilityIdentifier("closeProjectSearch")
+            } else {
                 Button {
-                    guard canStart, let space = session.selectedSpace else { return }
+                    guard canStartProjectChat, let space = session.selectedSpace, let project else { return }
                     searching = false
                     var target = session.homeTargets[space.id] ?? HomeTarget()
-                    switch self.target {
-                    case .workspace(let id): target.workspaceID = id
-                    case .project(let id): target.collectionID = id
-                    }
+                    target.collectionID = project.id
                     session.selectTarget(target, spaceID: space.id)
                     startConversation()
                 } label: {
                     Image(systemName: "square.and.pencil").font(.system(size: 22))
                         .foregroundStyle(.white).frame(width: 52, height: 52).background(AppBrand.accent, in: .circle)
-                }.buttonStyle(ChatPressStyle()).disabled(!canStart)
+                }.buttonStyle(ChatPressStyle()).disabled(!canStartProjectChat)
                     .accessibilityLabel("New conversation").accessibilityIdentifier("newConversation")
             }
         }.padding(.horizontal, 16).padding(.vertical, 8)

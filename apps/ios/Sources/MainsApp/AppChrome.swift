@@ -21,8 +21,8 @@ extension View {
         modifier(NavigationHeaderFade(background: background, coversSafeAreaAtRest: coversSafeAreaAtRest, height: height))
     }
 
-    func scrollingNavigationTitle(_ title: LocalizedStringKey) -> some View {
-        modifier(ScrollingNavigationTitle(title: title))
+    func scrollingNavigationTitle(_ title: LocalizedStringKey, hidden: Bool = false) -> some View {
+        modifier(ScrollingNavigationTitle(title: title, hidden: hidden))
     }
 
     func expandedNavigationTitle(_ title: String) -> some View {
@@ -316,13 +316,14 @@ private struct ScrollingNavigationTitle: ViewModifier {
     @ObserveHotReload private var hotReload
     #endif
     let title: LocalizedStringKey
+    let hidden: Bool
     @State private var titleVisible = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
             .environment(\.pageTitleVisible, $titleVisible)
-            .navigationTitle(title)
+            .navigationTitle(hidden ? "" : title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
@@ -330,11 +331,11 @@ private struct ScrollingNavigationTitle: ViewModifier {
                     let label = Text(title).font(.headline.weight(.medium).width(.expanded)).lineLimit(1)
                     label.hidden().accessibilityHidden(true)
                         .overlay {
-                            if !titleVisible {
+                            if !titleVisible && !hidden {
                                 label.accessibilityIdentifier("inlinePageTitle").transition(.opacity)
                             }
                         }
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: titleVisible)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: !titleVisible && !hidden)
                 }.sharedBackgroundVisibility(.hidden)
             }
     }

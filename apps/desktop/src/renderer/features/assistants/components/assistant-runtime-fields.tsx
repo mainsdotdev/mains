@@ -14,6 +14,8 @@ const approvalOptions = [
   { value: "never", label: "Never", description: "Run within the configured permissions without asking for escalation" },
 ] satisfies Array<{ value: MateCodexApprovalMode; label: string; description: string }>;
 
+const permissionSelectClassName = "ml-auto min-w-[min(100%,15rem)] max-w-full";
+
 export interface AssistantRuntimeDraft {
   skillIds: string[];
   permissionMode: string;
@@ -62,19 +64,22 @@ export function AssistantRuntimeFields({ assistant, draft, canManageSkills, disa
       <h3 className="font-semibold text-primary-950 dark:text-primary-50">Permissions</h3>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-primary-600 dark:text-primary-300">{codex ? "Sandbox or profile" : "Permission mode"}</span>
-        {draft ? <Select size="sm" aria-label={codex ? "Mate sandbox or profile" : "Mate permission mode"}
-          value={settings.permissionMode} placeholder={permissionLabel} options={selectable}
-          disabled={disabled || codex && (!permissions.currentData || !!permissions.error)} onChange={selectPermission} /> : <span>{permissionLabel}</span>}
+        {draft ? <div className={permissionSelectClassName}>
+          <Select size="sm" aria-label={codex ? "Mate sandbox or profile" : "Mate permission mode"}
+            value={settings.permissionMode} placeholder={permissionLabel} options={selectable}
+            disabled={disabled || codex && (!permissions.currentData || !!permissions.error)} onChange={selectPermission} />
+        </div> : <span>{permissionLabel}</span>}
       </div>
       {codex && <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-primary-600 dark:text-primary-300">Approval policy</span>
-        {draft ? <Select size="sm" aria-label="Mate approval policy" value={settings.codexApprovalMode ?? ""}
-          placeholder={approvalLabel} disabled={disabled || !permissions.currentData || !!permissions.error}
-          options={[
-            ...(!allowedApprovals || allowedApprovals.includes(providerApproval) ? [{ value: "", label: `Use provider setting (${approvalLabelFor(providerApproval)})` }] : []),
-            ...approvalOptions.filter(option => !allowedApprovals || allowedApprovals.includes(option.value)),
-          ]} onChange={value => onChange({ codexApprovalMode: approvalOptions.find(option => option.value === value)?.value ?? null })} />
-          : <span>{approvalLabel}{settings.codexApprovalMode === null ? " · Provider setting" : ""}</span>}
+        {draft ? <div className={permissionSelectClassName}>
+          <Select size="sm" aria-label="Mate approval policy" value={settings.codexApprovalMode ?? ""}
+            placeholder={approvalLabel} disabled={disabled || !permissions.currentData || !!permissions.error}
+            options={[
+              ...(!allowedApprovals || allowedApprovals.includes(providerApproval) ? [{ value: "", label: `Use provider setting (${approvalLabelFor(providerApproval)})` }] : []),
+              ...approvalOptions.filter(option => !allowedApprovals || allowedApprovals.includes(option.value)),
+            ]} onChange={value => onChange({ codexApprovalMode: approvalOptions.find(option => option.value === value)?.value ?? null })} />
+        </div> : <span>{approvalLabel}{settings.codexApprovalMode === null ? " · Provider setting" : ""}</span>}
       </div>}
       {draft && !!permissions.error && <div className="flex items-center justify-between gap-2 text-xs">
         <span role="status">Couldn’t load Codex permissions.</span>

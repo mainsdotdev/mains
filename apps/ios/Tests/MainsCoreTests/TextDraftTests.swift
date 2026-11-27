@@ -45,10 +45,14 @@ private func pairing(_ backend: String = "computer", device: String = "phone") -
     let draft = first.draft(for: "old-chat")
     draft.text = "Unsent 👋"; draft.attachments = [PromptAttachment(name: "secret.pdf", type: "document", mimeType: "application/pdf", bytes: Data([1]))]
     first.homeDraft(for: "space").text = "A separate home draft"
+    first.homeDraft(for: "space", workspaceID: "workspace").text = "A separate workspace draft"
     let reopened = BackendSession(storage: storage); await reopened.restore()
     let restored = reopened.draft(for: "old-chat")
     #expect(restored.text == "Unsent 👋" && restored.attachments.isEmpty && restored.contextSkills.isEmpty)
     #expect(reopened.homeDraft(for: "space").text == "A separate home draft")
+    #expect(reopened.homeDraft(for: "space", workspaceID: "workspace").text == "A separate workspace draft")
+    #expect(reopened.homeDraft(for: "space", workspaceID: "another-workspace").text.isEmpty)
+    #expect(reopened.homeDraft(for: "another-space", workspaceID: "workspace").text.isEmpty)
     let sent = try #require(restored.begin())
     let duringSend = BackendSession(storage: storage); await duringSend.restore()
     #expect(duringSend.draft(for: "old-chat").text.isEmpty)
@@ -79,6 +83,7 @@ private func pairing(_ backend: String = "computer", device: String = "phone") -
     let demo = BackendSession(storage: storage)
     try demo.startDemo(); defer { demo.exitDemo() }
     demo.homeDraft(for: "codex").text = "Demo text"
+    demo.homeDraft(for: "codex", workspaceID: "work").text = "Demo workspace text"
     demo.draft(for: DemoBackend.tourID).text = "Demo conversation"
     #expect(storage.draftTexts.isEmpty)
 }

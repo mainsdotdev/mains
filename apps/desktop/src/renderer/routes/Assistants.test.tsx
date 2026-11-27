@@ -49,7 +49,9 @@ vi.mock("@/lib/redux/api", () => ({
   useGetAccountQuery: () => ({ data: { id: "account" } }),
   useGetProvidersQuery: () => ({ data: [{ id: "codex", isEnabled: true }] }),
   useGetSpacesQuery: () => ({ data: [{ id: "codex", accountId: "account", providerId: "codex", isArchived: false }] }),
-  useGetProviderModelsQuery: () => ({ currentData: mocks.models, isFetching: false }),
+  useGetProviderModelsQuery: (_providerId: string, options?: { skip?: boolean }) => ({
+    currentData: options?.skip ? undefined : mocks.models, isFetching: false,
+  }),
 }));
 vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantOverviewQuery: () => ({ currentData: { assistants: mocks.assistants, teams: mocks.teams, assignments, memories: [], welcomes }, refetch: vi.fn() }),
@@ -508,10 +510,9 @@ describe("assistant profile and conversation", () => {
     const panel = await screen.findByRole("complementary", { name: "About Release" });
     const edit = within(panel).getByRole("button", { name: "Edit" });
     const archive = within(panel).getByRole("button", { name: "Archive mate" });
-    expect(archive.nextElementSibling).toBe(edit);
-    const openEditor = new MouseEvent("click", { bubbles: true, cancelable: true });
-    fireEvent(edit, openEditor);
-    expect(openEditor.defaultPrevented).toBe(true);
+    expect(edit.compareDocumentPosition(archive) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(edit.getAttribute("type")).toBe("button");
+    fireEvent.click(edit);
     const form = within(panel).getByRole("form", { name: "Edit mate profile" });
     const save = within(form).getByRole("button", { name: "Save" });
     expect(save).not.toBe(edit);
@@ -524,6 +525,7 @@ describe("assistant profile and conversation", () => {
     fireEvent.click(within(form).getByRole("radio", { name: "Coral Kite" }));
     fireEvent.click(save);
     await waitFor(() => expect(within(panel).queryByRole("form", { name: "Edit mate profile" })).toBeNull());
+    expect(document.activeElement).toBe(within(panel).getByRole("button", { name: "Edit" }));
     expect(updateProfile).toHaveBeenCalledExactlyOnceWith({
       accountId: "account", id: "release",
       expectedProfile: { name: "Release", description: "Own releases", instructions: "Verify the release before distribution.", avatar: { shape: "sphere", color: "blue" } },
@@ -534,18 +536,27 @@ describe("assistant profile and conversation", () => {
     expect(screen.getByTestId("conversation").textContent).toBe("first");
   });
 
-  it("saves a model and compatible effort from the same Mate profile editor", async () => {
+  it("shows Claude model versions in Details and saves the selected id and compatible effort", async () => {
+    const assistant = mocks.assistants[0];
+    assistant.providerId = "claude_code";
+    assistant.model = "opus";
+    assistant.spaceSnapshot = { ...assistant.spaceSnapshot, name: "Claude" };
+    mocks.models = [
+      { id: "opus", displayName: "Opus", description: "Opus 5.5 · Complex work", supportedEffortLevels: ["low", "medium", "high"] },
+      { id: "fable", displayName: "Fable", description: "Fable 5.2 · Creative work", supportedEffortLevels: ["low", "xhigh"] },
+    ];
     setup("/assistants?assistant=release&run=first&tab=profile");
     const panel = await screen.findByRole("complementary", { name: "About Release" });
+    expect(within(panel).getByText("Opus 5.5", { exact: true })).toBeTruthy();
     fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
     const form = within(panel).getByRole("form", { name: "Edit mate profile" });
     const model = within(form).getByRole("button", { name: "Model" });
     const effort = within(form).getByRole("button", { name: "Effort" });
-    expect(model.textContent).toContain("Test model");
+    expect(model.textContent).toContain("Opus 5.5");
     expect(effort.textContent).toContain("High");
 
     fireEvent.click(model);
-    fireEvent.click(await screen.findByRole("option", { name: "New model" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Fable 5.2" }));
     expect(effort.textContent).toContain("Extra High");
     fireEvent.click(effort);
     const low = await screen.findByRole("option", { name: "Low" });
@@ -559,9 +570,9 @@ describe("assistant profile and conversation", () => {
     expect(updateProfile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       id: "release",
       profile: expect.objectContaining({ description: "Checks signing" }),
-      modelChange: { model: "new-model", effort: "low", expectedModel: "model", expectedEffort: "high" },
+      modelChange: { model: "fable", effort: "low", expectedModel: "opus", expectedEffort: "high" },
     }));
-    expect(within(panel).getByText("new-model", { exact: true })).toBeTruthy();
+    expect(within(panel).getByText("Fable 5.2", { exact: true })).toBeTruthy();
     expect(screen.getByTestId("conversation").textContent).toBe("first");
   });
 
@@ -610,6 +621,7 @@ describe("assistant profile and conversation", () => {
     expect(skills.getByRole("heading", { name: "Release Skills" })).toBeTruthy();
     expect(skills.getByText("No skills assigned")).toBeTruthy();
     expect(skills.getByRole("button", { name: "Import SKILL.md" })).toBeTruthy();
+    expect(skills.queryByRole("button", { name: /Unavailable skills/ })).toBeNull();
     fireEvent.click(skills.getByRole("button", { name: "Create with Mains" }));
     fireEvent.change(skills.getByRole("textbox", { name: "Skill workflow" }), { target: { value: "Compare cheap flights" } });
     fireEvent.click(skills.getByRole("button", { name: "Generate draft" }));
@@ -656,20 +668,36 @@ describe("assistant profile and conversation", () => {
     }
   });
 
-  it("shows available assignments and keeps unavailable skills behind a separate disclosure", async () => {
+  it("switches the skills section in place from the warning next to New skill", async () => {
     mocks.assistants[0].skills = [...catalogSkills, { id: "missing", name: "Meeting prep", description: "Prepare meetings and follow-ups" }];
     setup("/assistants?assistant=release&run=first&tab=profile");
     fireEvent.click(await screen.findByRole("button", { name: "Expand Skills" }));
     const skills = within(screen.getByRole("dialog", { name: "Skills" }));
+    const modalHeading = skills.getByRole("heading", { name: "Skills" });
+    const sectionHeading = skills.getByRole("heading", { name: "Release Skills" });
     expect(skills.getByText("Travel research")).toBeTruthy();
-    expect(skills.getByRole("button", { name: "New skill" })).toBeTruthy();
+    const newSkill = skills.getByRole("button", { name: "New skill" });
     const unavailable = skills.getByRole("button", { name: "Unavailable skills, 1" });
-    expect(unavailable.getAttribute("aria-expanded")).toBe("false");
+    expect(unavailable.compareDocumentPosition(newSkill) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(skills.queryByRole("button", { name: "Remove Meeting prep" })).toBeNull();
     fireEvent.click(unavailable);
-    expect(unavailable.getAttribute("aria-expanded")).toBe("true");
-    expect(skills.getByText("Prepare meetings and follow-ups")).toBeTruthy();
+    expect(skills.getByRole("heading", { name: "Skills" })).toBe(modalHeading);
+    expect(skills.getByRole("heading", { name: "Unavailable skills" })).toBe(sectionHeading);
+    expect(skills.getByRole("button", { name: "New skill" })).toBe(newSkill);
+    expect(skills.queryByText("Travel research")).toBeNull();
+    expect(skills.queryByRole("button", { name: "Add skills" })).toBeNull();
+    expect(skills.getByRole("list", { name: "Unavailable skill list" }).textContent).toContain("Prepare meetings and follow-ups");
+
+    const back = skills.getByRole("button", { name: "Back to Skills" });
+    expect(back).toBe(unavailable);
+    expect(document.activeElement).toBe(back);
+    fireEvent.click(back);
+    const restoredWarning = skills.getByRole("button", { name: "Unavailable skills, 1" });
+    expect(document.activeElement).toBe(restoredWarning);
+    expect(skills.getByRole("heading", { name: "Release Skills" })).toBe(sectionHeading);
+    fireEvent.click(restoredWarning);
     fireEvent.click(skills.getByRole("button", { name: "Remove Meeting prep" }));
+
     expect(skills.queryByRole("button", { name: /Unavailable skills/ })).toBeNull();
     expect(skills.getByRole("button", { name: "Save changes" })).toBeTruthy();
     expect(updateProfile).not.toHaveBeenCalled();
@@ -679,17 +707,27 @@ describe("assistant profile and conversation", () => {
     catalogSkills.push(
       { id: "second", name: "Review notes", description: "Review notes" },
       { id: "third", name: "Plan meetings", description: "Plan meetings" },
+      { id: "fourth", name: "Prepare slides", description: "Prepare slides" },
+      { id: "fifth", name: "Write summary", description: "Write summary" },
     );
     mocks.assistants[0].skills = [...catalogSkills];
     setup("/assistants?assistant=release&run=first&tab=profile");
     fireEvent.click(await screen.findByRole("button", { name: "Expand Skills" }));
     const list = screen.getByRole("list", { name: "Active skills" });
-    Object.defineProperties(list, { clientHeight: { value: 136 }, scrollHeight: { value: 208 } });
+    Object.defineProperties(list, {
+      clientHeight: { value: 242 },
+      scrollHeight: { get: () => list.childElementCount * 56 + (list.childElementCount - 1) * 6 },
+    });
     fireEvent.scroll(list);
     expect(list.className).toContain("mask-image");
-    list.scrollTop = 72;
+    expect(list.getAttribute("tabindex")).toBe("0");
+    list.scrollTop = 62;
     fireEvent.scroll(list);
     expect(list.className).not.toContain("mask-image");
+
+    fireEvent.click(within(list).getByRole("button", { name: "Remove Write summary" }));
+    expect(list.className).not.toContain("mask-image");
+    expect(list.getAttribute("tabindex")).toBeNull();
   });
 
   it("keeps the draft on save failure and lets the user cancel it", async () => {
@@ -838,7 +876,7 @@ describe("assistant profile and conversation", () => {
     expect(panel.classList.contains("rounded-2xl")).toBe(true);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(within(panel).getByText("Verify the release before distribution.")).toBeTruthy();
-    expect(within(panel).getByText("model", { exact: true })).toBeTruthy();
+    expect(within(panel).getByText("Test model", { exact: true })).toBeTruthy();
     expect(screen.getByTestId("conversation").closest("[inert]")).toBeNull();
     expect(document.activeElement).toBe(within(panel).getByRole("button", { name: "Close mate panel" }));
     fireEvent.click(within(panel).getByRole("tab", { name: "Memory" }));

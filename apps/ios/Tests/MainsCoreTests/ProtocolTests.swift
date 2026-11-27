@@ -2,6 +2,54 @@ import Foundation
 import Testing
 @testable import MainsCore
 
+@Test(arguments: ["codex", "claude_code"])
+func mateChatProfileAcceptsUndefinedApprovalOverrides(provider: String) throws {
+    let undefined: JSONValue = .object(["$undefined": .bool(true)])
+    let providerApproval: JSONValue = provider == "codex" ? .string("on-request") : undefined
+    let directory = try JSONValue.object([
+        "teams": .array([]),
+        "mates": .array([.object([
+            "id": .string("mate"), "name": .string("Reviewer"), "description": .string(""),
+            "avatar": .object(["shape": .string("robot"), "color": .string("#123456")]),
+            "providerId": .string(provider), "model": .string("test-model"), "needsSetup": .bool(false),
+            "details": .object([
+                "spaceName": .string("Work"), "effort": .string("high"), "instructions": .string("Review releases."),
+                "runtime": .object([
+                    "skills": .array([]), "permissionMode": .string(provider == "codex" ? "workspace-write" : "default"),
+                    "codexApprovalMode": undefined, "providerApprovalMode": providerApproval,
+                ]),
+            ]),
+        ])]),
+    ]).decode(MateDirectory.self)
+    let mate = try #require(directory.mates.first)
+    let runtime = try #require(mate.details?.runtime)
+    #expect(mate.ready)
+    #expect(runtime.codexApprovalMode == nil)
+    #expect(runtime.providerApprovalMode == providerApproval.string)
+}
+
+@Test func mateRuntimeSettingsKeepOldDetailsAndEncodeExpectedValues() throws {
+    let details = try JSONValue.object(["spaceName": .string("Work"), "effort": .string("high"),
+                                        "instructions": .string("Review the release.")]).decode(MateDetails.self)
+    #expect(details.runtime == nil)
+    let profile = try JSONValue.object([
+        "name": .string("Reviewer"), "description": .string("Reviews releases"),
+        "instructions": .string(details.instructions), "avatar": .object(["shape": .string("robot"), "color": .string("#123456")]),
+    ]).decode(MateEditableProfile.self)
+    let id = String(repeating: "a", count: 64)
+    let skills = MateSkillChange(ids: [id], expectedIds: [])
+    let codex = MatePermissionChange(mode: "read-only", expectedMode: "workspace-write", codex: true,
+                                     approvalMode: nil, expectedApprovalMode: "untrusted")
+    let payload = try MateChange.updateProfile(profile, original: profile, teamID: nil, originalTeamID: nil,
+                                               skillChange: skills, permissionChange: codex).payload()
+    #expect(payload["skillChange"] == .object(["ids": .array([.string(id)]), "expectedIds": .array([])]))
+    #expect(payload["permissionChange"] == .object(["mode": .string("read-only"), "expectedMode": .string("workspace-write"),
+                                                    "approvalMode": .null, "expectedApprovalMode": .string("untrusted")]))
+    let claude = MatePermissionChange(mode: "acceptEdits", expectedMode: "default", codex: false,
+                                      approvalMode: nil, expectedApprovalMode: nil)
+    #expect(claude.payload == .object(["mode": .string("acceptEdits"), "expectedMode": .string("default")]))
+}
+
 @Test func conversationTitlesMatchDesktopWhitespaceAndUntitledFallback() throws {
     for (title, expected) in [(nil, "Untitled chat"), ("", "Untitled chat"), (" \n\t", "Untitled chat"),
                               ("  Hallo  ", "Hallo"), ("Hey, naber", "Hey, naber"), ("🌍 İstanbul", "🌍 İstanbul")] as [(String?, String)] {

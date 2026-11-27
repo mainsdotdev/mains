@@ -1,5 +1,6 @@
 import type { AssistantRobotShape } from "@mains/contracts/assistants";
 import { ellipse, plate, rectangle, roundedProfile, type Point, type RobotPart } from "./assistant-robot-mesh";
+import { SPECIALIST_MODELS } from "./assistant-specialist-models";
 
 type TerminalPreset = {
   outline: readonly Point[];
@@ -187,6 +188,7 @@ function metalShell(preset: typeof METAL_SHELLS[keyof typeof METAL_SHELLS]): Rob
 
 type RobotFactory = () => RobotPart[];
 const MODELS: Record<AssistantRobotShape, RobotFactory> = {
+  ...SPECIALIST_MODELS,
   "terminal-amber": () => terminal(TERMINALS["terminal-amber"]),
   "terminal-teal": () => terminal(TERMINALS["terminal-teal"]),
   "terminal-cherry": () => terminal(TERMINALS["terminal-cherry"]),

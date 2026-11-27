@@ -24,6 +24,10 @@ struct AppShell: View {
     #endif
     private enum ActivityWatch { case hidden, events, polling }
     private enum DrawerCoordinateSpace: Hashable { case shell }
+    private struct WorkspaceChat {
+        let workspaceID: String
+        let runID: String
+    }
 
     let session: BackendSession
     let openPairing: () -> Void
@@ -31,6 +35,7 @@ struct AppShell: View {
     @State private var showingArchivedMates = false
     @State private var newMateDraft = NewMateDraft()
     @State private var homeRunID: String?
+    @State private var workspaceChat: WorkspaceChat?
     @State private var drawerOpen = false
     @State private var drag: CGFloat = 0
     @GestureState private var closingDragActive = false
@@ -114,8 +119,23 @@ struct AppShell: View {
                                     onNew: { newConversation(from: id) }, onFork: { path.append(.conversation($0)) }, initialCursor: cursor,
                                     onNavigate: { path.append($0) })
                                     .id("\(session.ownership):\(id):\(cursor.timestamp):\(cursor.id)")
-                                case .workspace(let id): TargetConversationsView(session: session, target: .workspace(id),
-                                    openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
+                                case .workspace(let id):
+                                    if let workspaceChat, workspaceChat.workspaceID == id {
+                                        let runID = workspaceChat.runID
+                                        ConversationView(session: session, runID: runID, openComputer: showSettings,
+                                                         onNew: { self.workspaceChat = nil }, onFork: { path.append(.conversation($0)) },
+                                                         onNavigate: { path.append($0) })
+                                            .id("\(session.ownership):\(runID)")
+                                    } else {
+                                        TargetConversationsView(session: session, target: .workspace(id),
+                                            openConversation: { path.append(.conversation($0)) },
+                                            onWorkspaceChatCreated: { runID in
+                                                var transaction = Transaction(animation: nil)
+                                                transaction.disablesAnimations = true
+                                                withTransaction(transaction) { workspaceChat = WorkspaceChat(workspaceID: id, runID: runID) }
+                                            }, isCurrentWorkspace: { path.last == route && mainPaneInteractive })
+                                            .id("\(session.ownership):workspace:\(id)")
+                                    }
                                 case .project(let id): TargetConversationsView(session: session, target: .project(id),
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
                                 case .settings: ComputerView(session: session)
@@ -301,6 +321,7 @@ struct AppShell: View {
         .onChange(of: session.retiredConversation) { _, retired in
             guard let retired else { return }
             if homeRunID == retired.runID { homeRunID = nil }
+            if workspaceChat?.runID == retired.runID { workspaceChat = nil }
             path.removeAll { route in
                 switch route {
                 case .conversation(let id, _), .searchMessage(let id, _): id == retired.runID
@@ -319,9 +340,12 @@ struct AppShell: View {
             resetSearch()
             showingArchivedMates = false
             drawerSnapshot = nil
-            path = []; homeRunID = nil; drawerOpen = false
+            path = []; homeRunID = nil; workspaceChat = nil; drawerOpen = false
         }
-        .onChange(of: path) { _, _ in drawerSnapshot = nil }
+        .onChange(of: path) { _, path in
+            drawerSnapshot = nil
+            if let workspaceChat, !path.contains(.workspace(workspaceChat.workspaceID)) { self.workspaceChat = nil }
+        }
         .onChange(of: homeRunID) { _, _ in drawerSnapshot = nil }
         .onChange(of: reduceMotion) { _, _ in drawerSnapshot = nil }
     }
@@ -380,6 +404,7 @@ struct AppShell: View {
     private var preparingVoiceHere: Bool {
         guard mainPaneInteractive else { return false }
         if let mate = session.voiceMate { return path.last == .mate(mate.id) }
+        if case .workspace = path.last { return workspaceChat == nil && session.voiceSpaceID == session.selectedSpaceID }
         return path.isEmpty && homeRunID == nil && session.voiceSpaceID == session.selectedSpaceID
     }
 
@@ -387,7 +412,8 @@ struct AppShell: View {
         guard mainPaneInteractive else { return nil }
         switch path.last {
         case .conversation(let id, _), .searchMessage(let id, _): return id
-        case .workspace, .project, .settings, .workInbox, .atlas, .atlasPage, .mates, .newMate, .creatingMate, .mate, .mateInfo: return nil
+        case .workspace(let id): return workspaceChat?.workspaceID == id ? workspaceChat?.runID : nil
+        case .project, .settings, .workInbox, .atlas, .atlasPage, .mates, .newMate, .creatingMate, .mate, .mateInfo: return nil
         case nil: return homeRunID
         }
     }
@@ -411,6 +437,9 @@ struct AppShell: View {
         if let mateID = session.conversations.first(where: { $0.id == runID })?.assistantId {
             if path.dropLast().last == .mate(mateID) { path.removeLast() }
             else { open(.mate(mateID)) }
+        } else if case .workspace = path.dropLast().last {
+            workspaceChat = nil
+            path.removeLast()
         } else { goHome() }
     }
     private func startSidebarConversation(in spaceID: String) {
@@ -471,6 +500,7 @@ struct AppShell: View {
                 target.workspaceID = id; session.selectTarget(target, spaceID: space.id)
             }
         }
+        workspaceChat = nil
         path = [route]; closeDrawerAfterNavigation()
     }
     private func showSearch() {
@@ -510,7 +540,7 @@ struct AppShell: View {
         searchTransitionID += 1
         searchExpanded = false; searchMounted = false
     }
-    private func goHome() { leaveCurrentConversation(); path = []; homeRunID = nil; closeDrawerAfterNavigation() }
+    private func goHome() { leaveCurrentConversation(); path = []; homeRunID = nil; workspaceChat = nil; closeDrawerAfterNavigation() }
     private func leaveCurrentConversation() {
         if let runID = session.viewingRunID { session.leaveConversation(runID) }
     }
