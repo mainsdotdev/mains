@@ -29,6 +29,9 @@ struct SidebarView: View {
     @State private var workspaceToDelete: WorkspaceDeletion?
     @State private var providersExpanded = false
     @State private var providerScrollPosition = ScrollPosition(edge: .leading)
+    @AppStorage("hasSeenSidebarOnboarding") private var hasSeenSidebarOnboarding = false
+    @State private var showsProviderTip = false
+    @State private var previewsProviderStrip = false
     @Namespace private var modeSelection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -36,6 +39,7 @@ struct SidebarView: View {
     @ScaledMetric(relativeTo: .title3) private var shortcutIconSize: CGFloat = 24
     static let controlInset: CGFloat = 16
     static let headerDiscSize: CGFloat = 40
+    static let openingDuration: TimeInterval = 0.28
     private static let bottomBarHeight: CGFloat = 48
     private static let utilityControlWidth: CGFloat = 48
     private let menuInset: CGFloat = 12
@@ -48,6 +52,7 @@ struct SidebarView: View {
     private var modes: [String] { space.map { Experience.modes(for: $0.providerId) } ?? [] }
     private var otherSpaces: [Space] { session.spaces.filter { $0.id != space?.id } }
     private var controlAnimation: Animation? { reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 1) }
+    private var tipAnimation: Animation? { reduceMotion ? nil : .easeInOut(duration: 0.24) }
     private var chats: [Conversation] {
         session.conversations.filter { $0.assistantId == nil && $0.providerId == space?.providerId && $0.mode == space?.mode }
     }
@@ -93,12 +98,31 @@ struct SidebarView: View {
             }
         }
         .frame(width: layoutWidth)
+        .background(alignment: .center) {
+            if showsProviderTip {
+                Rectangle().fill(.clear).contentShape(.rect)
+                    .accessibilityHidden(true)
+            }
+        }
+        .simultaneousGesture(TapGesture().onEnded { dismissProviderTip() }, isEnabled: showsProviderTip)
+        .task(id: showsProviderTip) {
+            guard showsProviderTip, !reduceMotion else { return }
+            try? await Task.sleep(for: .milliseconds(750))
+            guard !Task.isCancelled, showsProviderTip, !reduceMotion else { return }
+            providerScrollPosition.scrollTo(edge: .leading)
+            previewsProviderStrip = true
+            try? await Task.sleep(for: .milliseconds(1_050))
+            if !Task.isCancelled { previewsProviderStrip = false }
+        }
         .onChange(of: space?.id) { _, _ in providersExpanded = false }
         .onChange(of: session.ownership) { _, _ in
             providersExpanded = false; pendingMode = nil; branchEdit = nil; workspaceToDelete = nil
         }
         .onChange(of: isVisible) { _, visible in
-            if !visible { providersExpanded = false }
+            if !visible {
+                providersExpanded = false
+                dismissProviderTip()
+            }
         }
         .modifier(ConversationActionPrompts(session: session, request: $chatAction))
         .sheet(item: $branchEdit) { edit in
@@ -246,6 +270,7 @@ struct SidebarView: View {
             let stripAvailable = geometry.size.width - 2 * Self.utilityControlWidth - SpaceDisc.size - 2 * gap
             let stripContentWidth = CGFloat(otherSpaces.count) * (SpaceDisc.size + gap) - gap
             let stripWidth = max(0, min(stripAvailable, stripContentWidth))
+            let canShowProviderTip = isVisible && session.pairing != nil && !session.isDemo && space != nil && stripWidth > 0
             HStack(spacing: 0) {
                 providerSwitcher(stripWidth: stripWidth, gap: gap)
                 Spacer(minLength: gap)
@@ -260,6 +285,27 @@ struct SidebarView: View {
                 }
             }
             .frame(height: Self.bottomBarHeight)
+            .overlay(alignment: .bottomLeading) {
+                if canShowProviderTip && showsProviderTip {
+                    SidebarTipBubble(title: "Switch providers", message: "Tap this icon to see your providers.",
+                                     pointer: SpaceDisc.size / 2)
+                        .accessibilityIdentifier("providerTip")
+                        .offset(y: -Self.bottomBarHeight - 4)
+                        .transition(.opacity)
+                }
+            }
+            .onChange(of: canShowProviderTip, initial: true) { _, available in
+                if !available { dismissProviderTip() }
+            }
+            .task(id: canShowProviderTip) {
+                guard canShowProviderTip, !hasSeenSidebarOnboarding else { return }
+                // Visibility changes when the drawer starts opening.
+                let openingTime: Duration = reduceMotion ? .zero : .seconds(Self.openingDuration)
+                try? await Task.sleep(for: openingTime + .seconds(1))
+                guard !Task.isCancelled, !hasSeenSidebarOnboarding else { return }
+                hasSeenSidebarOnboarding = true
+                withAnimation(tipAnimation) { showsProviderTip = true }
+            }
         }.frame(height: Self.bottomBarHeight)
     }
     private func utilityButton(_ title: LocalizedStringKey, symbol: String, identifier: String, action: @escaping () -> Void) -> some View {
@@ -277,6 +323,7 @@ struct SidebarView: View {
     @ViewBuilder private func providerSwitcher(stripWidth: CGFloat, gap: CGFloat) -> some View {
         if let space {
             let fill = Provider.accent(space.providerId)
+            let stripExpanded = providersExpanded || (previewsProviderStrip && !reduceMotion)
             ZStack(alignment: .leading) {
                 if stripWidth > 0 {
                     ScrollView(.horizontal) {
@@ -304,10 +351,10 @@ struct SidebarView: View {
                             .init(color: .clear, location: 1)
                         ], startPoint: .leading, endPoint: .trailing)
                         .frame(width: maskWidth)
-                        .offset(x: providersExpanded ? 0 : -maskWidth)
+                        .offset(x: stripExpanded ? 0 : -maskWidth)
                     }
-                    .opacity(providersExpanded ? 1 : 0)
-                    .animation(controlAnimation?.delay(providersExpanded ? 0.06 : 0), value: providersExpanded)
+                    .opacity(stripExpanded ? 1 : 0)
+                    .animation(controlAnimation?.delay(stripExpanded ? 0.06 : 0), value: stripExpanded)
                     .accessibilityIdentifier("sidebarProviderStrip")
                     .padding(.leading, SpaceDisc.size + gap)
                     .allowsHitTesting(providersExpanded)
@@ -318,7 +365,7 @@ struct SidebarView: View {
                         .accessibilityHint(providersExpanded ? "Hide providers" : "Show providers")
                         .accessibilityValue(providersExpanded ? "Expanded" : "Collapsed")
                         .disabled(otherSpaces.isEmpty)
-                    if !providersExpanded {
+                    if !stripExpanded {
                         Button { startConversation(space.id) } label: {
                             Text("New Chat").font(.subheadline.weight(.semibold))
                                 .lineLimit(1).minimumScaleFactor(0.75)
@@ -334,8 +381,8 @@ struct SidebarView: View {
                 }
                 .background(fill, in: .capsule)
                 .clipShape(.capsule)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.14).delay(providersExpanded ? 0 : 0.16),
-                           value: providersExpanded)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.14).delay(stripExpanded ? 0 : 0.16),
+                           value: stripExpanded)
             }
             .accessibilityElement(children: .contain).accessibilityLabel("Providers")
         } else {
@@ -345,8 +392,17 @@ struct SidebarView: View {
         }
     }
     private func setProvidersExpanded(_ expanded: Bool) {
-        if expanded { providerScrollPosition.scrollTo(edge: .leading) }
+        if expanded {
+            providerScrollPosition.scrollTo(edge: .leading)
+            if session.pairing != nil && !session.isDemo { hasSeenSidebarOnboarding = true }
+        }
         providersExpanded = expanded
+        dismissProviderTip()
+    }
+    private func dismissProviderTip() {
+        guard showsProviderTip else { return }
+        previewsProviderStrip = false
+        withAnimation(tipAnimation) { showsProviderTip = false }
     }
     private func modeSwitcher(showLabel: Bool) -> some View {
         HStack(spacing: 8) {
@@ -498,6 +554,66 @@ struct SidebarView: View {
                     session.actionError = error.localizedDescription
                 }
             }
+        }
+    }
+}
+
+private struct SidebarTipBubble: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    let title: LocalizedStringKey
+    let message: LocalizedStringKey
+    let pointer: CGFloat
+
+    var body: some View {
+        let shape = SidebarTipShape(pointer: pointer, pointsFromRight: layoutDirection == .rightToLeft)
+        let label = VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+            Text(message).font(.footnote).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 11)
+        .padding(.bottom, SidebarTipShape.pointerHeight)
+        Group {
+            if reduceTransparency {
+                label.background(Color(.secondarySystemBackground), in: shape)
+            } else {
+                label.glassEffect(.regular, in: shape)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .combine)
+        .allowsHitTesting(false)
+    }
+}
+
+private struct SidebarTipShape: Shape {
+    static let pointerHeight: CGFloat = 9
+    let pointer: CGFloat
+    let pointsFromRight: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let base = rect.maxY - Self.pointerHeight
+        let radius = min(15, rect.width / 4, (base - rect.minY) / 2)
+        let halfPointer: CGFloat = 8
+        let inset = min(max(pointer, radius + halfPointer), rect.width / 2)
+        let x = pointsFromRight ? rect.maxX - inset : rect.minX + inset
+        return Path { path in
+            path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY),
+                        tangent2End: CGPoint(x: rect.maxX, y: base), radius: radius)
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: base),
+                        tangent2End: CGPoint(x: rect.minX, y: base), radius: radius)
+            path.addLine(to: CGPoint(x: x + halfPointer, y: base))
+            path.addLine(to: CGPoint(x: x, y: rect.maxY))
+            path.addLine(to: CGPoint(x: x - halfPointer, y: base))
+            path.addArc(tangent1End: CGPoint(x: rect.minX, y: base),
+                        tangent2End: CGPoint(x: rect.minX, y: rect.minY), radius: radius)
+            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY),
+                        tangent2End: CGPoint(x: rect.maxX, y: rect.minY), radius: radius)
+            path.closeSubpath()
         }
     }
 }

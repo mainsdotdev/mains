@@ -419,7 +419,10 @@ export default function BackendsSettings() {
                 Use local
               </Button>
             ) : (
-              <StatusBadge tone="success" icon={Check}>Active</StatusBadge>
+              <StatusBadge tone="success">
+                <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-current" />
+                Active
+              </StatusBadge>
             )}
           </div>
         </div>

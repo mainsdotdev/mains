@@ -11,6 +11,7 @@ struct MateSkillsEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var unavailable: Set<String> = []
     @State private var pluginIDs: Set<String> = []
+    @State private var showingAuthor = false
 
     private var visible: [MateSkill] { selected.filter { !pluginIDs.contains($0.id) } }
     private var active: [MateSkill] { visible.filter { !unavailable.contains($0.id) } }
@@ -23,7 +24,7 @@ struct MateSkillsEditor: View {
             List {
                 Section("\(mate.name) Skills") {
                     if active.isEmpty {
-                        Label(inactive.isEmpty ? "No skills assigned" : "No active skills", systemImage: "puzzlepiece.extension")
+                        Label(inactive.isEmpty ? "No skills assigned" : "No active skills", systemImage: "sparkles")
                             .foregroundStyle(.secondary)
                     } else {
                         skillRows(active)
@@ -35,10 +36,6 @@ struct MateSkillsEditor: View {
                             MateSkillLibrary(session: session, mateID: mate.id, excluded: Set(selected.map(\.id)), select: add)
                         } label: { Label("Add from Library", systemImage: "plus") }
                         .disabled(!canAdd).accessibilityIdentifier("mateAddSkill")
-                        NavigationLink {
-                            MateSkillAuthor(session: session, mate: mate, onSave: add)
-                        } label: { Label("Create with Mains", systemImage: "sparkles") }
-                        .disabled(!canAdd).accessibilityIdentifier("mateCreateSkill")
                     } footer: {
                         if selected.count >= 20 { Text("This Mate has 20 skill assignments. Remove one to add another.") }
                     }
@@ -52,6 +49,21 @@ struct MateSkillsEditor: View {
                         }
                     }
                 }
+                if editable {
+                    Section {
+                        Button {
+                            showingAuthor = true
+                        } label: {
+                            Label("Create with Mains", systemImage: "sparkles").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.glassProminent).tint(.blue).controlSize(.large)
+                        .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                        .disabled(!canAdd).accessibilityIdentifier("mateCreateSkill")
+                    }
+                }
+            }
+            .navigationDestination(isPresented: $showingAuthor) {
+                MateSkillAuthor(session: session, mate: mate, onSave: add)
             }
             .expandedNavigationTitle("Skills")
             .toolbar {
@@ -108,7 +120,7 @@ struct MateSkillsLinkLabel: View {
                 Text(count, format: .number).monospacedDigit()
                 Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).accessibilityHidden(true)
             }
-        } label: { Label("Skills", systemImage: "puzzlepiece.extension") }
+        } label: { Label("Skills", systemImage: "sparkles") }
     }
 }
 
@@ -120,7 +132,7 @@ private struct MateSkillLabel: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "puzzlepiece.extension").foregroundStyle(.secondary)
+            Image(systemName: "sparkles").foregroundStyle(.secondary)
                 .frame(width: 36, height: 36)
                 .background(Color.primary.opacity(0.06), in: .rect(cornerRadius: 10)).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
@@ -169,7 +181,7 @@ private struct MateSkillLibrary: View {
                     }
                 }
             } else {
-                ProgressView("Loading skills…")
+                ContentSkeleton(label: "Loading skills…").listRow
             }
         }
         .expandedNavigationTitle("Skill Library")
@@ -208,6 +220,8 @@ private struct MateSkillAuthor: View {
     let mate: Mate
     let onSave: (MateSkill) -> Void
     @Environment(\.dismiss) private var dismiss
+    @ScaledMetric(relativeTo: .body) private var generateIconSize: CGFloat = 20
+    @FocusState private var workflowFocused: Bool
     @State private var workflow = ""
     @State private var draft: MateSkillDraft?
     @State private var busy = false
@@ -218,27 +232,63 @@ private struct MateSkillAuthor: View {
 
     private var request: String { workflow.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var enabled: Bool { session.isConnected && !busy && !session.mateCommandPending }
+    private var generating: Bool { busy && retryOperation == .generate }
 
     var body: some View {
         Form {
             Section("Skill Workflow") {
                 TextField("Describe what this skill should do", text: $workflow, axis: .vertical)
-                    .lineLimit(3...6).disabled(!enabled).accessibilityIdentifier("mateSkillWorkflow")
-                Button("Generate Draft", systemImage: "sparkles") { perform(.generate, workflow: request) }
-                    .disabled(!enabled || request.isEmpty || request.utf16.count > 8000)
+                    .lineLimit(3...6).focused($workflowFocused)
+                    .disabled(!enabled).accessibilityIdentifier("mateSkillWorkflow")
+            }
+            Section {
+                Button {
+                    workflowFocused = false
+                    perform(.generate, workflow: request)
+                } label: {
+                    HStack(spacing: 12) {
+                        Group {
+                            if generating {
+                                AsciiSpinner(kind: .generate, tint: .primary, size: generateIconSize)
+                            } else {
+                                Image(systemName: "sparkles").resizable().scaledToFit()
+                            }
+                        }
+                        .frame(width: generateIconSize, height: generateIconSize)
+                        .accessibilityHidden(true)
+
+                        ZStack(alignment: .leading) {
+                            Text("Generate Draft").opacity(generating ? 0 : 1).accessibilityHidden(generating)
+                            Text("Generating draft…").opacity(generating ? 1 : 0).accessibilityHidden(!generating)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.glass).controlSize(.large)
+                .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                .disabled(!enabled || request.isEmpty || request.utf16.count > 8000)
             }
             if let fields = Binding($draft) {
                 Section("Draft") {
                     TextField("Title", text: fields.title)
                     TextField("Skill name", text: fields.name).textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("When to use this skill", text: fields.description, axis: .vertical).lineLimit(2...5)
+                }.disabled(!enabled)
+                Section("Instructions") {
                     TextEditor(text: fields.markdown).frame(minHeight: 160).accessibilityLabel("Workflow instructions in Markdown")
                 }.disabled(!enabled)
                 Section {
-                    Button("Save Skill") { perform(.save) }.disabled(!enabled || draft?.isValid != true)
+                    Button {
+                        perform(.save)
+                    } label: {
+                        Text(busy && retryOperation == .save ? "Saving skill…" : "Save Skill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.glassProminent).tint(.blue).controlSize(.large)
+                    .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                    .disabled(!enabled || draft?.isValid != true)
                 }
             }
-            if busy { ProgressView(retryOperation == .save ? "Saving skill…" : "Generating draft…") }
             if let error { Section { Text(error).foregroundStyle(.secondary) } }
             if let retryOperation, session.mateCommandUncertain {
                 Section {

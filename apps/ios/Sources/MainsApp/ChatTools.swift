@@ -262,7 +262,7 @@ private struct ChatToolRow: View {
                     Group {
                         if view.running {
                             let run = session.conversations.first { $0.id == session.viewingRunID }
-                            AgentAsciiSpinner(providerID: providerID, animated: session.isConnected && run?.isActive == true)
+                            AsciiSpinner(tint: Provider.accent(providerID), animated: session.isConnected && run?.isActive == true)
                         } else {
                             ChatToolIcon(asset: view.icon, plugin: providerID == "codex" ? session.toolPluginIcon(view.vendorID) : nil, tint: tint)
                         }

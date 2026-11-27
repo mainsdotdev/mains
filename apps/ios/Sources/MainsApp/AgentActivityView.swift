@@ -1,41 +1,78 @@
 import SwiftUI
 
-/// The desktop spinner's two-second diagonal sweep across a 3×3 grid.
-struct AgentAsciiSpinner: View {
+struct AsciiSpinner: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    let providerID: String
-    var animated = true
+    enum Kind { case square, generate }
+
+    private struct TwinkleCell {
+        let duration: Double
+        let advance = Double.random(in: 0...2)
+
+        init() {
+            let tempos = [1.0, 1.2, 1.5, 2.0]
+            duration = tempos[Int.random(in: tempos.indices)]
+        }
+
+        func pulse(at time: Double) -> Double {
+            (1 - cos((time + advance) / duration * 2 * .pi)) / 2
+        }
+    }
+
+    let kind: Kind
+    let tint: Color
+    let size: CGFloat
+    let animated: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.conversationPaneVisible) private var paneVisible
     @State private var inViewport = false
+    @State private var twinkleCells: [TwinkleCell]
+
+    init(kind: Kind = .square, tint: Color, size: CGFloat = 15, animated: Bool = true) {
+        self.kind = kind
+        self.tint = tint
+        self.size = size
+        self.animated = animated
+        _twinkleCells = State(initialValue: kind == .generate ? (0..<9).map { _ in TwinkleCell() } : [])
+    }
 
     var body: some View {
         let animates = animated && paneVisible && inViewport && !reduceMotion && scenePhase == .active
-        let tint = Provider.accent(providerID)
+        let twinkles = kind == .generate
+        // The generate tempos all divide six seconds, so the clock wraps on a whole cycle for every cell.
+        let period = twinkles ? 6.0 : 2.0
+        let minScale = twinkles ? 0.4 : 0.15
+        let minOpacity = twinkles ? 0.08 : 0.15
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animates)) { timeline in
-            let phase = animates ? timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2 : 0.24
+            let time = animates ? timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
+                : (twinkles ? 0.3 : 0.24) * period
             Canvas { canvas, size in
                 let cell = (min(size.width, size.height) - 2) / 3
                 for row in 0..<3 {
                     for column in 0..<3 {
-                        let first = Double(row + column) / 4 * 0.25
-                        let second = 0.5 + Double(2 - row + column) / 4 * 0.25
-                        let strength = max(pulse(phase - first + 0.28), pulse(phase - second + 0.28))
-                        let side = cell * (0.15 + strength * 0.85)
+                        let strength = twinkles ? twinkleCells[row * 3 + column].pulse(at: time)
+                            : sweep(at: time / period, row: row, column: column)
+                        let side = cell * (minScale + strength * (1 - minScale))
                         let inset = (cell - side) / 2
                         let rect = CGRect(x: CGFloat(column) * (cell + 1) + inset,
                                           y: CGFloat(row) * (cell + 1) + inset, width: side, height: side)
-                        canvas.fill(Path(roundedRect: rect, cornerRadius: 0.6), with: .color(tint.opacity(0.15 + 0.85 * strength)))
+                        canvas.fill(Path(roundedRect: rect, cornerRadius: twinkles ? 1 : 0.6),
+                                    with: .color(tint.opacity(minOpacity + strength * (1 - minOpacity))))
                     }
                 }
             }
         }
-        .frame(width: 15, height: 15)
+        .frame(width: size, height: size)
         .onScrollVisibilityChange(threshold: 0.1) { inViewport = $0 }
         .accessibilityHidden(true)
+    }
+
+    private func sweep(at phase: Double, row: Int, column: Int) -> Double {
+        let first = Double(row + column) / 4 * 0.25
+        let second = 0.5 + Double(2 - row + column) / 4 * 0.25
+        return max(pulse(phase - first + 0.28), pulse(phase - second + 0.28))
     }
 
     private func pulse(_ value: Double) -> Double {
@@ -112,7 +149,7 @@ struct AgentActivityView: View {
         HStack(spacing: 9) {
             switch artwork {
             case .provider(let providerID):
-                AgentAsciiSpinner(providerID: providerID)
+                AsciiSpinner(tint: Provider.accent(providerID))
             case .mate(let mate):
                 if let mate { MateActivityAvatar(mate: mate) }
             }

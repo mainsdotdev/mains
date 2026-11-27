@@ -134,8 +134,9 @@ function AssistantItem({ assistant, needsSetup, working, active, open, onOpenDet
   const PinIcon = pinned ? PinFilled : Pin;
   const select = () => open(assistantHref(assistant.id));
   const actionVisibility = "opacity-0 group-hover/assistant:opacity-100 group-focus-within/assistant:opacity-100 pointer-coarse:opacity-100";
+  const rowPinVisibility = "pointer-events-none opacity-0 group-hover/assistant:pointer-events-auto group-hover/assistant:opacity-100 group-has-[:focus-visible]/assistant:pointer-events-auto group-has-[:focus-visible]/assistant:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100";
   return (
-    <div className={`group/assistant min-w-0 rounded-2xl transition-colors ${pinned ? "relative" : "flex items-center gap-2 px-2.5 py-2.5"} ${active ? "glass-outline-soft glass-outline bg-primary/50 dark:bg-primary/5" : "hover:bg-primary/50 dark:hover:bg-primary/5"}`}>
+    <div className={`group/assistant relative min-w-0 rounded-2xl transition-colors ${pinned ? "" : "flex items-center gap-2 px-2.5 py-2.5"} ${active ? "glass-outline-soft glass-outline bg-primary/50 dark:bg-primary/5" : "hover:bg-primary/50 dark:hover:bg-primary/5"}`}>
       {pinned ? <>
         <Button variant="bare" title={assistant.name} aria-label={`Open ${assistant.name}${needsSetup ? ", finish setup" : ""}`}
           aria-current={active ? "page" : undefined} onClick={select}
@@ -154,7 +155,7 @@ function AssistantItem({ assistant, needsSetup, working, active, open, onOpenDet
         </Button>
       </> : <>
         <AssistantMonogram avatar={assistant.avatar} name={assistant.name} providerId={assistant.providerId} working={working} onClick={onOpenDetails} />
-        <Button variant="bare" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" aria-current={active ? "page" : undefined} onClick={select}>
+        <Button variant="bare" className={`flex min-w-0 flex-1 items-center gap-2.5 text-left ${onTogglePin ? "group-hover/assistant:pr-7 group-has-focus-visible/assistant:pr-7 pointer-coarse:pr-7" : ""}`} aria-current={active ? "page" : undefined} onClick={select}>
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <Text as="span" size="s" weight="medium" className="truncate">{assistant.name}</Text>
             {needsSetup ? <span className="flex min-w-0 items-center gap-1.5 text-xs text-primary-500">
@@ -164,11 +165,12 @@ function AssistantItem({ assistant, needsSetup, working, active, open, onOpenDet
           </span>
         </Button>
       </>}
-      {onTogglePin && <Button variant="icon" iconSize="xs" aria-label={`${pinLabel} ${assistant.name}`} aria-pressed={pinned}
-        tooltip={pinLabel} onClick={onTogglePin} disabled={changingPin}
-        className={pinned ? `absolute top-1 right-1 ${actionVisibility}` : `shrink-0 ${actionVisibility}`}>
-        <PinIcon className="size-3.5" />
-      </Button>}
+      {onTogglePin && <span className={`absolute inline-flex ${pinned ? `top-1 right-1 ${actionVisibility}` : `top-1/2 right-2.5 -translate-y-1/2 ${rowPinVisibility}`}`}>
+        <Button variant="icon" iconSize="xs" aria-label={`${pinLabel} ${assistant.name}`} aria-pressed={pinned}
+          tooltip={pinLabel} onClick={onTogglePin} disabled={changingPin}>
+          <PinIcon aria-hidden="true" className="size-3.5" />
+        </Button>
+      </span>}
     </div>
   );
 }

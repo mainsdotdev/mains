@@ -452,7 +452,7 @@ struct AppShell: View {
         closeDrawerAfterNavigation()
     }
     private func drawerAnimation(opening: Bool) -> Animation? {
-        reduceMotion ? nil : .easeInOut(duration: opening ? 0.28 : 0.34)
+        reduceMotion ? nil : .easeInOut(duration: opening ? SidebarView.openingDuration : 0.34)
     }
     private func toggleWideSidebar(visible: Bool) {
         if !visible { drawerViewport.dismissKeyboard() }
