@@ -43,11 +43,11 @@ interface Options {
   selectedModel: string; additionalDirectories: string[];
   conversationSettings?: ConversationSettings;
   setSettings?: (settings: ConversationSettings) => unknown;
-  setModel: (model: string) => void; setDirectories: (directories: string[]) => void;
+  setModel: (model: string) => void;
 }
 
 export function useComposerRunQueue(options: Options) {
-  const { ownerKey, backendId, run, selectedModel, additionalDirectories, setModel, setDirectories,
+  const { ownerKey, backendId, run, selectedModel, additionalDirectories, setModel,
     conversationSettings, setSettings, enabled } = options;
   const dispatch = useAppDispatch();
   const queue = useAppSelector((state) => state.runQueue?.byOwner[ownerKey]);
@@ -85,7 +85,7 @@ export function useComposerRunQueue(options: Options) {
     moveTransientUploadsToOwner(ownerKey, backupOwner);
     dispatch(beginRunMessageEdit({ ownerKey, id, backup: {
       text: workspace.draftTextByKey[ownerKey] ?? "", contextItems: [...items], uploadOwnerKey: backupOwner,
-      model: selectedModel, additionalDirectories: [...additionalDirectories],
+      model: selectedModel,
       conversationSettings,
     } }));
     // Keep originals untouched for Cancel. Only previews are cloned; File
@@ -97,8 +97,7 @@ export function useComposerRunQueue(options: Options) {
     setDraft(message.text, message.contextItems);
     if (message.conversationSettings && setSettings) setSettings(message.conversationSettings);
     else if (message.model) setModel(message.model);
-    setDirectories(message.additionalDirectories ?? []);
-  }, [getQueue, ownerKey, dispatch, selectedModel, additionalDirectories, setDraft, setModel, setDirectories, conversationSettings, setSettings]);
+  }, [getQueue, ownerKey, dispatch, selectedModel, setDraft, setModel, conversationSettings, setSettings]);
 
   const finishEdit = useCallback((save: boolean, text?: string, items?: ContextItem[], snapshot?: QueueMessageSnapshot) => {
     const current = getQueue();
@@ -111,7 +110,7 @@ export function useComposerRunQueue(options: Options) {
       updated = { ...message, text: text ?? "", contextItems: items ?? [], attachmentNames: files.map((file) => file.file.name),
         model: (snapshot?.model ?? selectedModel) || undefined,
         conversationSettings: snapshot?.conversationSettings ?? conversationSettings,
-        additionalDirectories: [...(snapshot?.additionalDirectories ?? additionalDirectories)], status: "queued" };
+        additionalDirectories: [...(snapshot?.additionalDirectories ?? current.editingAdditionalDirectories ?? additionalDirectories)], status: "queued" };
       if (snapshot) {
         setTransientUploadsForOwner(message.uploadOwnerKey, files);
         clearTransientUploads(ownerKey);
@@ -121,10 +120,9 @@ export function useComposerRunQueue(options: Options) {
     setDraft(backup.text, backup.contextItems);
     if (backup.conversationSettings && setSettings) setSettings(backup.conversationSettings);
     else setModel(backup.model);
-    setDirectories(backup.additionalDirectories);
     dispatch(finishRunMessageEdit({ ownerKey, message: updated }));
     return true;
-  }, [getQueue, ownerKey, selectedModel, additionalDirectories, dispatch, setDraft, setModel, setDirectories, conversationSettings, setSettings]);
+  }, [getQueue, ownerKey, selectedModel, additionalDirectories, dispatch, setDraft, setModel, conversationSettings, setSettings]);
 
   const controls: ComposerRunQueue = {
     queue, editing: !!queue?.editingId,

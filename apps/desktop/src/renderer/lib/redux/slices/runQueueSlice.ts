@@ -26,7 +26,6 @@ export interface QueueDraftBackup {
   uploadOwnerKey: string;
   model: string;
   conversationSettings?: ConversationSettings;
-  additionalDirectories: string[];
 }
 
 export interface ConversationQueue {
@@ -41,6 +40,7 @@ export interface ConversationQueue {
   /** Invalidates preparation already in flight when delivery is paused. */
   deliveryRevision?: number;
   editingId?: string;
+  editingAdditionalDirectories?: string[];
   draftBackup?: QueueDraftBackup;
   draftRevision?: number;
 }
@@ -157,9 +157,14 @@ const runQueueSlice = createSlice({
       const message = queue?.messages.find((entry) => entry.id === payload.id);
       if (!queue || !message || queue.editingId || !["queued", "error"].includes(message.status)) return;
       queue.editingId = message.id;
+      queue.editingAdditionalDirectories = message.additionalDirectories ?? [];
       queue.draftBackup = payload.backup;
       queue.draftRevision = (queue.draftRevision ?? 0) + 1;
       message.status = "editing";
+    },
+    setQueuedMessageEditDirectories(state, { payload }: PayloadAction<{ ownerKey: string; directories: string[] }>) {
+      const queue = state.byOwner[payload.ownerKey];
+      if (queue?.editingId) queue.editingAdditionalDirectories = payload.directories;
     },
     finishRunMessageEdit(state, { payload }: PayloadAction<{ ownerKey: string; message?: QueuedRunMessage }>) {
       const queue = state.byOwner[payload.ownerKey];
@@ -170,6 +175,7 @@ const runQueueSlice = createSlice({
         else queue.messages[index].status = "queued";
       }
       delete queue.editingId;
+      delete queue.editingAdditionalDirectories;
       delete queue.draftBackup;
       queue.draftRevision = (queue.draftRevision ?? 0) + 1;
     },
@@ -184,6 +190,6 @@ const runQueueSlice = createSlice({
 export const {
   enqueueRunMessage, setRunQueueMode, reorderRunMessages, observeQueuedRunStatus, pauseRunQueue, resumeRunQueue,
   markRunMessageSending, setRunMessageError, deferRunMessage, removeRunMessage, beginRunMessageEdit,
-  finishRunMessageEdit, forgetRunQueue, mirrorRunQueue,
+  setQueuedMessageEditDirectories, finishRunMessageEdit, forgetRunQueue, mirrorRunQueue,
 } = runQueueSlice.actions;
 export default runQueueSlice.reducer;

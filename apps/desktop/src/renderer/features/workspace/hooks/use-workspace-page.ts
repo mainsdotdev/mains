@@ -14,6 +14,7 @@ import {
   activateWorkspaceView,
   setComposerContextKey,
   setDraftText,
+  setRunDirectoryDraft,
   setContextItemsForKey,
   clearPendingGoal,
   clearPendingReviewTarget,
@@ -21,6 +22,7 @@ import {
   closeRunTab,
   setSelectedCollectionId,
 } from "@/lib/redux/slices/workspaceSlice";
+import { setQueuedMessageEditDirectories } from "@/lib/redux/slices/runQueueSlice";
 import { isRunTab, isNewRunTab, isReviewTab } from "@/features/workspace/lib/repo-utils";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { useComposerContext } from "./use-composer-context";
@@ -263,22 +265,33 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
   }, [dispatch, ownerKey]);
   const [uploadedFiles, setUploadedFiles] = useTransientUploads(ownerKey);
   const [directoryDrafts, setDirectoryDrafts] = useState<Record<string, string[]>>({});
+  const savedDirectoryDraft = useAppSelector((state) => state.workspace.runDirectoryDrafts[ownerKey]);
+  const editingDirectories = useAppSelector((state) => state.runQueue?.byOwner[ownerKey]?.editingAdditionalDirectories);
+  const directoryDraft = mirrorOnly || !composeTargetRunId
+    ? directoryDrafts[ownerKey]
+    : editingDirectories ?? savedDirectoryDraft;
   const storedDirectories = composeTargetRun?.configSnapshot?.additionalDirectories;
-  const additionalDirectories = useMemo(() => directoryDrafts[ownerKey] ??
+  const additionalDirectories = useMemo(() => directoryDraft ??
     (Array.isArray(storedDirectories)
       ? storedDirectories.filter((value): value is string => typeof value === "string")
-      : EMPTY_DIRECTORIES), [directoryDrafts, ownerKey, storedDirectories]);
+      : EMPTY_DIRECTORIES), [directoryDraft, storedDirectories]);
   const runAdditionalDirectories = getProviderVariantById(providerId)?.supportsAdditionalDirectories
     ? additionalDirectories
     : undefined;
   const setAdditionalDirectories = useCallback((directories: string[]) => {
-    setDirectoryDrafts((current) => ({ ...current, [ownerKey]: directories }));
-  }, [ownerKey]);
+    if (mirrorOnly || !composeTargetRunId) {
+      setDirectoryDrafts((current) => ({ ...current, [ownerKey]: directories }));
+    } else if (store.getState().runQueue?.byOwner[ownerKey]?.editingId) {
+      dispatch(setQueuedMessageEditDirectories({ ownerKey, directories }));
+    } else {
+      dispatch(setRunDirectoryDraft({ key: ownerKey, directories }));
+    }
+  }, [dispatch, mirrorOnly, composeTargetRunId, ownerKey]);
 
   const supportsTurnSteer = getProviderVariantById(providerId)?.supportsTurnSteer ?? false;
   const runQueue = useComposerRunQueue({
     enabled: supportsTurnSteer, ownerKey, backendId, run: composeTargetRun,
-    selectedModel, additionalDirectories, setModel: handleModelChange, setDirectories: setAdditionalDirectories,
+    selectedModel, additionalDirectories, setModel: handleModelChange,
     conversationSettings, setSettings: conversation.changeSettings,
   });
   const handleQueueSnapshot = (snapshot: QueueMessageSnapshot) => {

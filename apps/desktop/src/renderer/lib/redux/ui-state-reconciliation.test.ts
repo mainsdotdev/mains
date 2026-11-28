@@ -21,6 +21,7 @@ function savedState(): RootState {
     backends: { activeBackendId: null },
     workspace: {
       draftTextByKey: { [runOwnerKey("local", "run-a")]: "text" },
+      runDirectoryDrafts: {},
       contextItemsByKey: {},
       composerContextKey: "default",
       workspaceViews: {
@@ -102,13 +103,16 @@ describe("persisted UI reconciliation", () => {
   });
 
   it("checks only saved IDs for the connected backend", () => {
+    const state = savedState();
+    state.workspace.runDirectoryDrafts = { [runOwnerKey("local", "directory-draft")]: [], [runOwnerKey("remote-1", "remote-directory-draft")]: [] };
     const candidates = collectUiContextCandidates(
-      savedState(),
+      state,
       "local",
       [runOwnerKey("local", "browser-only"), runOwnerKey("remote-1", "remote-only")],
     );
     expect(candidates).toEqual([
       { backendId: "local", kind: "run", id: "run-a" },
+      { backendId: "local", kind: "run", id: "directory-draft" },
       { backendId: "local", kind: "run", id: "browser-only" },
       { backendId: "local", kind: "run", id: "run-b" },
       { backendId: "local", kind: "workspace", id: "ws-a" },

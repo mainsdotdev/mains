@@ -18,6 +18,7 @@ import workspaceReducer, {
   replaceMcpAppContext,
   setPendingReviewTarget,
   setPendingRunId,
+  type WorkspaceState,
 } from "@/lib/redux/slices/workspaceSlice";
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
 import type { ContextBrowserItem, ContextMcpAppItem, ContextReviewItem } from "../lib/composer-context";
@@ -107,6 +108,8 @@ vi.mock("./use-transient-uploads", () => ({
   useTransientUploads: () => [mocks.files, mocks.setFiles],
   getTransientUploadsForOwner: () => mocks.files,
   moveTransientUploadsToOwner: mocks.moveUploads,
+  setTransientUploadsForOwner: vi.fn(),
+  clearTransientUploads: vi.fn(),
 }));
 vi.mock("../lib/run-helpers", async (importOriginal) => ({
   ...await importOriginal<typeof import("../lib/run-helpers")>(), serializeAttachments: mocks.serializeAttachments,
@@ -204,7 +207,11 @@ beforeEach(() => {
   }));
 });
 
-function workspacePage(providerId = "claude_code", sidebarView: DeveloperSidebarView = "workspaces") {
+function workspacePage(
+  providerId = "claude_code",
+  sidebarView: DeveloperSidebarView = "workspaces",
+  runDirectoryDrafts: WorkspaceState["runDirectoryDrafts"] = {},
+) {
   const store = configureStore({
     reducer: {
       workspace: workspaceReducer,
@@ -213,8 +220,11 @@ function workspacePage(providerId = "claude_code", sidebarView: DeveloperSidebar
       appSettings: appSettingsReducer,
       backends: () => ({ activeBackendId: null }),
     },
-    preloadedState: { appSettings: { ...appSettingsReducer(undefined, { type: "init" }),
-      onboardingCompleted: true, developerSidebarView: sidebarView } },
+    preloadedState: {
+      workspace: { ...workspaceReducer(undefined, { type: "init" }), runDirectoryDrafts },
+      appSettings: { ...appSettingsReducer(undefined, { type: "init" }),
+        onboardingCompleted: true, developerSidebarView: sidebarView },
+    },
   });
   mocks.getState.mockImplementation(() => store.getState());
   const wrapper = ({ children }: { children: ReactNode }) => createElement(
@@ -958,7 +968,7 @@ describe("workspace additional directory payload", () => {
     expect(mocks.executeRun).not.toHaveBeenCalled();
   });
 
-  it.each(["claude_code", "codex"])("keeps directory grants and explicit clearing for %s", async (providerId) => {
+  it.each(["claude_code", "codex"])("restores an explicit directory removal before another turn for %s", async (providerId) => {
     mocks.mode = "developer";
     mocks.workspaceId = "ws-1";
     const existing = {
@@ -978,12 +988,18 @@ describe("workspace additional directory payload", () => {
     await act(async () => { await page.result.current.handleExecute(); });
     expect(mocks.continueRun.mock.calls[0][5]).toEqual(["/tmp/extra-project"]);
 
-    act(() => {
-      page.result.current.setAdditionalDirectories([]);
-      page.result.current.setGoal("stop using the extra folder");
-    });
-    await act(async () => { await page.result.current.handleExecute(); });
+    act(() => page.result.current.setAdditionalDirectories([]));
+    expect(page.result.current.additionalDirectories).toEqual([]);
+    const { runDirectoryDrafts } = page.store.getState().workspace;
+    page.unmount();
+
+    const reopened = workspacePage(providerId, "workspaces", runDirectoryDrafts);
+    await waitFor(() => expect(reopened.result.current.canResume).toBe(true));
+    expect(reopened.result.current.additionalDirectories).toEqual([]);
+    act(() => reopened.result.current.setGoal("stop using the extra folder"));
+    await act(async () => { await reopened.result.current.handleExecute(); });
     expect(mocks.continueRun.mock.calls[1][5]).toEqual([]);
+    reopened.unmount();
   });
 });
 
@@ -1265,6 +1281,28 @@ describe("useWorkspacePage after a space switch", () => {
 
 
 describe("Codex running composer", () => {
+  it("keeps a directory change in a queued edit separate from the saved chat draft", async () => {
+    const live = { ...run, providerId: "codex", status: "running", configSnapshot: { additionalDirectories: ["/queued-folder"] } };
+    mocks.getById.mockResolvedValue({ success: true, data: live });
+    const page = workspacePage("codex");
+    act(() => page.store.dispatch(setActiveTab(live.id)));
+    await waitFor(() => expect(page.result.current.conversationSettingsReady).toBe(true));
+    act(() => page.result.current.setGoal("queued message"));
+    await act(async () => { await page.result.current.handleExecute(); });
+
+    act(() => page.result.current.setAdditionalDirectories([]));
+    const queue = page.result.current.runQueue!;
+    act(() => queue.onEdit(queue.queue!.messages[0].id));
+    expect(page.result.current.additionalDirectories).toEqual(["/queued-folder"]);
+    act(() => page.result.current.setAdditionalDirectories(["/edited-folder"]));
+    expect(page.result.current.additionalDirectories).toEqual(["/edited-folder"]);
+    await act(async () => { await page.result.current.handleExecute(); });
+
+    expect(page.result.current.runQueue?.queue?.messages[0].additionalDirectories).toEqual(["/edited-folder"]);
+    expect(page.result.current.additionalDirectories).toEqual([]);
+    expect(page.store.getState().workspace.runDirectoryDrafts[page.result.current.ownerKey]).toEqual([]);
+  });
+
   it("queues several sends locally and clears the submitted draft", async () => {
     mocks.mode = "developer";
     mocks.workspaceId = "ws-1";

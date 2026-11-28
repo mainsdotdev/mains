@@ -229,6 +229,7 @@
   flex: 1;
   min-height: 0;
   margin-top: 35px;
+  container-type: inline-size;
 }
 .onboarding-step-panel {
   position: absolute;
@@ -247,6 +248,11 @@
   letter-spacing: -0.03em;
   white-space: pre-line;
   outline: none;
+}
+@media (width > 650px) {
+  .mains-macos .onboarding-story h1 {
+    font-size: clamp(24px, 12cqi, 40px);
+  }
 }
 .onboarding-story p {
   margin: 21px 0 0;

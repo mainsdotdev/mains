@@ -110,6 +110,8 @@ export interface WorkspaceState {
   composerContextReady: boolean;
   contextItemsByKey: Record<string, ContextItem[]>;
   draftTextByKey: Record<string, string>;
+  /** A saved empty list overrides directories from the last turn. */
+  runDirectoryDrafts: Record<string, string[]>;
   /** The conversation opened from each plugin page, scoped to backend/space/app. */
   mcpAppRunIdByKey: Record<string, string>;
   openIssueTabs: IssueWithEntity[];
@@ -171,6 +173,7 @@ const initialState: WorkspaceState = {
   composerContextReady: false,
   contextItemsByKey: {},
   draftTextByKey: {},
+  runDirectoryDrafts: {},
   mcpAppRunIdByKey: {},
   openIssueTabs: [],
   openSignalTabs: [],
@@ -301,6 +304,9 @@ const workspaceSlice = createSlice({
       if (action.payload.text) state.draftTextByKey[action.payload.key] = action.payload.text;
       else delete state.draftTextByKey[action.payload.key];
     },
+    setRunDirectoryDraft: (state, { payload }: PayloadAction<{ key: string; directories: string[] }>) => {
+      state.runDirectoryDrafts[payload.key] = payload.directories;
+    },
     setMcpAppRunId: (state, action: PayloadAction<{ key: string; runId: string | null }>) => {
       if (action.payload.runId) state.mcpAppRunIdByKey[action.payload.key] = action.payload.runId;
       else delete state.mcpAppRunIdByKey[action.payload.key];
@@ -315,6 +321,7 @@ const workspaceSlice = createSlice({
       const { backendId, runId } = action.payload;
       const ownerKey = runOwnerKey(backendId, runId);
       delete state.draftTextByKey[ownerKey];
+      delete state.runDirectoryDrafts[ownerKey];
       delete state.contextItemsByKey[ownerKey];
       delete state.conversationSettingsByKey[ownerKey];
       if (state.composerContextKey === ownerKey) {
@@ -679,6 +686,7 @@ export const {
   activateWorkspaceView,
   setComposerContextKey,
   setDraftText,
+  setRunDirectoryDraft,
   setMcpAppRunId,
   replaceMcpAppContext,
   forgetRunUiState,

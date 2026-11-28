@@ -100,7 +100,7 @@ describe("local run queue delivery", () => {
     h.store.dispatch(reorderRunMessages({ ownerKey: h.ownerKey, orderedIds: ["third", "second", "first"] }));
     expect(h.messages().map((entry) => entry.id)).toEqual(["first", "second", "third"]);
     const editing = harness(); editing.add("first"); editing.add("second");
-    editing.store.dispatch(beginRunMessageEdit({ ownerKey: editing.ownerKey, id: "first", backup: { text: "draft", contextItems: [], uploadOwnerKey: "backup", model: "", additionalDirectories: [] } }));
+    editing.store.dispatch(beginRunMessageEdit({ ownerKey: editing.ownerKey, id: "first", backup: { text: "draft", contextItems: [], uploadOwnerKey: "backup", model: "" } }));
     editing.store.dispatch(reorderRunMessages({ ownerKey: editing.ownerKey, orderedIds: ["second", "first"] }));
     expect(editing.messages().map((entry) => entry.id)).toEqual(["first", "second"]);
   });
@@ -148,7 +148,7 @@ describe("local run queue delivery", () => {
 
   it("holds the FIFO head while it is edited without moving its position", async () => {
     const h = harness(); const first = h.add("first"); h.add("second");
-    h.store.dispatch(beginRunMessageEdit({ ownerKey: h.ownerKey, id: "first", backup: { text: "draft", contextItems: [], uploadOwnerKey: "backup", model: "", additionalDirectories: [] } }));
+    h.store.dispatch(beginRunMessageEdit({ ownerKey: h.ownerKey, id: "first", backup: { text: "draft", contextItems: [], uploadOwnerKey: "backup", model: "" } }));
     h.state.status = "succeeded";
     await h.controller.pump();
     expect(h.sends()).toHaveLength(0);
@@ -164,7 +164,7 @@ describe("local run queue delivery", () => {
     const normal = h.invoke.getMockImplementation()!;
     h.invoke.mockImplementation((channel, args) => channel === CHANNELS.runs.getById ? read.promise as any : normal(channel, args));
     const pending = h.controller.pump();
-    h.store.dispatch(beginRunMessageEdit({ ownerKey: h.ownerKey, id: "first", backup: { text: "draft", contextItems: [], uploadOwnerKey: "backup", model: "", additionalDirectories: [] } }));
+    h.store.dispatch(beginRunMessageEdit({ ownerKey: h.ownerKey, id: "first", backup: { text: "draft", contextItems: [], uploadOwnerKey: "backup", model: "" } }));
     h.store.dispatch(finishRunMessageEdit({ ownerKey: h.ownerKey, message: { ...first, text: "latest edit" } }));
     read.resolve({ success: true, data: { status: "succeeded" } });
     await pending;

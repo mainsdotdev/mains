@@ -4,7 +4,7 @@ import { configureStore } from "@reduxjs/toolkit";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import runQueueReducer from "@/lib/redux/slices/runQueueSlice";
+import runQueueReducer, { setQueuedMessageEditDirectories } from "@/lib/redux/slices/runQueueSlice";
 import workspaceReducer, { setComposerContextKey, setDraftText, setContextItemsForKey } from "@/lib/redux/slices/workspaceSlice";
 import { getTransientUploadsForOwner, setTransientUploadsForOwner, clearTransientUploads } from "./use-transient-uploads";
 import type { UploadedFile } from "@/components/ui";
@@ -35,10 +35,9 @@ function setup() {
   const wrapper = ({ children }: { children: ReactNode }) => createElement(Provider, { store } as ComponentProps<typeof Provider>, children);
   const hook = renderHook(() => {
     const [model, setModel] = useState("draft-model");
-    const [directories, setDirectories] = useState(["/draft-folder"]);
     return useComposerRunQueue({ enabled: true, ownerKey, backendId: null,
       run: { id: "queue-chat", status: "running", goal: "original", providerId: "codex" },
-      selectedModel: model, additionalDirectories: directories, setModel, setDirectories });
+      selectedModel: model, additionalDirectories: ["/draft-folder"], setModel });
   }, { wrapper });
   const queuedFile: UploadedFile = { file: new File(["queued image"], "image.png", { type: "image/png" }), type: "image", preview: "blob:queued" };
   setTransientUploadsForOwner(ownerKey, [queuedFile]);
@@ -95,11 +94,14 @@ describe("queued message composer editing", () => {
   it("saves into the same queue position and restores another pending draft", () => {
     const h = setup();
     act(() => h.result.current.controls!.onEdit(h.id));
+    expect(h.store.getState().runQueue.byOwner[ownerKey].editingAdditionalDirectories).toEqual(["/draft-folder"]);
+    act(() => h.store.dispatch(setQueuedMessageEditDirectories({ ownerKey, directories: [] })));
     act(() => { expect(h.result.current.saveEdit("changed text", [draftContext])).toBe(true); });
     const queue = h.store.getState().runQueue.byOwner[ownerKey];
     expect(queue.messages.map((message) => message.id)).toEqual([h.id]);
-    expect(queue.messages[0]).toMatchObject({ text: "changed text", contextItems: [draftContext], status: "queued" });
+    expect(queue.messages[0]).toMatchObject({ text: "changed text", contextItems: [draftContext], status: "queued", additionalDirectories: [] });
     expect(queue.editingId).toBeUndefined();
+    expect(queue.editingAdditionalDirectories).toBeUndefined();
     expect(getTransientUploadsForOwner(h.uploadOwnerKey)[0].file).toBe(h.queuedFile.file);
     expect(getTransientUploadsForOwner(ownerKey)).toEqual([h.draftFile]);
     expect(h.store.getState().workspace.draftTextByKey[ownerKey]).toBe("unfinished draft");

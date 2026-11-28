@@ -3,8 +3,10 @@ import { persistReducer, persistStore } from "redux-persist";
 import { describe, expect, it } from "vitest";
 import workspaceReducer, {
   activateWorkspaceView,
+  forgetRunUiState,
   forgetWorkspaceUiState,
   setDraftText,
+  setRunDirectoryDraft,
   setConversationSettings,
   rememberRunSettings,
   beginRunSettingsIntent,
@@ -15,7 +17,7 @@ import workspaceReducer, {
   setReviewFileCollapsed,
 } from "./slices/workspaceSlice";
 import { workspacePersistConfig } from "./workspace-persistence";
-import { workspaceReviewKey } from "../../../shared/ui-state-keys";
+import { runOwnerKey, workspaceReviewKey } from "../../../shared/ui-state-keys";
 
 const diffFile = {
   name: "example.ts.diff",
@@ -248,6 +250,25 @@ describe("workspace persistence — conversation settings", () => {
     persistor.pause();
     const restored = await persistedWorkspace(storage);
     expect(restored.store.getState().conversationSettingsByKey).toEqual({ [draft]: settings });
+    restored.persistor.pause();
+  });
+});
+
+describe("workspace persistence — additional directories", () => {
+  it("retains an empty list for the same chat and backend after restart", async () => {
+    const storage = memoryStorage();
+    const local = runOwnerKey("local", "run-a");
+    const remote = runOwnerKey("remote", "run-a");
+    const first = await persistedWorkspace(storage);
+    first.store.dispatch(setRunDirectoryDraft({ key: local, directories: [] }));
+    first.store.dispatch(setRunDirectoryDraft({ key: remote, directories: ["/remote/project"] }));
+    await first.persistor.flush();
+    first.persistor.pause();
+
+    const restored = await persistedWorkspace(storage);
+    expect(restored.store.getState().runDirectoryDrafts).toEqual({ [local]: [], [remote]: ["/remote/project"] });
+    restored.store.dispatch(forgetRunUiState({ backendId: "local", runId: "run-a" }));
+    expect(restored.store.getState().runDirectoryDrafts).toEqual({ [remote]: ["/remote/project"] });
     restored.persistor.pause();
   });
 });

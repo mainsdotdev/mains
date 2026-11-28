@@ -113,6 +113,7 @@ export const workspacePersistConfig = {
     "reviewRunId",
     "composerContextKey",
     "draftTextByKey",
+    "runDirectoryDrafts",
     "mcpAppRunIdByKey",
     "selectedCollectionId",
   ],

@@ -324,7 +324,11 @@ export function OnboardingScreen() {
                       direction={flow.direction}
                       reducedMotion={reducedMotion}
                     >
-                      <h1 ref={headingRef} tabIndex={-1}>
+                      <h1
+                        className="font-sf-expanded"
+                        ref={headingRef}
+                        tabIndex={-1}
+                      >
                         {COPY[flow.step].title}
                       </h1>
                       <p>{COPY[flow.step].description}</p>

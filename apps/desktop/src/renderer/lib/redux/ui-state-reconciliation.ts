@@ -39,6 +39,7 @@ export function collectUiContextCandidates(
   };
 
   for (const key of Object.keys(state.workspace.draftTextByKey)) addOwner(key);
+  for (const key of Object.keys(state.workspace.runDirectoryDrafts)) addOwner(key);
   for (const key of Object.keys(state.workspace.contextItemsByKey)) addOwner(key);
   for (const queue of Object.values(state.runQueue?.byOwner ?? {})) {
     if (queue.backendId !== backendId) continue;
