@@ -40,7 +40,12 @@ function fixture() {
     return { success: true, data };
   });
   setTransport({ kind: "fixture", invoke, subscribe: () => () => {}, status: () => "connected", onStatusChange: () => () => {} });
-  const store = configureStore({ reducer: { backends: backendsReducer, api: baseApi.reducer }, middleware: (defaults) => defaults().concat(baseApi.middleware) });
+  const store = configureStore({
+    reducer: { backends: backendsReducer, api: baseApi.reducer },
+    middleware: (defaults) => defaults().concat(baseApi.middleware),
+    // Keep RTK notifications from leaving a frame fallback timer after jsdom teardown.
+    enhancers: (defaults) => defaults({ autoBatch: { type: "tick" } }),
+  });
   const Wrapper = ({ children }: { children: ReactNode }) => <StrictMode><Provider store={store}>{children}</Provider></StrictMode>;
   const props = { open: true, onClose: vi.fn(), isConnected: false, onSuccess: vi.fn() };
   vi.stubGlobal("api", { shell: { openExternal: vi.fn().mockResolvedValue(undefined) } });

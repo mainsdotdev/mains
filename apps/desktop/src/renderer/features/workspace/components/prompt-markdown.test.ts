@@ -5,6 +5,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { assistantMentionTextColor } from "@/features/assistants/components/assistant-avatar";
 
 const { openFile, openDocument } = vi.hoisted(() => ({ openFile: vi.fn(), openDocument: vi.fn() }));
 vi.mock("../hooks/use-open-file-in-editor", () => ({ useOpenFileInEditor: () => openFile }));
@@ -25,10 +26,11 @@ function Location() {
 
 describe("PromptMarkdown", () => {
   it("renders a saved assistant's exact token as its human name without a skill destination", () => {
+    const avatar = { shape: "cube", color: "mint" } as const;
     render(createElement(MemoryRouter, null, createElement(PromptMarkdown, {
-      skills: [{ name: "123", token: "@assistant-123", displayName: "TestFlight", scope: "assistant", assistantAvatar: { shape: "cube", color: "mint" } }],
+      skills: [{ name: "123", token: "@assistant-123", displayName: "TestFlight", scope: "assistant", assistantAvatar: avatar }],
     }, "@assistant-123 check build 42")));
-    expect(screen.getByText("TestFlight").parentElement?.style.color).toMatch(/#237d66 var\(--assistant-mention-ink\), #81cfb4/i);
+    expect(screen.getByText("TestFlight").parentElement?.style.color).toBe(assistantMentionTextColor(avatar));
     expect(document.querySelector('[data-avatar-shape="cube"]')).toBeTruthy();
     expect(screen.queryByText(/@assistant-123/)).toBeNull();
     fireEvent.click(screen.getByText("TestFlight"));
