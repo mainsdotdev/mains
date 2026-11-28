@@ -11,7 +11,7 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { afterEach, expect, it } from "vitest";
 import { backupFile, loadOperationsTarget, sha256 } from "../scripts/operations-lib";
 import { backupKeyPair, backupLease, backupRoot, captureAccount, checkFreshness, downloadSnapshot, listObjects, pruneSnapshots, publishSnapshot,
-  seal, storeSealed, unseal, type AutomaticManifest } from "../scripts/automatic-backup-lib";
+  seal, storeSealed, unseal, type AutomaticManifest, type SnapshotIndex } from "../scripts/automatic-backup-lib";
 import { createHubBackup, type HubSnapshot } from "../src/hub-backup";
 import { runBackup, restoreLocal } from "../scripts/automatic-backup";
 
@@ -230,16 +230,21 @@ it("never accepts writes during bookmark-based resumption, including a write rac
     return { bookmark: `local-${changes}` };
   } };
   const source = new Map<string, string>();
+  const retryDelays: number[] = [];
+  const waitBeforeRetry = async (milliseconds: number) => { retryDelays.push(milliseconds); };
   const capture = await captureAccount(durable, "fixture", async (path, bytes) => {
     source.set(path, bytes);
     if (!restarted) { restarted = true; await call("hub", { account: "fixture", method: "restartBackupSession" }); }
-  }, "hub/0");
+  }, "hub/0", waitBeforeRetry);
   expect(capture.snapshot).toContain("/1/");
+  expect(retryDelays).toEqual([15_000]);
   expect(capture.pages.filter((page) => page.table === "log").flatMap((page) => JSON.parse(source.get(page.path)!).rows)).toHaveLength(1);
   let i = 2;
+  retryDelays.length = 0;
   await expect(captureAccount(durable, "fixture", async () => {
     await call("hub", { account: "fixture", method: "seed", args: [[record(i++)]] });
-  }, "hub/1")).rejects.toThrow(/three backup attempts/);
+  }, "hub/1", waitBeforeRetry)).rejects.toThrow(/three backup attempts/);
+  expect(retryDelays).toEqual([15_000, 45_000]);
   await expect(captureAccount({ ...ops, checkpoint: async () => { throw new Error("PITR unavailable"); } }, "fixture", async () => {}, "hub/2")).rejects.toThrow(/PITR unavailable/);
 });
 
@@ -310,15 +315,31 @@ it("retains shared objects for newer backups, removes expired unreferenced data,
   const base: AutomaticManifest = { version: 2, target, startedAt: old, completedAt: old, files: [], accounts: [] };
   const oldKey = await publishSnapshot(bucket, root, pair.publicKey, base, [shared.receipt, obsolete.receipt]);
   const freshKey = await publishSnapshot(bucket, root, pair.publicKey, { ...base, startedAt: fresh, completedAt: fresh }, [shared.receipt]);
+  const newerKey = await publishSnapshot(bucket, root, pair.publicKey, { ...base, completedAt: new Date(now).toISOString() }, [shared.receipt]);
+  const newerIndex = await (await bucket.get(newerKey))!.text();
+  const conflictingIndex = JSON.parse(newerIndex) as SnapshotIndex;
+  conflictingIndex.objects[0].sha256 = sha256("conflicting checksum");
+  await bucket.put(newerKey, JSON.stringify(conflictingIndex));
+  await expect(pruneSnapshots(bucket, root, now + 3 * 86_400_000)).rejects.toThrow(/references disagree/);
+  expect(await bucket.head(oldKey)).not.toBeNull();
+  expect(await bucket.head(obsolete.receipt.key)).not.toBeNull();
+  await bucket.put(newerKey, newerIndex);
   await bucket.put("v1/production/unrelated", "untouched");
+  let sharedChecks = 0;
+  const measuredBucket = { list: bucket.list.bind(bucket), get: bucket.get.bind(bucket), delete: bucket.delete.bind(bucket),
+    head: (key: string) => {
+      if (key === shared.receipt.key) sharedChecks++;
+      return bucket.head(key);
+    } };
   // Age the pool only for the retention simulation; the freshest snapshot is
   // always retained even when the scheduler has stopped for over 35 days.
-  expect((await pruneSnapshots(bucket, root, now + 3 * 86_400_000)).deletedObjects).toBeGreaterThan(0);
-  expect(await bucket.head(oldKey)).toBeNull(); expect(await bucket.head(freshKey)).not.toBeNull();
+  expect((await pruneSnapshots(measuredBucket, root, now + 3 * 86_400_000)).deletedObjects).toBeGreaterThan(0);
+  expect(sharedChecks).toBe(1);
+  expect(await bucket.head(oldKey)).toBeNull(); expect(await bucket.head(freshKey)).not.toBeNull(); expect(await bucket.head(newerKey)).not.toBeNull();
   expect(await bucket.head(shared.receipt.key)).not.toBeNull(); expect(await bucket.head(obsolete.receipt.key)).toBeNull();
   expect(await bucket.head("v1/production/unrelated")).not.toBeNull();
   await pruneSnapshots(bucket, root, now + 100 * 86_400_000);
-  expect(await bucket.head(freshKey)).not.toBeNull(); expect(await bucket.head(shared.receipt.key)).not.toBeNull();
+  expect(await bucket.head(freshKey)).toBeNull(); expect(await bucket.head(newerKey)).not.toBeNull(); expect(await bucket.head(shared.receipt.key)).not.toBeNull();
   await expect(checkFreshness(bucket, root, now + 3 * 86_400_000)).rejects.toThrow(/stale/);
   await bucket.put(`${root}/snapshots/bad.json`, "{}");
   await expect(pruneSnapshots(bucket, root)).rejects.toThrow(/retention stopped/);

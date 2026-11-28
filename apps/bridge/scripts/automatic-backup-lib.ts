@@ -1,10 +1,12 @@
 import { createCipheriv, createDecipheriv, createHash, createPrivateKey, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as wait } from "node:timers/promises";
 import { OperationsError, sha256, sameTarget, type BackupFile, type OperationsTarget } from "./operations-lib";
 import type { HubSnapshot, HubPage } from "../src/hub-backup";
 
 const day = 86_400_000;
+const accountRetryDelays = [15_000, 45_000];
 export const RETENTION_DAYS = 35;
 export interface SealedFile extends BackupFile { key: string }
 export interface AutomaticManifest {
@@ -120,7 +122,8 @@ async function hubBookmark(ops: any, accountId: string): Promise<string> {
   return point.bookmark;
 }
 
-export async function captureAccount(ops: any, accountId: string, write: (path: string, bytes: string, table?: string) => Promise<void>, prefix: string) {
+export async function captureAccount(ops: any, accountId: string, write: (path: string, bytes: string, table?: string) => Promise<void>, prefix: string,
+  waitBeforeRetry: (milliseconds: number) => Promise<void> = wait) {
   // Cloudflare's durable commit bookmark survives a read-only hibernation;
   // total_changes + the instance nonce deliberately do not. Local workerd has
   // no PITR log and retains the stricter session-only fence. A failed native
@@ -128,6 +131,7 @@ export async function captureAccount(ops: any, accountId: string, write: (path: 
   const durable = typeof ops.checkpoint === "function";
   let storageChanges = 0, sessionChanges = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
+    const previousStorageChanges = storageChanges;
     const bookmark = durable ? await hubBookmark(ops, accountId) : undefined;
     const snapshot: HubSnapshot = await ops.snapshotBegin(accountId), pages: { table: string; path: string }[] = [];
     if (snapshot.version !== 1 || !Array.isArray(snapshot.tables) || snapshot.tables.length > 64) throw new OperationsError("Unsupported hub snapshot");
@@ -166,6 +170,9 @@ export async function captureAccount(ops: any, accountId: string, write: (path: 
       }
       if (durable) storageChanges++; else sessionChanges++;
     }
+    // Give a burst of writes time to settle before reading a new bookmark.
+    const retryDelay = accountRetryDelays[attempt];
+    if (retryDelay !== undefined && storageChanges > previousStorageChanges) await waitBeforeRetry(retryDelay);
   }
   throw new OperationsError(`Account invalidated during all three backup attempts (storage changes: ${storageChanges}; session churn: ${sessionChanges}); no completed backup was published. Retry when activity settles`);
 }
@@ -212,9 +219,17 @@ export async function pruneSnapshots(bucket: any, root: string, now = Date.now()
   const newest = Math.max(...indexes.map(({ index }) => Date.parse(index.completedAt)));
   const keep = indexes.filter(({ index }) => Date.parse(index.completedAt) >= now - RETENTION_DAYS * day || Date.parse(index.completedAt) === newest);
   if (!keep.length) throw new OperationsError("No completed backup; retention stopped");
-  const referenced = new Set(keep.flatMap(({ index }) => [index.manifest, ...index.objects].map((ref) => ref.key)));
+  const referenced = new Map<string, ObjectReceipt>();
   // Validate ALL retained references before deleting even one expired snapshot.
   for (const { index } of keep) for (const ref of [index.manifest, ...index.objects]) {
+    const previous = referenced.get(ref.key);
+    if (previous && (previous.etag !== ref.etag || previous.size !== ref.size || previous.sha256 !== ref.sha256)) {
+      throw new OperationsError("Retained backup references disagree; retention stopped");
+    }
+    referenced.set(ref.key, ref);
+  }
+  // Incremental snapshots share immutable objects; verify each key once.
+  for (const ref of referenced.values()) {
     const head = await bucket.head(ref.key);
     if (!head || head.etag !== ref.etag || head.size !== ref.size) throw new OperationsError("Retained backup is incomplete; retention stopped");
   }
