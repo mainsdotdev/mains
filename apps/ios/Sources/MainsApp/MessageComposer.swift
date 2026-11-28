@@ -56,7 +56,10 @@ private struct ComposerInset<Bar: View>: ViewModifier {
                             readerPanel(viewportHeight: viewport.size.height, editing: editing)
                         }
                     } else {
-                        page.safeAreaInset(edge: .bottom, spacing: 0) {
+                        VStack(spacing: 0) {
+                            page
+                                .frame(height: expanded ? 0 : nil)
+                                .opacity(expanded ? 0 : 1)
                             panel(viewportHeight: viewport.size.height)
                                 .environment(\.compactComposerEditing, composerFocused == nil ? nil : editing)
                         }
@@ -117,8 +120,9 @@ struct MessageComposer: View {
     static let horizontalInset: CGFloat = 12
     static let standardVerticalInset: CGFloat = 8
     static let controlHeight: CGFloat = 44
+    static let compactControlHeight: CGFloat = 50
+    fileprivate static let actionButtonDiameter: CGFloat = 36
     private static let actionIconSize: CGFloat = 24
-    private static let compactControlHeight: CGFloat = 50
     private static let compactCornerRadius: CGFloat = compactControlHeight / 2
     private static let editorSizeButtonWidth: CGFloat = 44
 
@@ -165,7 +169,7 @@ struct MessageComposer: View {
         false
         #endif
     }
-    @State private var textOverflows = false
+    @State private var textCanExpand = false
     @State private var file = false
     @State private var pluginsOpen = false
     @State private var contextPresentationID = UUID()
@@ -295,7 +299,7 @@ struct MessageComposer: View {
     #if MAINS_GPT_LIVE
         .onChange(of: ownsVoice ? session.voice.presentation : nil, initial: true) { _, presentation in
             if presentation == nil { voiceControlsVisible = false }
-            if presentation == .focus { focused = false; expansion?.wrappedValue = false; textOverflows = false }
+            if presentation == .focus { focused = false; expansion?.wrappedValue = false; textCanExpand = false }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
             if focused || composerIsEditing || ownsVoice { keyboardDismissal = KeyboardTransition(notification) }
@@ -337,6 +341,9 @@ struct MessageComposer: View {
         let usesLegacyMateLayout = context.lockedProfile && !usesCompactLayout
         let stackedMate = usesLegacyMateLayout && (focused || !draft.text.isEmpty || editorExpanded || dictatedText != nil)
         let compactMate = usesLegacyMateLayout && !stackedMate
+        let showsFocusedEditor = composerIsEditing && !compactComposer && !editorExpanded
+        let controlsOffset: CGFloat = showsFocusedEditor ? 3 : 0
+        let standardRadius: CGFloat = showsFocusedEditor ? 30 : 34
         return VStack(alignment: .leading, spacing: 4) {
             if showsCollapseButtonAboveEditor {
                 HStack {
@@ -356,7 +363,8 @@ struct MessageComposer: View {
             }
             if context.lockedProfile || usesCompactLayout {
                 MateComposerLayout(expanded: usesLegacyMateLayout ? stackedMate : !compactComposer, fillsHeight: editorExpanded,
-                                   compactRowHeight: usesCompactLayout ? Self.compactControlHeight : nil) {
+                                   compactRowHeight: usesCompactLayout ? Self.compactControlHeight : nil,
+                                   expandedControlsOffset: controlsOffset) {
                     textEditor(compact: compactComposer || compactMate)
                     composerLeadingAction
                     HStack(spacing: 0) {
@@ -378,15 +386,16 @@ struct MessageComposer: View {
                     composerActions()
                 }
                 .buttonStyle(.plain)
+                .offset(y: controlsOffset)
             }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, compactComposer ? 0 : compactMate ? 4 : Self.standardVerticalInset)
-        .modifier(GlassSurface(radius: compactComposer ? Self.compactCornerRadius : editorExpanded ? 24 : 34,
-                               interactive: false))
         .overlay(alignment: .topTrailing) {
             if showsExpandButton { editorSizeButton.padding([.top, .trailing], 8) }
         }
+        .modifier(GlassSurface(radius: compactComposer ? Self.compactCornerRadius : editorExpanded ? 24 : standardRadius,
+                               interactive: false))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("messageComposer")
         .animation(reduceMotion ? nil : MateComposerLayout.transition, value: stackedMate)
@@ -412,7 +421,7 @@ struct MessageComposer: View {
             fillsHeight: editorExpanded, reservedTrailingWidth: expandButtonSpace,
             compactRowHeight: usesCompactLayout ? Self.compactControlHeight : nil,
             showsSingleLine: compactComposer, scrollsHorizontally: ownsVoice, centersCompactPlaceholder: !ownsVoice,
-            onOverflowChange: { textOverflows = $0 },
+            onExpansionAvailabilityChange: { textCanExpand = $0 },
             selection: editorSelection, stagesDictation: dictating)
             .opacity(showsMeter ? 0 : 1)
             .allowsHitTesting(!showsMeter)
@@ -422,7 +431,7 @@ struct MessageComposer: View {
             }
     }
 
-    private var showsExpandButton: Bool { !dictating && expansion != nil && !editorExpanded && !compactComposer && textOverflows && !draft.text.isEmpty }
+    private var showsExpandButton: Bool { !dictating && expansion != nil && !editorExpanded && !compactComposer && textCanExpand && !draft.text.isEmpty }
     private var expandButtonSpace: CGFloat { showsExpandButton ? Self.editorSizeButtonWidth : 0 }
     private var showsCollapseButtonAboveEditor: Bool { editorExpanded && verticalSizeClass != .compact }
     private var showsCollapseButtonInControls: Bool { editorExpanded && !showsCollapseButtonAboveEditor }
@@ -437,7 +446,7 @@ struct MessageComposer: View {
         } label: {
             Image(systemName: editorExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
                 .frame(width: Self.editorSizeButtonWidth, height: 44)
                 .contentShape(.rect)
         }
@@ -488,7 +497,7 @@ struct MessageComposer: View {
     }
 
     private var sendMessageButton: some View {
-        ComposerSendButton(providerID: context.providerId, sending: draft.isSending, diameter: Self.actionIconSize) {
+        ComposerSendButton(providerID: context.providerId, sending: draft.isSending) {
             if dictating { finishDictation(sendAfter: true) }
             else { submitMessage() }
         }
@@ -625,9 +634,9 @@ struct MessageComposer: View {
     private var stopActionIcon: some View {
         Image(systemName: "stop.fill").font(.callout.weight(.semibold))
         .opacity(stopping ? 0.5 : 1)
-        .frame(width: 36, height: 36).foregroundStyle(.white)
+        .frame(width: Self.actionButtonDiameter, height: Self.actionButtonDiameter).foregroundStyle(.white)
         .background(composerAccent, in: .circle)
-        .frame(width: 44, height: 44).contentShape(.circle)
+        .frame(width: Self.controlHeight, height: Self.controlHeight).contentShape(.circle)
     }
 
     @ViewBuilder private func composerActions() -> some View {
@@ -800,11 +809,11 @@ struct ComposerSendButton: View {
     #endif
     let providerID: String
     var sending = false
-    var diameter: CGFloat = 36
     let action: () -> Void
     @Environment(\.mateChatTint) private var mateTint
 
     var body: some View {
+        let diameter = MessageComposer.actionButtonDiameter
         Button(action: action) {
             Image(systemName: "arrow.up").font(.system(size: diameter / 2, weight: .medium))
                 .opacity(sending ? 0.5 : 1)
@@ -825,12 +834,14 @@ struct MateComposerLayout: Layout {
     private let editorInset: CGFloat = 10
     private let fillsHeight: Bool
     private let compactRowHeight: CGFloat?
+    private let expandedControlsOffset: CGFloat
     private var progress: CGFloat
 
-    init(expanded: Bool, fillsHeight: Bool = false, compactRowHeight: CGFloat? = nil) {
+    init(expanded: Bool, fillsHeight: Bool = false, compactRowHeight: CGFloat? = nil, expandedControlsOffset: CGFloat = 0) {
         progress = expanded ? 1 : 0
         self.fillsHeight = fillsHeight
         self.compactRowHeight = compactRowHeight
+        self.expandedControlsOffset = expandedControlsOffset
     }
 
     var animatableData: CGFloat {
@@ -884,7 +895,7 @@ struct MateComposerLayout: Layout {
         let layoutHeight = compactHeight + (expandedHeight - compactHeight) * progress
         let editorHeight = compactEditorHeight + (expandedEditorHeight - compactEditorHeight) * progress
         let editorY = (compactHeight - compactEditorHeight) / 2 * (1 - progress) + 7 * progress
-        let controlsY = compactHeight / 2 * (1 - progress) + (expandedHeight - controlHeight / 2) * progress
+        let controlsY = compactHeight / 2 * (1 - progress) + (expandedHeight - controlHeight / 2 + expandedControlsOffset) * progress
         return (editorX, editorY, editorWidth, editorHeight, configurationX, configurationWidth, controlsY, layoutHeight)
     }
 }

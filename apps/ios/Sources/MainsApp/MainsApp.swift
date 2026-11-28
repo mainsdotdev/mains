@@ -63,22 +63,24 @@ struct RootView: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
+    private enum PairingPresentation: Hashable, Identifiable {
+        case home, homeWithZoom, link
+
+        var id: Self { self }
+    }
+
     @Bindable var session: BackendSession
     @Binding var showsLaunchIntro: Bool
     @AppStorage("appearancePreference") private var appearance = AppAppearance.system
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var pairingTransition
     @State private var incomingLink = ""
-    @State private var showPairing = false
-    @State private var pairingFromHome = false
-    @State private var zoomPairing = false
+    @State private var pairingPresentation: PairingPresentation?
 
     var body: some View {
         AppShell(session: session, openPairing: {
             incomingLink = ""
-            pairingFromHome = true
-            zoomPairing = !reduceMotion
-            showPairing = true
+            pairingPresentation = reduceMotion ? .home : .homeWithZoom
         }, pairingTransition: pairingTransition).id(session.pairing?.deviceId)
         .allowsHitTesting(!showsLaunchIntro)
         .accessibilityHidden(showsLaunchIntro)
@@ -90,18 +92,14 @@ struct RootView: View {
         }
         .onOpenURL { url in
             finishLaunchIntro(false)
-            if !showPairing {
-                pairingFromHome = false
-                zoomPairing = false
-            }
             incomingLink = url.absoluteString
-            showPairing = true
+            if pairingPresentation == nil { pairingPresentation = .link }
         }
-        .sheet(isPresented: $showPairing) {
+        .sheet(item: $pairingPresentation) { presentation in
             let pairing = NavigationStack {
-                PairingView(session: session, initialLink: incomingLink, showsCompletion: pairingFromHome)
+                PairingView(session: session, incomingLink: $incomingLink, showsCompletion: presentation != .link)
             }
-            if zoomPairing {
+            if presentation == .homeWithZoom {
                 pairing.navigationTransition(.zoom(sourceID: HomeView.pairingButtonID, in: pairingTransition))
             } else {
                 pairing

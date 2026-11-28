@@ -551,7 +551,7 @@ async function generateRunTitle(
   runId: string,
   adapter: WorkRunAdapter,
   goal: string,
-  context?: StartRunContextItem[],
+  { context, expectedTitle }: { context?: StartRunContextItem[]; expectedTitle?: string | null } = {},
 ): Promise<void> {
   let title: string;
   try {
@@ -570,10 +570,13 @@ async function generateRunTitle(
     );
     title = fallbackTitle(goal);
   }
-  await runsRepo.updateRun(runId, { title });
+  const updated = expectedTitle === undefined
+    ? await runsRepo.updateRun(runId, { title })
+    : runsRepo.setTitleIfUnchanged(runId, title, expectedTitle);
+  if (!updated) return;
   // Titles land seconds after the run starts; the chat sidebar refreshes on
   // this instead of polling.
-  emit("runs:updated", { runId, ts: Date.now() });
+  emit(CHANNELS.runs.updated, { runId, ts: Date.now() });
 }
 
 /** Broadcast statusChanged for runs that fail before a session is created. */
@@ -1074,6 +1077,7 @@ export const runsService = {
       const completedItems = new Set<string>();
       const itemTimestamps = new Map<string, number>();
       let persistence = Promise.resolve();
+      let needsInitialGoal = !run.goal?.trim();
       const onRealtimeEvent = (event: RunRealtimeEvent) => {
         emit(CHANNELS.runs.realtimeEvent, event, realtimeScope);
         if (
@@ -1143,7 +1147,8 @@ export const runsService = {
           transcriptContext.delete(oldest);
           itemTimestamps.delete(oldest);
         }
-        if (!event.text.trim()) return;
+        const text = event.text.trim();
+        if (!text) return;
         persistence = persistence
           .then(async () => {
             await insertRunInputArtifact(run.id, {
@@ -1152,11 +1157,18 @@ export const runsService = {
               content: event.text,
               metadata,
             });
-            if (event.role === "user" && !run.goal?.trim()) {
-              const current = await runsRepo.findRunById(run.id);
-              if (current && !current.goal?.trim()) {
-                await runsRepo.updateRun(run.id, { goal: event.text.trim() });
+            if (event.role === "user" && needsInitialGoal) {
+              const initial = runsRepo.setInitialGoal(run.id, text);
+              needsInitialGoal = false;
+              if (initial) {
                 emit(CHANNELS.runs.updated, { runId: run.id, ts: Date.now() });
+                if (!initial.title?.trim()) {
+                  void generateRunTitle(run.id, adapter, text, {
+                    expectedTitle: initial.title,
+                  }).catch((error) =>
+                    console.error(`[RunsService] Title generation failed for ${run.id}:`, error),
+                  );
+                }
               }
             }
             emit(CHANNELS.runs.eventPersisted, {
@@ -2375,7 +2387,7 @@ export const runsService = {
         runId,
         adapter,
         payload.goal,
-        payload.initialContext,
+        { context: payload.initialContext },
       ).catch((err) =>
         console.error(
           `[RunsService] Title generation failed for ${runId}:`,

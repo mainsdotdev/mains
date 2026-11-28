@@ -233,7 +233,7 @@ struct ContextTextEditor: View {
     var showsSingleLine = false
     var scrollsHorizontally = false
     var centersCompactPlaceholder = true
-    var onOverflowChange: ((Bool) -> Void)? = nil
+    var onExpansionAvailabilityChange: ((Bool) -> Void)? = nil
     var selection: ComposerEditorSelection? = nil
     var stagesDictation = false
     @State private var artwork = ContextArtwork()
@@ -244,7 +244,7 @@ struct ContextTextEditor: View {
                          images: artwork.images, artworkRevision: artwork.revision, measuredWidth: measuredWidth,
                          fillsHeight: fillsHeight, reservedTrailingWidth: reservedTrailingWidth,
                          compactRowHeight: compactRowHeight, showsSingleLine: showsSingleLine, scrollsHorizontally: scrollsHorizontally,
-                         onOverflowChange: onOverflowChange,
+                         onExpansionAvailabilityChange: onExpansionAvailabilityChange,
                          selection: selection, stagesDictation: stagesDictation)
             .overlay {
                 if compactRowHeight != nil && text.isEmpty {
@@ -308,7 +308,7 @@ private struct ContextTextInput: UIViewRepresentable {
     let compactRowHeight: CGFloat?
     let showsSingleLine: Bool
     let scrollsHorizontally: Bool
-    let onOverflowChange: ((Bool) -> Void)?
+    let onExpansionAvailabilityChange: ((Bool) -> Void)?
     let selection: ComposerEditorSelection?
     let stagesDictation: Bool
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -328,7 +328,7 @@ private struct ContextTextInput: UIViewRepresentable {
     }
     func updateUIView(_ view: ComposerTextView, context: Context) {
         let coordinator = context.coordinator; coordinator.parent = self
-        view.onOverflowChange = onOverflowChange
+        view.onExpansionAvailabilityChange = onExpansionAvailabilityChange
         view.reservedTrailingWidth = reservedTrailingWidth
         view.isUserInteractionEnabled = !mainPaneCovered
         view.isAccessibilityElement = !mainPaneCovered
@@ -439,7 +439,7 @@ private struct ContextTextInput: UIViewRepresentable {
     }
     static func dismantleUIView(_ uiView: ComposerTextView, coordinator: Coordinator) {
         uiView.wantsFocus = false
-        uiView.onOverflowChange = nil
+        uiView.onExpansionAvailabilityChange = nil
         uiView.delegate = nil
     }
 
@@ -510,7 +510,7 @@ final class ComposerTextView: UITextView {
     var wantsFocus = false
     var scrollsHorizontally = false
     var onCopy: (() -> Void)?
-    var onOverflowChange: ((Bool) -> Void)?
+    var onExpansionAvailabilityChange: ((Bool) -> Void)?
     var reservedTrailingWidth: CGFloat = 0 {
         didSet {
             if reservedTrailingWidth != oldValue {
@@ -522,7 +522,7 @@ final class ComposerTextView: UITextView {
     var compactHeightLimit: CGFloat { ceil((font ?? .preferredFont(forTextStyle: .body)).lineHeight * 6) }
     private var measuredViewport = CGSize.zero
     private var needsTextMeasurement = true
-    private var overflows: Bool?
+    private var expansionAvailable: Bool?
     init() {
         super.init(frame: .zero, textContainer: nil)
         placeholder.textColor = .placeholderText; placeholder.isUserInteractionEnabled = false
@@ -568,17 +568,18 @@ final class ComposerTextView: UITextView {
         let needsScrolling = !isSingleLine && fittedHeight > bounds.height + 0.5
         if needsScrolling != isScrollEnabled { isScrollEnabled = needsScrolling }
         if resized, isFirstResponder, needsScrolling { scrollRangeToVisible(selectedRange) }
-        guard !isSingleLine, onOverflowChange != nil else { return }
-        // Check the original width so the space for the button cannot keep it visible.
+        guard !isSingleLine, onExpansionAvailabilityChange != nil else { return }
+        // Measure at the original width and offer expansion as the last visible line fills.
         let fullHeight = !empty && reservedTrailingWidth > 0
             ? sizeThatFits(CGSize(width: bounds.width + reservedTrailingWidth, height: .greatestFiniteMagnitude)).height
             : fittedHeight
-        let overflowsWithoutButton = fullHeight > compactHeightLimit + 0.5
-        guard overflows != overflowsWithoutButton else { return }
-        overflows = overflowsWithoutButton
+        let lineHeight = (font ?? .preferredFont(forTextStyle: .body)).lineHeight
+        let canExpand = fullHeight >= compactHeightLimit - lineHeight / 2
+        guard expansionAvailable != canExpand else { return }
+        expansionAvailable = canExpand
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.overflows == overflowsWithoutButton else { return }
-            self.onOverflowChange?(overflowsWithoutButton)
+            guard let self, self.expansionAvailable == canExpand else { return }
+            self.onExpansionAvailabilityChange?(canExpand)
         }
     }
     override func didMoveToWindow() { super.didMoveToWindow(); if wantsFocus { requestFocus() } }

@@ -175,9 +175,10 @@ describe("runsService", () => {
         work = handlers;
       });
       const stopRealtime = vi.fn(async () => { publish({ ...payload, type: "closed", reason: "ended" }); });
-      vi.mocked(createWorkAdapter).mockReturnValue({ startRealtime, stopRealtime } as never);
+      const generateTitle = vi.fn().mockResolvedValue("Spoken Request");
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRealtime, stopRealtime, generateTitle } as never);
       const voice = (event: RunRealtimeUpdate) => publish({ runId: run.id, connectionId: payload.connectionId, ...event });
-      return { run, payload, startRealtime, stopRealtime, voice, work: () => work };
+      return { run, payload, startRealtime, stopRealtime, generateTitle, voice, work: () => work };
     }
 
     it("closes a disconnected phone's call and keeps signaling scoped to that socket", async () => {
@@ -345,19 +346,51 @@ describe("runsService", () => {
       expect(runSessionRegistry.get(result.runId)).toBeUndefined();
     });
 
-    it("accepts a sessionless conversation and uses the first spoken user sentence as its goal", async () => {
+    it("uses the first completed user transcript to set the goal and generate a title once", async () => {
       const h = voiceFixture(true);
+      const send = vi.fn();
+      const off = registerEventSink({ kind: "test", send });
       try {
         await runsService.startRealtime(h.payload);
         expect(h.startRealtime).toHaveBeenCalledOnce();
+        h.voice({ type: "transcript", itemId: "first", role: "user", text: "My first", final: false });
         h.voice({ type: "transcript", itemId: "first", role: "user", text: "My first spoken request", final: true });
         h.voice({ type: "transcript", itemId: "first", role: "user", text: "My first spoken request", final: true });
-        await vi.waitFor(async () => expect((await runsService.getRunById(h.run.id))?.goal).toBe("My first spoken request"));
-        const artifacts = await runsRepo.findArtifactsByRun(h.run.id);
-        expect(artifacts).toHaveLength(1);
-        expect(artifacts[0]).toMatchObject({ kind: "user-prompt", content: "My first spoken request", metadata: { voice: true } });
+        h.voice({ type: "transcript", itemId: "next", role: "user", text: "A follow-up request", final: true });
+        await vi.waitFor(async () => {
+          expect(await runsService.getRunById(h.run.id)).toMatchObject({
+            goal: "My first spoken request", title: "Spoken Request",
+          });
+          const artifacts = await runsRepo.findArtifactsByRun(h.run.id);
+          expect(artifacts).toHaveLength(2);
+          expect(artifacts[0]).toMatchObject({ kind: "user-prompt", content: "My first spoken request", metadata: { voice: true } });
+        });
+        expect(h.generateTitle).toHaveBeenCalledExactlyOnceWith("My first spoken request", undefined);
+        expect(send.mock.calls.filter(([channel]) => channel === CHANNELS.runs.updated)).toHaveLength(2);
         expect(await runsRepo.findTurnsByRun(h.run.id)).toHaveLength(0);
-      } finally { await runsService.stopRealtime(h.payload); }
+      } finally {
+        off();
+        await runsService.stopRealtime(h.payload);
+      }
+    });
+
+    it("keeps a manual voice chat title when background title generation finishes later", async () => {
+      const h = voiceFixture(true);
+      let resolveTitle!: (value: string) => void;
+      const title = new Promise<string>((resolve) => { resolveTitle = resolve; });
+      h.generateTitle.mockReturnValueOnce(title);
+      try {
+        await runsService.startRealtime(h.payload);
+        h.voice({ type: "transcript", itemId: "first", role: "user", text: "My first spoken request", final: true });
+        await vi.waitFor(() => expect(h.generateTitle).toHaveBeenCalledOnce());
+        await runsService.updateRun(h.run.id, { title: "My Voice Chat" });
+        resolveTitle("Spoken Request");
+        await title;
+        expect((await runsService.getRunById(h.run.id))?.title).toBe("My Voice Chat");
+      } finally {
+        resolveTitle("Spoken Request");
+        await runsService.stopRealtime(h.payload);
+      }
     });
 
     it("validates the space provider and Developer workspace before creating a voice conversation", async () => {
@@ -403,6 +436,7 @@ describe("runsService", () => {
         expect(turns[1].metadata).not.toHaveProperty("providerRootTurnId");
         expect(turns.every((turn) => turn.endedAt !== null)).toBe(true);
         expect((await runsService.getRunById(h.run.id))?.goal).toBe("Existing conversation");
+        expect(h.generateTitle).not.toHaveBeenCalled();
       } finally {
         await runSessionRegistry.get(h.run.id)?.finalize({ status: "canceled" });
         await runsService.stopRealtime(h.payload);

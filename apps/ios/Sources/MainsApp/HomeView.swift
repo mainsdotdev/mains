@@ -18,7 +18,7 @@ struct HomeView: View {
     @State private var optionsSheet = false
     @State private var consent: ConsentContext?
     @State private var composerFocused = false
-    @State private var workspaceRequired = false
+    @State private var workspaceToast = ActionToast()
     #if MAINS_GPT_LIVE
     private var preparingVoice: Bool {
         session.voice.ownsCall && session.voice.runID == nil && session.voiceMate == nil && session.voiceSpaceID == space?.id
@@ -26,6 +26,7 @@ struct HomeView: View {
     #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var space: Space? { session.selectedSpace }
+    private var workspaceID: String? { space.flatMap { session.homeTargets[$0.id]?.workspaceID } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,7 +54,7 @@ struct HomeView: View {
             if let space {
                 ToolbarItem(placement: .topBarTrailing) {
                     VoiceStartButton(session: session, context: ComposerContext(space: space),
-                                     workspaceRequired: { workspaceRequired = true }, onCreated: onCreated)
+                                     workspaceRequired: showWorkspaceRequired, onCreated: onCreated)
                         .id(space.id)
                 }
             }
@@ -63,7 +64,7 @@ struct HomeView: View {
             if let space {
                 HomeComposerArea(session: session, space: space, targetPicker: $targetPicker, modelSheet: $modelSheet,
                                  optionsSheet: $optionsSheet, consent: $consent, editorExpanded: editorExpanded,
-                                 workspaceRequired: $workspaceRequired, focusChanged: { composerFocused = $0 }, onCreated: onCreated)
+                                 onWorkspaceRequired: showWorkspaceRequired, focusChanged: { composerFocused = $0 }, onCreated: onCreated)
                     .id(space.id)
                     .transition(reduceMotion ? .identity : .move(edge: .bottom).combined(with: .opacity))
             }
@@ -72,14 +73,24 @@ struct HomeView: View {
         .modifier(VoicePresentationLayer(voice: session.voice, presented: preparingVoice))
         #endif
         .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: space != nil)
+        .actionToastHost(workspaceToast)
         .composerPickers(model: $modelSheet, options: $optionsSheet, target: $targetPicker, session: session,
                          context: space.map { ComposerContext(space: $0) })
-        .onChange(of: session.ownership) { _, _ in targetPicker = false }
-        .onChange(of: space?.id) { _, _ in targetPicker = false; composerFocused = false; workspaceRequired = false }
-        .onChange(of: space?.mode) { _, _ in targetPicker = false }
+        .onChange(of: session.ownership) { _, _ in targetPicker = false; workspaceToast.dismiss() }
+        .onChange(of: space?.id) { _, _ in targetPicker = false; composerFocused = false; workspaceToast.dismiss() }
+        .onChange(of: space?.mode) { _, _ in targetPicker = false; workspaceToast.dismiss() }
+        .onChange(of: targetPicker) { _, presented in if presented { workspaceToast.dismiss() } }
         .task(id: "\(space?.providerId ?? ""):\(session.isConnected)") {
             if let space { await session.loadModels(space.providerId, force: true) }
         }
+    }
+
+    private func showWorkspaceRequired() {
+        let hasWorkspace = session.workspaces.contains { $0.id == workspaceID && $0.isReplica != true }
+        let text: LocalizedStringResource = hasWorkspace
+            ? "Workspace folder unavailable. Choose another."
+            : "Choose a workspace to start"
+        workspaceToast.show(text, warning: true) { [picker = $targetPicker] in picker.wrappedValue = true }
     }
 
     @ViewBuilder private var homeContent: some View {
@@ -209,11 +220,11 @@ struct HomeComposerArea: View {
     @Binding var consent: ConsentContext?
     let editorExpanded: Bool
     let fixedWorkspace: Workspace?
+    let onWorkspaceRequired: (() -> Void)?
     let focusChanged: ((Bool) -> Void)?
     let isCurrent: () -> Bool
     let onCreated: (String) -> Void
     @Bindable private var draft: ConversationDraft
-    @Binding private var workspaceRequired: Bool
     private var target: HomeTarget { session.homeTargets[space.id] ?? HomeTarget() }
     private var workspaceID: String? { fixedWorkspace?.id ?? target.workspaceID }
     private var workspace: Workspace? { session.workspaces.first { $0.id == workspaceID && $0.isReplica != true } }
@@ -224,12 +235,12 @@ struct HomeComposerArea: View {
     private var targetReady: Bool { space.mode != "developer" || workspace != nil && session.gitStates.first(where: { $0.workspaceId == workspace?.id })?.pathExists != false }
     init(session: BackendSession, space: Space, targetPicker: Binding<Bool>, modelSheet: Binding<Bool>, optionsSheet: Binding<Bool>,
          consent: Binding<ConsentContext?>, editorExpanded: Bool, fixedWorkspace: Workspace? = nil,
-         workspaceRequired: Binding<Bool> = .constant(false),
+         onWorkspaceRequired: (() -> Void)? = nil,
          focusChanged: ((Bool) -> Void)? = nil, isCurrent: @escaping () -> Bool = { true },
          onCreated: @escaping (String) -> Void) {
         self.session = session; self.space = space; _targetPicker = targetPicker; _modelSheet = modelSheet; _optionsSheet = optionsSheet
         _consent = consent; self.editorExpanded = editorExpanded
-        _workspaceRequired = workspaceRequired
+        self.onWorkspaceRequired = onWorkspaceRequired
         self.fixedWorkspace = fixedWorkspace; self.focusChanged = focusChanged; self.isCurrent = isCurrent; self.onCreated = onCreated
         draft = session.homeDraft(for: space.id, workspaceID: fixedWorkspace?.id)
     }
@@ -276,11 +287,6 @@ struct HomeComposerArea: View {
                             Task { await checkDelivery(pending) }
                         }.disabled(!session.isConnected || session.sending).accessibilityIdentifier("checkDelivery")
                     }
-                } else if workspaceRequired && !targetReady {
-                    ChatNotice(title: "Workspace required", message: workspaceRequiredMessage, symbol: "exclamationmark.circle", warning: true) {
-                        Button("Choose a workspace") { targetPicker = true }.accessibilityIdentifier("chooseRequiredWorkspace")
-                        Button("Dismiss") { workspaceRequired = false }
-                    }
                 } else if let failure = draft.failure {
                     ChatNotice(title: draft.failureTitle, message: failure, symbol: "exclamationmark.circle", warning: true) {
                         if fixedWorkspace == nil, !targetReady {
@@ -316,10 +322,6 @@ struct HomeComposerArea: View {
                          model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend,
                          focusChanged: focusChanged)
         }.padding(.bottom, HomeView.composerBottomInset)
-        .onChange(of: targetReady) { _, ready in
-            if ready { workspaceRequired = false }
-        }
-        .onChange(of: session.ownership) { _, _ in workspaceRequired = false }
         .sheet(item: $consent) { context in
             ConsentView(context: context) {
                 guard context.backendID == session.pairing?.descriptor.backendId, context.providerID == space.providerId else { return }
@@ -375,15 +377,9 @@ struct HomeComposerArea: View {
     }
     private func validateTarget() -> Bool {
         guard !targetReady else { return true }
-        showWorkspaceRequired()
-        return false
-    }
-    private func showWorkspaceRequired() {
         if fixedWorkspace != nil {
             draft.showFailure("This workspace’s folder is unavailable on your computer.", title: "Workspace unavailable")
-        } else { workspaceRequired = true }
-    }
-    private var workspaceRequiredMessage: String {
-        workspace == nil ? "Choose a workspace before starting a conversation in Code mode." : "This workspace’s folder is unavailable on your computer. Choose another workspace or restore the folder."
+        } else { onWorkspaceRequired?() }
+        return false
     }
 }

@@ -422,6 +422,24 @@ export const runsRepo = {
     return this.findRunById(id);
   },
 
+  setInitialGoal(id: string, goal: string): { title: string | null } | null {
+    const db = getDb();
+    return db.transaction((tx) => {
+      const current = tx.select({ goal: runs.goal, title: runs.title })
+        .from(runs).where(eq(runs.id, id)).get();
+      if (!current || current.goal?.trim()) return null;
+      tx.update(runs).set({ goal, updatedAt: sql`(unixepoch())` })
+        .where(eq(runs.id, id)).run();
+      return { title: current.title };
+    });
+  },
+
+  setTitleIfUnchanged(id: string, title: string, expectedTitle: string | null): boolean {
+    const result = getDb().update(runs).set({ title, updatedAt: sql`(unixepoch())` })
+      .where(and(eq(runs.id, id), sql`${runs.title} IS ${expectedTitle}`)).run();
+    return result.changes > 0;
+  },
+
   async deleteRun(id: string): Promise<void> {
     const db = getDb();
     await db.delete(runs).where(eq(runs.id, id));

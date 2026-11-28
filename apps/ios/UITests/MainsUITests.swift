@@ -2089,6 +2089,7 @@ final class MainsUITests: XCTestCase {
         }
 
         let search = beginSearch("Search Mates")
+        XCTAssertTrue(app.buttons["openArchivedMates"].isHittable)
         replaceSearch("PLANS TRIPS", in: search)
         XCTAssertTrue(mate.waitForNonExistence(timeout: 5))
         XCTAssertTrue(planner.exists)
@@ -2104,6 +2105,7 @@ final class MainsUITests: XCTestCase {
         let retired = app.buttons["mate-fixture-retired-mate"]
         XCTAssertTrue(retired.waitForExistence(timeout: 5))
         let archivedSearch = beginSearch("Search archived Mates")
+        XCTAssertTrue(app.buttons["closeArchivedMates"].isHittable)
         replaceSearch("no such mate", in: archivedSearch)
         XCTAssertTrue(app.staticTexts["No matching Mates"].waitForExistence(timeout: 5))
         XCTAssertFalse(retired.exists)
@@ -2848,19 +2850,20 @@ final class MainsUITests: XCTestCase {
         app.buttons["closeSidebar"].tap()
 
         let startVoice = app.buttons["startVoice"]
-        let notice = app.staticTexts["Workspace required"]
+        let toast = app.buttons["actionToast"]
         XCTAssertTrue(app.buttons["chooseTarget"].label.contains("Choose a workspace"))
         XCTAssertTrue(startVoice.waitForExistence(timeout: 5))
         XCTAssertTrue(startVoice.isEnabled)
         startVoice.tap()
-        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        XCTAssertTrue(toast.waitForExistence(timeout: 3))
+        XCTAssertEqual(toast.label, "Choose a workspace to start")
         XCTAssertFalse(app.buttons["allowDataSharing"].exists)
         XCTAssertFalse(app.buttons["endVoice"].exists)
 
-        app.buttons["chooseRequiredWorkspace"].tap()
+        toast.tap()
         _ = targetWheel("docs", in: app)
         confirmTarget(in: app)
-        XCTAssertTrue(notice.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(toast.exists)
         startVoice.tap()
         XCTAssertTrue(app.staticTexts["Your microphone audio during the call"].waitForExistence(timeout: 5))
         app.buttons["declineDataSharing"].tap()
@@ -3109,13 +3112,20 @@ final class MainsUITests: XCTestCase {
         app.buttons["closeSidebar"].tap()
         let input = app.textViews["homeMessageInput"]
         XCTAssertTrue(app.buttons["chooseTarget"].label.contains("Choose a workspace"))
-        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap(); input.typeText("Keep this request")
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap()
+        assertKeyboardVisible(app)
+        input.typeText("Keep this request")
         let send = app.buttons["startConversation"]
         XCTAssertTrue(send.isEnabled); send.tap()
-        XCTAssertTrue(app.staticTexts["Workspace required"].waitForExistence(timeout: 5))
+        let toast = app.buttons["actionToast"]
+        XCTAssertTrue(toast.waitForExistence(timeout: 3))
+        XCTAssertEqual(toast.label, "Choose a workspace to start")
+        XCTAssertGreaterThanOrEqual(toast.frame.minY, app.navigationBars.firstMatch.frame.maxY)
         XCTAssertEqual(input.value as? String, "Keep this request")
         XCTAssertFalse(app.buttons["allowDataSharing"].exists)
-        app.buttons["chooseRequiredWorkspace"].tap()
+        XCTAssertTrue(toast.waitForNonExistence(timeout: 7))
+        send.tap()
+        XCTAssertTrue(toast.waitForExistence(timeout: 3)); toast.tap()
         let wheel = targetWheel("docs", in: app)
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.exists)
@@ -3161,23 +3171,51 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "planDisclosure-", "Applied")).firstMatch.waitForExistence(timeout: 10))
     }
 
-    func testDemoLongMessageEditorExpandsWithoutLosingDraftOrCaret() {
+    func testDemoLongMessageEditorExpandsWithoutLosingDraftOrCaret() throws {
         continueAfterFailure = false
         let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
         prepareUnpaired(app); app.buttons["startDemo"].tap()
 
         let input = app.textViews["homeMessageInput"]
         let expand = app.buttons["expandMessageEditor"]
         let collapse = app.buttons["collapseMessageEditor"]
+
+        func assertExpandGlyphIsVisible() throws {
+            XCTAssertTrue(expand.isHittable)
+            // The glass can blur the icon while its accessibility hit target stays active.
+            let image = try XCTUnwrap(expand.screenshot().image.cgImage)
+            let center = CGRect(x: image.width / 4, y: image.height / 4, width: image.width / 2, height: image.height / 2)
+            let glyph = try XCTUnwrap(image.cropping(to: center))
+            let pixels = try XCTUnwrap(CGContext(data: nil, width: glyph.width, height: glyph.height, bitsPerComponent: 8,
+                bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            pixels.draw(glyph, in: CGRect(x: 0, y: 0, width: glyph.width, height: glyph.height))
+            let rgba = try XCTUnwrap(pixels.data).assumingMemoryBound(to: UInt8.self)
+            let hasBrightPixel = (0..<glyph.height).contains { row in
+                (0..<glyph.width).contains { column in
+                    let index = row * pixels.bytesPerRow + column * 4
+                    return min(rgba[index], rgba[index + 1], rgba[index + 2]) > 165
+                }
+            }
+            XCTAssertTrue(hasBrightPixel, "The expand icon should be drawn above the dark glass surface.")
+        }
+
         XCTAssertTrue(input.waitForExistence(timeout: 10))
         input.tap()
         input.typeText("First line")
         XCTAssertFalse(expand.exists)
         let fullWidth = input.frame.width
 
-        let moreLines = "\nSecond\nThird\nFourth\nFifth\nSixth\nSeventh\nEighth"
-        input.typeText(moreLines)
+        let lastVisibleLine = "\n2\n3\n4\n5\n6"
+        input.typeText(lastVisibleLine)
         XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: lastVisibleLine.count))
+        XCTAssertTrue(expand.waitForNonExistence(timeout: 5))
+
+        let paragraph = String(repeating: " This is a long draft that wraps across several lines as I keep writing.", count: 5)
+        input.typeText(paragraph)
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        XCTAssertTrue(expand.isHittable)
         let compactHeight = input.frame.height
         XCTAssertLessThan(input.frame.width, fullWidth)
         XCTAssertGreaterThanOrEqual(expand.frame.minX, input.frame.maxX - 1)
@@ -3187,20 +3225,30 @@ final class MainsUITests: XCTestCase {
         let topInset = expand.frame.minY - composer.frame.minY
         let rightInset = composer.frame.maxX - expand.frame.maxX
         XCTAssertEqual(topInset, rightInset, accuracy: 1)
+        let add = app.buttons["addAttachment"]
+        let compactControlsBottom = add.frame.maxY
+        attachScreenshot(app, name: "Expand control in the long draft")
+        try assertExpandGlyphIsVisible()
         expand.tap()
         XCTAssertTrue(collapse.waitForExistence(timeout: 5))
         assertKeyboardVisible(app)
+        attachScreenshot(app, name: "Expanded long message above the keyboard")
+        XCTAssertLessThanOrEqual(add.frame.maxY, compactControlsBottom + 1)
+        XCTAssertTrue(add.isHittable)
+        XCTAssertTrue(app.buttons["startConversation"].isHittable)
         XCTAssertGreaterThan(input.frame.height, compactHeight)
-        XCTAssertEqual(input.frame.width, fullWidth, accuracy: 1)
-        XCTAssertEqual(input.value as? String, "First line" + moreLines)
+        XCTAssertGreaterThanOrEqual(input.frame.width, fullWidth - 1)
+        XCTAssertEqual(input.value as? String, "First line" + paragraph)
 
         input.typeText("a")
         collapse.tap()
         XCTAssertTrue(expand.waitForExistence(timeout: 5))
         assertKeyboardVisible(app)
         XCTAssertEqual(input.frame.height, compactHeight, accuracy: 1)
-        XCTAssertEqual(input.value as? String, "First line" + moreLines + "a")
+        XCTAssertEqual(input.value as? String, "First line" + paragraph + "a")
 
+        input.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.35)).tap()
+        try assertExpandGlyphIsVisible()
         expand.tap()
         XCTAssertTrue(collapse.waitForExistence(timeout: 5))
         app.buttons["startConversation"].tap()
@@ -3776,6 +3824,26 @@ final class MainsUITests: XCTestCase {
         XCTAssertFalse(status.exists)
     }
 
+    func testFirstPairingFromHomeShowsCompletion() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app)
+
+        app.buttons["scanPairingCode"].tap()
+        let field = app.textFields["pairingLink"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText(fixtureLink("ios-test"))
+        app.buttons["reviewConnection"].tap()
+        let confirm = app.buttons["confirmPairing"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+
+        XCTAssertTrue(app.staticTexts["Test Mac paired"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 15))
+        forgetFixture(app)
+    }
+
     func testUnpairedHomeAndInlinePairing() throws {
         continueAfterFailure = false
         let app = makeApplication()
@@ -4280,6 +4348,38 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
+    func testDemoComposerReturnsToBottomAfterDismissingKeyboardDuringReply() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        let sample = app.buttons["demoSubagentsPrompt"]
+        XCTAssertTrue(sample.waitForExistence(timeout: 10)); sample.tap()
+        let homeInput = app.textViews["homeMessageInput"]
+        homeInput.tap()
+        assertKeyboardVisible(app)
+        app.buttons["startConversation"].tap()
+        let consent = app.buttons["allowDataSharing"]
+        XCTAssertTrue(consent.waitForExistence(timeout: 5)); consent.tap()
+
+        let input = app.textViews["messageInput"]
+        let composer = app.descendants(matching: .any)["messageComposer"].firstMatch
+        let keyboard = app.keyboards.firstMatch
+        let stop = app.buttons["stopReply"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 10))
+        assertConversationComposerAtBottom(app)
+        let restingBottom = composer.frame.maxY
+
+        input.tap()
+        assertKeyboardVisible(app)
+        let blank = app.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: 25, dy: input.frame.minY - app.frame.minY - 55))
+        blank.tap()
+        assertKeyboardStaysDismissed(keyboard)
+        XCTAssertEqual(composer.frame.maxY, restingBottom, accuracy: 2)
+        XCTAssertFalse(app.buttons["chooseModel"].exists)
+    }
+
     func testComposerControlsStayAboveKeyboard() throws {
         continueAfterFailure = false
         let app = makeApplication()
@@ -4378,6 +4478,13 @@ final class MainsUITests: XCTestCase {
         let reappeared = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true"), object: keyboard)
         reappeared.isInverted = true
         XCTAssertEqual(XCTWaiter.wait(for: [reappeared], timeout: 1), .completed, file: file, line: line)
+    }
+
+    private func assertConversationComposerAtBottom(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let composer = app.descendants(matching: .any)["messageComposer"].firstMatch
+        XCTAssertTrue(app.textViews["messageInput"].waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), file: file, line: line)
+        XCTAssertLessThan(app.frame.maxY - composer.frame.maxY, 60, "The composer should return to the bottom after the keyboard closes", file: file, line: line)
     }
 
     private func assertComposerAboveKeyboard(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
@@ -4574,6 +4681,44 @@ final class MainsUITests: XCTestCase {
         stepPermission("Ask permissions", below: false, in: app)
         attachScreenshot(app, name: "Native run options – Claude permissions")
         closeRunOptions(in: app)
+        forgetFixture(app)
+    }
+
+    func testSearchControlsMatchTheRestingComposer() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["closeSidebar"].tap()
+
+        let composer = app.descendants(matching: .any).matching(identifier: "messageComposer").firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        let height = composer.frame.height
+        openSidebar(app)
+        app.buttons["sidebarSearch"].tap()
+        let globalInput = app.textFields["globalSearchInput"]
+        let globalClose = app.buttons["closeGlobalSearch"]
+        XCTAssertTrue(globalInput.waitForExistence(timeout: 5))
+        assertKeyboardVisible(app)
+        XCTAssertEqual(globalClose.frame.height, height, accuracy: 0.5)
+        attachScreenshot(app, name: "Search controls above the keyboard")
+        globalClose.tap()
+
+        let project = app.buttons["openProject-fixture-kitchen"]
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        project.tap()
+        let projectInput = app.textFields["projectSearch"]
+        let newConversation = app.buttons["newConversation"]
+        XCTAssertTrue(projectInput.waitForExistence(timeout: 5))
+        XCTAssertEqual(newConversation.frame.height, height, accuracy: 0.5)
+        projectInput.tap()
+        let projectClose = app.buttons["closeProjectSearch"]
+        XCTAssertTrue(projectClose.waitForExistence(timeout: 5))
+        assertKeyboardVisible(app)
+        XCTAssertEqual(projectClose.frame.height, height, accuracy: 0.5)
+        attachScreenshot(app, name: "Project search controls above the keyboard")
+        projectClose.tap()
+        XCTAssertTrue(newConversation.waitForExistence(timeout: 5))
         forgetFixture(app)
     }
 
@@ -4822,9 +4967,8 @@ final class MainsUITests: XCTestCase {
         app.buttons["startConversation"].tap()
         let consent = app.buttons["allowDataSharing"]
         if consent.waitForExistence(timeout: 3) { consent.tap() }
-        XCTAssertTrue(app.textViews["messageInput"].waitForExistence(timeout: 10))
+        assertConversationComposerAtBottom(app)
         XCTAssertTrue(app.staticTexts[prompt].waitForExistence(timeout: 10))
-        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5))
         XCTAssertFalse(app.buttons["openSidebar"].exists)
         attachScreenshot(app, name: "Native workspace – chat started in place")
         let url = try XCTUnwrap(URL(string: "http://127.0.0.1:18787/observations"))
@@ -5494,7 +5638,9 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(newMessage.waitForExistence(timeout: 5))
         newMessage.tap()
         newMessage.typeText("Start a native conversation")
+        assertKeyboardVisible(app)
         app.buttons["startConversation"].tap()
+        assertConversationComposerAtBottom(app)
         XCTAssertTrue(app.staticTexts["Native reply delivered."].waitForExistence(timeout: 15))
 
         // Leave the installed app ready for the developer's real pairing.
@@ -5631,8 +5777,8 @@ final class MainsUITests: XCTestCase {
 
     private func confirmTarget(in app: XCUIApplication) {
         let confirm = app.buttons["confirmTarget"]
-        XCTAssertTrue(confirm.isHittable)
-        confirm.tap()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(confirm.waitForNonExistence(timeout: 5))
     }
 

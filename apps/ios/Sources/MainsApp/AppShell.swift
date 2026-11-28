@@ -104,6 +104,8 @@ struct AppShell: View {
                                     }, onLayout: updateSidebarControlLayout),
                                              openComputer: showSettings, openPairing: openPairing, pairingTransition: pairingTransition,
                                              onCreated: { id in
+                                                 // End editing before replacing the view that owns the keyboard.
+                                                 drawerViewport.dismissKeyboard()
                                                  var transaction = Transaction(animation: nil)
                                                  transaction.disablesAnimations = true
                                                  withTransaction(transaction) { homeRunID = id }
@@ -131,6 +133,7 @@ struct AppShell: View {
                                         TargetConversationsView(session: session, target: .workspace(id),
                                             openConversation: { path.append(.conversation($0)) },
                                             onWorkspaceChatCreated: { runID in
+                                                drawerViewport.dismissKeyboard()
                                                 var transaction = Transaction(animation: nil)
                                                 transaction.disablesAnimations = true
                                                 withTransaction(transaction) { workspaceChat = WorkspaceChat(workspaceID: id, runID: runID) }

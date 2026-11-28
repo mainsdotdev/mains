@@ -125,6 +125,8 @@ private struct MateDirectoryView: View {
         }
         .navigationHeaderFade(background: Color(.systemGroupedBackground))
         .searchable(text: $query, placement: .toolbar, prompt: archived ? "Search archived Mates" : "Search Mates")
+        // Keep the top inset stable while the keyboard resizes the directory.
+        .searchPresentationToolbarBehavior(.avoidHidingContent)
         .toolbar {
             DefaultToolbarItem(kind: .search, placement: .bottomBar)
             if !archived && directory?.mates.isEmpty == false {
@@ -168,7 +170,7 @@ private struct MateDirectoryView: View {
                 DisconnectedState(message: disconnectedMessage, openSettings: openSettings)
             } else if directory?.mates.isEmpty == true {
                 if archived { EmptyStateView(artwork: .mates, title: "No archived Mates") }
-                else { emptyMates.padding(24) }
+                else { emptyMates.padding(.horizontal, 24).padding(.vertical, 12) }
             } else {
                 EmptyStateView(artwork: .search, title: "No matching Mates")
             }
@@ -519,12 +521,8 @@ struct NewMateView: View {
             MateAvatarBackdrop(avatar: draft.avatar)
             form
         }
-        .background(alignment: .center) {
-            MatePickerAppearance(isVisible: $previewActive)
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
+        // Keep WebKit creation off the push and pop animations.
+        .trackAppearance($previewActive)
         .mateCreationChrome(choosingModel ? "Model & Effort" : "New Mate", extendsBackdrop: true)
         .navigationBarBackButtonHidden(choosingModel)
         .toolbar {
@@ -641,40 +639,6 @@ struct NewMateView: View {
             showingTeamEditor = true
         }) { teamName in
             mateCreationChoiceLabel(teamName, icon: "icon:users")
-        }
-    }
-}
-
-struct MatePickerAppearance: UIViewControllerRepresentable {
-    @Binding var isVisible: Bool
-
-    func makeUIViewController(context: Context) -> Controller {
-        Controller(isVisible: $isVisible)
-    }
-
-    func updateUIViewController(_ controller: Controller, context: Context) {
-        controller.isVisible = $isVisible
-    }
-
-    final class Controller: UIViewController {
-        var isVisible: Binding<Bool>
-
-        init(isVisible: Binding<Bool>) {
-            self.isVisible = isVisible
-            super.init(nibName: nil, bundle: nil)
-        }
-
-        required init?(coder: NSCoder) { nil }
-
-        // Keep WebKit creation off the push and pop animations.
-        override func viewDidAppear(_ animated: Bool) {
-            super.viewDidAppear(animated)
-            isVisible.wrappedValue = true
-        }
-
-        override func viewDidDisappear(_ animated: Bool) {
-            super.viewDidDisappear(animated)
-            isVisible.wrappedValue = false
         }
     }
 }

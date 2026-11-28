@@ -18,8 +18,13 @@ struct VoiceAppearancePreview: View {
                         .toolbar {
                             if manualStart && !session.voice.ownsCall {
                                 ToolbarItem(placement: .topBarTrailing) {
-                                    Button("Start GPT Live", systemImage: "waveform") { Task { await startVoice(runID) } }
-                                        .accessibilityIdentifier("startVoice")
+                                    Button {
+                                        Task { await startVoice(runID) }
+                                    } label: {
+                                        VoiceStartButton.icon
+                                    }
+                                    .accessibilityLabel("Start GPT Live")
+                                    .accessibilityIdentifier("startVoice")
                                 }
                             }
                         }

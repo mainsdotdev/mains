@@ -12,8 +12,8 @@ enum AppNavigationStyle {
 }
 
 extension View {
-    func actionToastHost() -> some View {
-        modifier(ActionToastHost())
+    func actionToastHost(_ toast: ActionToast = ActionToast()) -> some View {
+        modifier(ActionToastHost(toast: toast))
     }
 
     func navigationHeaderFade(background: Color = Color(.systemBackground), coversSafeAreaAtRest: Bool = true,
@@ -40,6 +40,51 @@ extension View {
 
     func pullToRefresh(_ refresh: @escaping @MainActor () async -> Void) -> some View {
         modifier(PullToRefresh(refresh: refresh))
+    }
+
+    func trackAppearance(_ isVisible: Binding<Bool>) -> some View {
+        background(alignment: .center) {
+            ViewAppearance(isVisible: isVisible)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+private struct ViewAppearance: UIViewControllerRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    @Binding var isVisible: Bool
+
+    func makeUIViewController(context: Context) -> Controller {
+        Controller(isVisible: $isVisible)
+    }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.isVisible = $isVisible
+    }
+
+    final class Controller: UIViewController {
+        var isVisible: Binding<Bool>
+
+        init(isVisible: Binding<Bool>) {
+            self.isVisible = isVisible
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            isVisible.wrappedValue = true
+        }
+
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            isVisible.wrappedValue = false
+        }
     }
 }
 
@@ -557,16 +602,19 @@ final class ActionToast {
     struct Message {
         let id = UUID()
         let text: LocalizedStringResource
+        let warning: Bool
+        let action: (() -> Void)?
     }
 
     private(set) var message: Message?
 
-    func show(_ text: LocalizedStringResource) {
-        withAnimation(.easeInOut(duration: 0.18)) { message = Message(text: text) }
+    func show(_ text: LocalizedStringResource, warning: Bool = false, action: (() -> Void)? = nil) {
+        withAnimation(.easeInOut(duration: 0.18)) { message = Message(text: text, warning: warning, action: action) }
         AccessibilityNotification.Announcement(String(localized: text)).post()
     }
 
     func dismiss() {
+        guard message != nil else { return }
         withAnimation(.easeInOut(duration: 0.18)) { message = nil }
     }
 }
@@ -576,41 +624,66 @@ private struct ActionToastHost: ViewModifier {
     @ObserveHotReload private var hotReload
     #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var toast = ActionToast()
+    @State var toast: ActionToast
 
     func body(content: Content) -> some View {
         content
             .environment(toast)
             .overlay(alignment: .top) {
                 if let message = toast.message {
-                    HStack(spacing: 12) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.title3)
-                            .accessibilityHidden(true)
-                        Text(message.text)
-                            .font(.subheadline.weight(.semibold))
-                            .fixedSize(horizontal: false, vertical: true)
+                    Group {
+                        if let action = message.action {
+                            Button {
+                                toast.dismiss()
+                                action()
+                            } label: {
+                                toastLabel(message).contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
                             .accessibilityIdentifier("actionToast")
+                        } else {
+                            toastLabel(message).allowsHitTesting(false)
+                        }
                     }
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-                    .modifier(GlassSurface(radius: 24, interactive: false))
                     .frame(maxWidth: 460)
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
-                    .allowsHitTesting(false)
                     .transition(reduceMotion ? .opacity : .offset(y: -8).combined(with: .opacity))
                 }
             }
             .task(id: toast.message?.id) {
-                guard let id = toast.message?.id else { return }
-                do { try await Task.sleep(for: .seconds(2.4)) } catch { return }
-                guard toast.message?.id == id, !Task.isCancelled else { return }
+                guard let message = toast.message else { return }
+                do { try await Task.sleep(for: .seconds(message.action == nil ? 2.4 : 5)) } catch { return }
+                guard toast.message?.id == message.id, !Task.isCancelled else { return }
                 toast.dismiss()
             }
             .onDisappear { toast.dismiss() }
+    }
+
+    private func toastLabel(_ message: ActionToast.Message) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: message.warning ? "exclamationmark.circle" : "checkmark.circle.fill")
+                .font(.title3)
+                .foregroundStyle(message.warning ? Color.orange : Color.primary)
+                .accessibilityHidden(true)
+            Text(message.text)
+                .font(.subheadline.weight(.semibold))
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("actionToast")
+            if message.action != nil {
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+        .modifier(GlassSurface(radius: 24, interactive: message.action != nil))
     }
 }
 
@@ -652,11 +725,12 @@ struct RoundControl: View {
     let symbol: String
     let label: String
     var size: CGFloat = 46
+    var iconSize: CGFloat = 21
     var rectangularHitArea = false
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 21, weight: .regular))
+            Image(systemName: symbol).font(.system(size: iconSize, weight: .regular))
                 .frame(width: size, height: size)
                 .contentShape(.rect(cornerRadius: rectangularHitArea ? 0 : size / 2))
         }

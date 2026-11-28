@@ -454,10 +454,7 @@ struct MateProfileEditor: View {
                     .padding(.horizontal, 20)
                 }
             }
-            .background(alignment: .center) {
-                MatePickerAppearance(isVisible: $previewActive)
-                    .frame(width: 0, height: 0).allowsHitTesting(false).accessibilityHidden(true)
-            }
+            .trackAppearance($previewActive)
         }
         .task(id: canSelectModel) {
             if canSelectModel { await session.loadModels(provider) }

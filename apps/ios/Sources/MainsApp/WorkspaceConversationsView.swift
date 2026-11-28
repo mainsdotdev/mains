@@ -207,15 +207,16 @@ struct TargetConversationsView: View {
         }
     }
     private var projectBottomBar: some View {
-        HStack(spacing: 12) {
+        let height = MessageComposer.compactControlHeight
+        return HStack(spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").font(.system(size: 18)).foregroundStyle(.secondary)
                 TextField("Search chats", text: $query)
                     .font(.body).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.search).focused($searching).accessibilityIdentifier("projectSearch")
-            }.padding(.horizontal, 16).frame(height: 52).modifier(GlassSurface(radius: 26))
+            }.padding(.horizontal, 16).frame(height: height).modifier(GlassSurface(radius: height / 2))
             if searching || !query.isEmpty {
-                RoundControl(symbol: "xmark", label: "Close search", size: 52) { query = ""; searching = false }
+                RoundControl(symbol: "xmark", label: "Close search", size: height, iconSize: 18) { query = ""; searching = false }
                     .accessibilityIdentifier("closeProjectSearch")
             } else {
                 Button {
@@ -227,7 +228,7 @@ struct TargetConversationsView: View {
                     startConversation()
                 } label: {
                     Image(systemName: "square.and.pencil").font(.system(size: 22))
-                        .foregroundStyle(.white).frame(width: 52, height: 52).background(AppBrand.accent, in: .circle)
+                        .foregroundStyle(.white).frame(width: height, height: height).background(AppBrand.accent, in: .circle)
                 }.buttonStyle(ChatPressStyle()).disabled(!canStartProjectChat)
                     .accessibilityLabel("New conversation").accessibilityIdentifier("newConversation")
             }
@@ -490,7 +491,8 @@ struct SearchView: View {
         } catch { if !Task.isCancelled, requestID == ticket, owner == session.ownership { searchError = "More results couldn’t load. Try the search again." } }
     }
     private var searchBar: some View {
-        HStack(spacing: 12) {
+        let height = MessageComposer.compactControlHeight
+        return HStack(spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").font(.system(size: 18)).foregroundStyle(.secondary).accessibilityHidden(true)
                 TextField("Search", text: $query)
@@ -505,8 +507,8 @@ struct SearchView: View {
                     }.buttonStyle(ChatPressStyle()).accessibilityLabel("Clear search").accessibilityIdentifier("clearGlobalSearch")
                 }
             }.padding(.leading, 16).padding(.trailing, query.isEmpty ? 16 : 8)
-                .frame(height: 52).modifier(GlassSurface(radius: 26))
-            RoundControl(symbol: "xmark", label: "Close search", size: 52) { dismiss() }
+                .frame(height: height).modifier(GlassSurface(radius: height / 2))
+            RoundControl(symbol: "xmark", label: "Close search", size: height, iconSize: 18) { dismiss() }
                 .accessibilityIdentifier("closeGlobalSearch")
         }.padding(.horizontal, 16).padding(.vertical, 8)
     }

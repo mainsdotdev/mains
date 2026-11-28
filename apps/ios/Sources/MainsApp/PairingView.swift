@@ -8,8 +8,8 @@ struct PairingView: View {
     #endif
     private enum EntryMode { case camera, manual }
     let session: BackendSession
-    let initialLink: String
     let showsCompletion: Bool
+    @Binding private var incomingLink: String
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
@@ -18,17 +18,22 @@ struct PairingView: View {
     @State private var text: String
     @State private var error: String?
     @State private var review: PairingLink?
+    @State private var isVisible = false
     @State private var cameraReady = false
     @State private var cameraIssue: String?
     @State private var demoError: String?
     @State private var pairingTask: Task<Void, Never>?
     @State private var pairedComputerName: String?
     @FocusState private var editingLink: Bool
-    private var wantsCamera: Bool { entryMode == .camera && scenePhase == .active && pairedComputerName == nil }
+    private var wantsCamera: Bool {
+        isVisible && entryMode == .camera && scenePhase == .active && pairedComputerName == nil
+    }
 
-    init(session: BackendSession, initialLink: String = "", showsCompletion: Bool = false) {
-        self.session = session; self.initialLink = initialLink
+    init(session: BackendSession, incomingLink: Binding<String> = .constant(""), showsCompletion: Bool = false) {
+        self.session = session
         self.showsCompletion = showsCompletion
+        _incomingLink = incomingLink
+        let initialLink = incomingLink.wrappedValue
         _text = State(initialValue: initialLink)
         _entryMode = State(initialValue: initialLink.isEmpty && DataScannerViewController.isSupported ? .camera : .manual)
     }
@@ -58,9 +63,11 @@ struct PairingView: View {
         .presentationCornerRadius(36)
         .presentationBackground(Color(.secondarySystemBackground))
         .interactiveDismissDisabled(session.pairingInProgress)
-        .onAppear { if !initialLink.isEmpty { reviewLink(initialLink) } }
-        .onChange(of: initialLink) { _, value in
-            guard !session.pairingInProgress, pairedComputerName == nil else { return }
+        // Let the sheet finish opening before iOS can present the camera permission prompt.
+        .trackAppearance($isVisible)
+        .onAppear { if !incomingLink.isEmpty { reviewLink(incomingLink) } }
+        .onChange(of: incomingLink) { _, value in
+            guard !value.isEmpty, !session.pairingInProgress, pairedComputerName == nil else { return }
             switchTo(.manual); text = value; reviewLink(value)
         }
         .task(id: wantsCamera) {
@@ -280,8 +287,10 @@ struct PairingView: View {
         guard DataScannerViewController.isSupported else {
             cameraIssue = "Camera scanning is unavailable here. Paste the pairing link instead."; return
         }
-        let allowed = await AVCaptureDevice.requestAccess(for: .video)
-        guard !Task.isCancelled, entryMode == .camera else { return }
+        let authorization = AVCaptureDevice.authorizationStatus(for: .video)
+        let allowed = if authorization == .notDetermined { await AVCaptureDevice.requestAccess(for: .video) }
+        else { authorization == .authorized }
+        guard !Task.isCancelled, wantsCamera else { return }
         guard allowed else { cameraIssue = "Allow camera access in iPhone Settings to scan a pairing code."; return }
         guard DataScannerViewController.isAvailable else { cameraIssue = "The camera is unavailable. Paste the pairing link instead."; return }
         cameraReady = true

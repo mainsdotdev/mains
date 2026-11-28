@@ -129,11 +129,26 @@ struct VoiceStartButton: View {
                                               mate: context.mate, workspaceID: context.workspaceID)
     }
 
+    /// Matches the desktop composer's Microphone icon on its 24-unit grid.
+    static var icon: Image {
+        Image(size: CGSize(width: 20, height: 20)) { context in
+            var path = Path()
+            for (x, top) in [(4, 10), (8, 9), (12, 4), (16, 7), (20, 10)] {
+                path.move(to: CGPoint(x: x, y: top))
+                path.addLine(to: CGPoint(x: x, y: 24 - top))
+            }
+            // Center the larger waveform inside the existing 20-point toolbar image.
+            context.translateBy(x: -1, y: -1)
+            context.scaleBy(x: 22.0 / 24, y: 22.0 / 24)
+            context.stroke(path, with: .color(.black), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+        }.renderingMode(.template)
+    }
+
     var body: some View {
         Group {
             if AppFeatures.gptLiveEnabled, context.providerId == "codex", !session.isDemo, !session.voice.ownsCall {
                 Button(action: prepare) {
-                    Image(systemName: "waveform")
+                    Self.icon
                 }
                 .disabled(availability == .unavailable)
                 .accessibilityLabel("Start GPT Live")
