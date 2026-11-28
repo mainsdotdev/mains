@@ -9,7 +9,7 @@ export type RobotStyle = typeof ROBOT_STYLES[number];
 export const ROBOT_STYLE_LABELS: Record<RobotStyle, string> = {
   terminal: "Retro Terminal",
   metal: "One-Eye Metal",
-  specialists: "Specialists",
+  specialists: "Themed Bots",
 };
 
 export const ROBOT_PRESETS = {

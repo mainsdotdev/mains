@@ -85,7 +85,7 @@
     },
     {
       "id": "specialists",
-      "label": "Specialists",
+      "label": "Themed Bots",
       "presets": [
         {
           "id": "specialist-travel",

@@ -1084,7 +1084,7 @@ describe("assistant profile and conversation", () => {
     expect(document.activeElement).toBe(frost);
     expect(frost.getAttribute("aria-checked")).toBe("true");
     expect(header.querySelector("[data-avatar-shape='terminal-frost']")).toBeTruthy();
-    fireEvent.click(within(form).getByRole("radio", { name: "Specialists" }));
+    fireEvent.click(within(form).getByRole("radio", { name: "Themed Bots" }));
     fireEvent.click(within(form).getByRole("radio", { name: "Designer" }));
     expect(header.querySelector("[data-avatar-shape='specialist-design']")).toBeTruthy();
 

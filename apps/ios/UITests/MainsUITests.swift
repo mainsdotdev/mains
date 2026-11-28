@@ -2376,7 +2376,7 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "New Mate – One-Eye Metal")
         app.buttons["mate-avatar-style-specialists"].tap()
         checkAvatar("Travel Planner")
-        attachScreenshot(app, name: "New Mate – Specialists")
+        attachScreenshot(app, name: "New Mate – Themed Bots")
         let specialistMidpoint = CGPoint(x: app.frame.midX, y: carousel.frame.midY)
         drag(from: specialistMidpoint, dx: -145)
         checkAvatar("Kitchen Mate")

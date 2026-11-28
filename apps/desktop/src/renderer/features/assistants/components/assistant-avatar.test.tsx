@@ -68,7 +68,7 @@ describe("robot assistant avatars", () => {
     }
     render(<Picker />);
     const styles = within(screen.getByRole("radiogroup", { name: "Robot style" }));
-    expect(styles.getAllByRole("radio").map(option => option.textContent)).toEqual(["Retro Terminal", "One-Eye Metal", "Specialists"]);
+    expect(styles.getAllByRole("radio").map(option => option.textContent)).toEqual(["Retro Terminal", "One-Eye Metal", "Themed Bots"]);
     expect(screen.queryByRole("radiogroup", { name: "Avatar color" })).toBeNull();
     expect(screen.getByRole("status").textContent).toBe("sphere rose");
     for (const name of ["Retro Terminal", "One-Eye Metal"]) {
@@ -81,19 +81,19 @@ describe("robot assistant avatars", () => {
     fireEvent.click(styles.getByRole("radio", { name: "Retro Terminal" }));
     fireEvent.click(screen.getByRole("radio", { name: "One-Eye Metal" }));
     expect(screen.getByRole("radio", { name: "Bronze", checked: true })).toBeTruthy();
-    fireEvent.click(styles.getByRole("radio", { name: "Specialists" }));
+    fireEvent.click(styles.getByRole("radio", { name: "Themed Bots" }));
     const specialists = within(screen.getByRole("radiogroup", { name: "Robot variant" }));
     expect(specialists.getAllByRole("radio")).toHaveLength(16);
     expect(specialists.getByRole("radio", { name: "Travel Planner", checked: true })).toBeTruthy();
     fireEvent.click(specialists.getByRole("radio", { name: "Beach Palm" }));
     expect(screen.getByRole("status").textContent).toBe("specialist-beach-palm lime");
     fireEvent.click(styles.getByRole("radio", { name: "One-Eye Metal" }));
-    fireEvent.click(styles.getByRole("radio", { name: "Specialists" }));
+    fireEvent.click(styles.getByRole("radio", { name: "Themed Bots" }));
     expect(specialists.getByRole("radio", { name: "Beach Palm", checked: true })).toBeTruthy();
     expect(screen.queryByRole("radio", { name: "Mosaic" })).toBeNull();
   });
 
-  it("pages the Specialists variants in both directions and updates the overflow controls", () => {
+  it("pages the Themed Bots variants in both directions and updates the overflow controls", () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
     render(<AssistantAvatarPicker avatar={{ shape: "specialist-travel", color: ASSISTANT_ROBOT_AVATARS["specialist-travel"] }}
       onChange={vi.fn()} seed="picker" />);
